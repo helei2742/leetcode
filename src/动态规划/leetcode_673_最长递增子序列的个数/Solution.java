@@ -1,6 +1,6 @@
 package 动态规划.leetcode_673_最长递增子序列的个数;
 
-class Solution {
+class  Solution {
     public int findNumberOfLIS(int[] nums) {
         int n = nums.length;
         int[] dp = new int[n];

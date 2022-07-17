@@ -22,14 +22,17 @@ class Solution {
     }
 
     private int dp(int n){
+        //dp【i】表示组成i个a需要几步
+        //i个a，一定是由 j个a，经过复制得到的，次数为 i/j-1次，或者i/j经过 j-1次得到
+        //得到dp[i] = Min(dp[j] + i/j - 1,dp[i/j] + j - 1)
         int[] dp = new int[n+1];
 
         for (int i = 2; i <= n; i++) {
             dp[i] = Integer.MAX_VALUE/2;
             for (int j = 1; j*j <= i; j++) {
                 if(i%j==0){
-                    dp[i] = Math.min(dp[i], dp[i/j] + j -1 + 1);
-                    dp[i] = Math.min(dp[i], dp[j] + i/j - 1 + 1);
+                    dp[i] = Math.min(dp[i], (dp[i/j] + j - 1) + 1);
+                    dp[i] = Math.min(dp[i], (dp[j] + i/j - 1) + 1);
                 }
             }
         }
