@@ -13,6 +13,7 @@ public class Solution {
         path1.forEach(treeNode -> System.out.print(treeNode.val+"-"));
         System.out.println("\n");
         path2.forEach(treeNode -> System.out.print(treeNode.val+"-"));
+
         TreeNode res = root;
         while (!path1.isEmpty() || !path2.isEmpty()){
             if(path1.isEmpty()||path2.isEmpty()){

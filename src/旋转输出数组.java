@@ -6,10 +6,10 @@ public class 旋转输出数组 {
     private static void fn(int [][] arr){
         int row = arr.length;
         int col = arr[0].length;
-        int times = Math.min(row, col) - 1;
-
-        if(times%2==1&&times!=1) times--;
-
+        int times = Math.min(row, col);
+        if(times%2==0) times--;
+        times--;
+        System.out.println(times);
         int count = 0;
         List<Integer> ans = new ArrayList<>();
         System.out.println(times);
@@ -31,8 +31,7 @@ public class 旋转输出数组 {
             if(count==times) break;
         }
         if(row > col) ans.remove(ans.size()-1);
-        System.out.println(ans
-        );
+        System.out.println(ans);
     }
 
     public static void main(String[] args) {
