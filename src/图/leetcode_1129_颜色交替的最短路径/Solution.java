@@ -21,7 +21,6 @@ public class Solution {
         Arrays.fill(dis, INF);
         boolean[][] visited = new boolean[n][2];
 
-        Arrays.fill(dis, INF);
         Queue<int[]> queue = new LinkedList<>();
 
         queue.offer(new int[]{0,0});

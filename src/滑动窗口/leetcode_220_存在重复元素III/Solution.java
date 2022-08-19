@@ -22,12 +22,12 @@ class Solution {
 
         TreeSet<Long> treeSet = new TreeSet<>();
         for (int i = 0; i < len; i++) {
-            if(i>=k){
-                treeSet.remove((long)nums[i-k]);
+            if(i>k){
+                treeSet.remove((long)nums[i-k-1]);
             }
 
             Long ceiling = treeSet.ceiling((long) nums[i] - (long) t);
-            if(ceiling!=null&&ceiling<=(long) nums[i] + (long) t){
+            if(ceiling!=null&& ceiling<=(long) nums[i] + (long) t){
                 return true;
             }
             treeSet.add((long)nums[i]);

@@ -52,7 +52,6 @@ public class Solution {
         if((bL&&bR) || ((p.val == root.val|| q.val == root.val) && (bL||bR))){
             this.ans = root;
         }
-
         return bL || bR || p.val == root.val || q.val == root.val;
     }
 
