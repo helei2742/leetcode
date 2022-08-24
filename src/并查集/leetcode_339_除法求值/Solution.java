@@ -4,7 +4,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class Solution {
+public class
+Solution {
     public double[] calcEquation(List<List<String>> equations, double[] values, List<List<String>> queries) {
         Map<String, Integer> map = new HashMap<>();
         int size = equations.size();

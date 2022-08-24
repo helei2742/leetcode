@@ -18,6 +18,34 @@ class Solution {
         map.put(head,newNode);
         return newNode;
     }
+
+    public Node copyRandomList2(Node head) {
+        Node cur = head;
+        while(cur != null) {
+            Node temp = cur.next;
+            cur.next = new Node(cur.val);
+            cur.next.next = temp;
+            cur = temp;
+        }
+
+        cur = head;
+        while(cur != null) {
+            Node newCur = cur.next;
+            newCur.random = cur.random == null?null:cur.random.next;
+            cur = cur.next.next;
+        }
+
+        Node res = new Node(0);
+        Node p = res;
+        cur = head;
+        while(cur != null) {
+            p.next = cur.next;
+            p = p.next;
+            cur.next = cur.next.next;
+            cur = cur.next;
+        }
+        return res.next;
+    }
 }
 class Node {
     int val;
