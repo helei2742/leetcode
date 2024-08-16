@@ -30,6 +30,7 @@ public class dijekesitra {
         head[u] = tot;
     }
 
+
     private int n;
     private final int INF = Integer.MAX_VALUE - 10;
 

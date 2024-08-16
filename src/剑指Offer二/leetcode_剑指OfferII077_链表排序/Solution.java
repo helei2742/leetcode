@@ -6,7 +6,6 @@ class Solution {
     public ListNode sortList(ListNode head) {
         return quickSort(head, null);
     }
-
     private ListNode quickSort(ListNode head, ListNode tail) {
         if(head == null) return null;
         if(head.next == tail) {

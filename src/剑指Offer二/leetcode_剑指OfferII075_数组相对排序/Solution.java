@@ -54,7 +54,7 @@ class Solution {
         }
 
         for (int i = 0; i <= maxVal; i++) {
-            while(bucket[i]-->0){
+            while(bucket[i]-- > 0){
                 arr1[idx++] = i;
             }
         }
