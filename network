@@ -1,0 +1,342 @@
+# Swift网络请求
+
+
+
+## 使用Alemofire对Request封装
+
+
+
+Json与字符串相互转换工具类
+
+```swift
+
+let jsonString = """
+{
+    "name": "John Doe",
+    "age": 30,
+    "isDeveloper": true
+}
+"""
+let jsonStr = """
+[
+    1,
+    2,
+    3,
+    4,
+    5
+]
+"""
+ let dictData = ["name": "王思聪", "city": "New York", "age": 18] as [String: Any]
+let arrayData = ["name", "王思聪", "city", "New York", "age"]
+struct JSONUtil {
+    func jsonToDict(jsonString: String) -> [:] {
+    let jsonData = jsonString.data(using: .utf8)
+    let dictData = try? JSONSerialization.jsonObject(with: jsonData!, options: []) as? [String: Any]
+    return dictData
+}
+
+// Dict转为JsonStr
+func dictToJson(dict: Dict) -> String {
+    guard let jsonData = try? JSONSerialization.data(withJSONObject: dictData, options: []) else { return }
+    let jsonString = String(data: jsonData, encoding: .utf8)
+    return jsonString
+}
+
+// jsonStr 转为Array
+func jsonToArray(jsonString: String) -> [:] {  
+    let jsonData = jsonStr.data(using: .utf8)
+    let arrayData = try? JSONSerialization.jsonObject(with: jsonData!, options: []) as? [Int]
+    return arrayData
+}
+
+// array转为jsonStr
+func arrayToJson() {
+    guard let jsonData = try? JSONSerialization.data(withJSONObject: arrayData, options: []) else { return }
+    let jsonString = String(data: jsonData, encoding: .utf8)
+    return jsonString
+}
+}
+
+```
+
+
+
+
+
+```swift
+import Alamofire
+/*
+open func request(_ convertible: URLConvertible,
+                      method: HTTPMethod = .get,
+                      parameters: Parameters? = nil,
+                      encoding: ParameterEncoding = URLEncoding.default,
+                      headers: HTTPHeaders? = nil,
+                      interceptor: RequestInterceptor? = nil,
+                      requestModifier: RequestModifier? = nil)
+ 
+open func request<Parameters: Encodable>(_ convertible: URLConvertible,
+                                             method: HTTPMethod = .get,
+                                             parameters: Parameters? = nil,
+                                             encoder: ParameterEncoder = URLEncodedFormParameterEncoder.default,
+                                             headers: HTTPHeaders? = nil,
+                                             interceptor: RequestInterceptor? = nil,
+                                             requestModifier: RequestModifier? = nil)
+ 
+open func request(_ convertible: URLRequestConvertible, interceptor: RequestInterceptor? = nil)
+
+
+*/
+//BASE_URL 全局变量
+func request(method: HTTPMethod = .get, path: String,
+             body:Data? = nil, parameters: [:]? = nil
+             success : Data -> {}?=nil, failure: BinanceAPIError -> {}?=nil, isLoading:Bool? = nil) {
+    
+    if isLoading == true {
+        SVProgressHUD.showLoading()
+    }
+    
+    /*if (parameters != nil) {
+        queryString = ""
+        for (key, value) in parameters {
+            queryString = queryString + "&\(key)=\(value)"
+        }
+        if !queryString.isEmpty() {
+            queryString.remove(at:0)
+        }
+        path = path + "?" + queryString
+    }*/
+    
+    let headers:HTTPHeaders =  [
+        "Content-Type":"application/json;charset=UTF-8",
+        "Accept":"application/json"
+    ]
+
+	Alamofire.request(BASE_URL + path,
+                      parameters:parameters, 
+                      headersL headers,
+                      encoding:JSONEncoding.default)
+    .validate(contentType: K_APP_ACCEPTABLE_CONTENTTYPES)
+    .responseJSON(completionHandler: {res in 
+    	switch res.result.isSuccess {
+                case true:
+                	if success != nil {
+                        success(data)
+                    }
+                case false:
+                    let eCode = res.status 
+            		let errorType = BinanceAPIError.ERROR_UNKNOW
+        			if eCode == 403 {
+                        errorType = .ERROR_WAF
+                    } else if eCode == 409 {
+                        errorType = .ERROR_CANCEL_REPLACE
+                    } else if eCode == 429 {
+                        errorType = .ERROR_REQUEST_LIMIT
+                    } else if eCode/100 == 5 {
+                        errorType = .ERROR_BINANCE_SERVER
+                    } else if eCode/100 == 4 {
+                        errorType = BinanceAPIError.ERROR_REQUEST
+                    }
+            		if (failure != nil) {
+                        failure(errorType)
+                    }
+        }
+     })    
+}
+
+func binanceApiRequestSync(method: HTTPMethod = .get, 
+                       path: String,
+                       ipWeight: Int
+                       body:Data? = nil, 
+                       parameters: [:]? = nil, 
+                       success : Data -> {}?=nil,
+                      failure : BinanceAPIError -> {}?=nil) {
+    let semaphone = DispatchSemaphore(value: 0)
+    binanceApiRequest(
+   			method:method,
+        	path: path,
+        	ipWeight: ipWeight,
+   			body: body,
+        	parameters: parameters,
+        	success : (data) -> {
+              if success != nil {
+                  success(data)
+              }
+                semaphone.signal()
+            },
+        	failure: (error) -> {
+                failure(error)
+                semaphone.signal()
+            }
+    )
+    
+    _ = semaphone.wait(timeout: .distantFuture)
+}
+
+func binanceApiRequest(method: HTTPMethod = .get, 
+                       path: String,
+                       ipWeight: Int
+                       body:Data? = nil, 
+                       parameters: [:]? = nil, 
+                       success : Data -> {}?=nil,
+                      failure : BinanceAPIError -> {}?=nil) async {
+    //TODO 计算更新ipWeight
+    
+    request(
+        	method:method,
+        	path: path,
+   			body: body,
+        	parameters: parameters,
+        	success: success,
+          	failure: (error)->{ 
+                if failure == nil {
+                    //TODO ui显示 error信息
+                	print(error.rawValue)
+                } else {
+                 	failure(error)   
+                }
+            }
+           )
+}
+```
+
+
+
+```swift
+enum BaseURL {
+	PUBLIC_DATA_API = "https://data-api.binance.vision" //于仅发送公开市场数据的 API
+    NORMAL_API_1 = "https://api.binance.com"
+    NORMAL_API_2 = "https://api-gcp.binance.com"
+    
+    PERFORMANCE_API_1 = "https://api1.binance.com"
+	PERFORMANCE_API_1 = "https://api2.binance.com"
+	PERFORMANCE_API_1 = "https://api3.binance.com"
+    PERFORMANCE_API_1 = "https://api4.binance.com"
+}
+
+enum BinanceAPIError {
+    ERROR_UNKNOW = "未知错误"
+    ERROR_REQUEST = "4xx 错误的请求内容、行为、格式"
+    ERROR_WAF = "403 违反WAF限制(Web应用程序防火墙)"
+	ERROR_CANCEL_REPLACE = "409 重新下单(cancelReplace)的请求部分成功。(比如取消订单失败，但是下单成功了)"   
+    ERROR_REQUEST_LIMIT = "429 警告访问频次超限，即将被封IP。"
+    ERROR_BINANCE_SERVER = "5XX Binance服务侧的问题。"
+}
+
+```
+
+
+
+
+
+## 系统枚举定义
+
+```swift
+//交易对状态 (状态 status):
+
+enum TransactionStatus {
+PRE_TRADING = "交易前"
+TRADING = "交易中"
+POST_TRADING = "交易后"
+END_OF_DAY 
+HALT
+AUCTION_MATCH
+BREAK
+}
+
+//订单状态 (状态 status):
+enum OrderStatus {
+    NEW = "订单被交易引擎接"
+    PARTIALLY_FILLED="部分订单被成交"
+    FILLED	= "订单完全成交"
+    CANCELED	="用户撤销了订单"
+    PENDING_CANCEL	="撤销中（目前并未使用）"
+    REJECTED	="订单没有被交易引擎接受，也没被处理"
+    EXPIRED	="订单被交易引擎取消"
+    EXPIRED_IN_MATCH = "表示订单由于 STP 触发而过期 "
+}
+
+enum OrderListStatus {
+    RESPONSE="当ListStatus响应失败的操作时使用。 (订单列表完成或取消订单列表)"
+    EXEC_STARTED="当订单列表已经下单或者订单列表有更新时。""
+    ALL_DONE="当订单列表执行结束或者不在激活状态。"
+}
+
+```
+
+
+
+## 系统请求封装
+
+### 1,获取系统状态
+
+```swift
+/*
+{ 
+        "status": 0,              // 0: 正常，1：系统维护
+        "msg": "normal"           // "normal", "system_maintenance"
+}
+*/
+func binanceServerUsable() async -> Bool {
+    Bool res = true
+   binanceApiRequestSync(url: "/sapi/v1/system/status", success: data-> {
+                                                res = data["status"] == 0
+                                            }, failure: error->{
+                                                res = false
+                                            })
+	return res
+}
+
+```
+
+
+
+
+
+### 2.行情接口
+
+#### 最新价格
+
+```swift
+
+func coinsNewPrice(symbols: [String], successCall: Data ->{}) {
+    if (baseArray.isEmpty) {
+        return nil
+    }
+    
+    binanceApiRequest(url: "/api/v3/ticker/price", 
+                      ipWeight:4, 
+                      parameters:  ["symbols": symbols],
+                      success: data-> {
+                                                successCall(data)
+                                            })
+}
+```
+
+
+
+
+
+#### 24小时价格变化情况
+
+```swift
+func coins24HourPriceStatus(symbols:[String], type:String = FULL, successCall: Data->{}) {
+    let ipWeight = 80
+    let count = symbols.count
+    if count >= 1, count <= 20 {
+        ipWeight = 2
+    } else if count >=21, count <= 100 {
+        ipWeight = 40
+    } else {
+        ipWeight = 80
+    }
+    
+    binanceApiRequest(url: "/api/v3/ticker/24hr", 
+                      ipWeight:ipWeight, 
+                      parameters: ["symbols": symbols, ],
+                      success: data-> {
+                        successCall(data)
+                    })
+    
+}
+```
+
