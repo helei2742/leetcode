@@ -1,0 +1,113 @@
+import SwiftUI
+
+
+struct Candlestick: Identifiable {
+    let id = UUID()
+    let openTime: Date,
+    let volume: Double,
+    let 
+    let open: Double
+    let close: Double
+    let high: Double
+    let low: Double
+}
+
+
+struct CandlestickChartView: View {
+    let data: [Candlestick]
+    let maxY: Double
+    let minY: Double
+
+    var body: some View {
+        GeometryReader { geometry in
+            let width = geometry.size.width / CGFloat(data.count)
+            
+
+            HStack(alignment: .bottom, spacing: 0) {
+                FOrEach(data) { candlestick in 
+                    VStack {
+                        spacer()
+
+                        //绘制上下影线
+                        LineView(
+                            high: candlestick.high,
+                            low: candlestick.low,
+                            maxY: maxY,
+                            minY: minY    
+                        )
+
+                        //绘制实体部分 (矩形)
+                        Rectangle()
+                        .fill(candlestick.close > candlestick.open ? Color.green : Color.red)
+                        .frame(width: width * 0.8, height: CGFloat(abs(candlestick.open - candlestick.close))/(maxY-minY)*geometry.size.height)
+                    }
+                    .frame(width:width, height: geometry.size.height)
+                }
+            }
+        }   
+    }
+}
+
+
+struct LineView: Shape {
+    let high: Double
+    let low: Double
+    let maxY: Double
+    let minY: Double
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let yHigh = CGFloat(maxY - high)/(maxY - minY) * rect.height
+        let yLow = CGFloat(maxY - low)/(maxY - minY) * rect.height
+    
+        path.move(to: CGPoint(x: rect.midX, y:yHigh))
+        path.addLine(to: CGPoint(x: rect.midX, y: yLow))
+        return path
+    }
+}
+
+
+struct ContentView: View {
+    let data = [
+        candlestick(open: 150, close: 160, high: 165, low: 145)
+        candlestick(open: 160, close: 155, high: 170, low: 150)
+        candlestick(open: 156, close: 166, high: 167, low: 145)
+        candlestick(open: 170, close: 170, high: 170, low: 155)
+        candlestick(open: 180, close: 165, high: 182, low: 160)
+        candlestick(open: 190, close: 175, high: 191, low: 160)
+    ]
+    let interal: Int,
+    let dateUnit: String
+
+
+    func calculateMA() -> [Double] {
+        var windowLength:Int = 1,
+        var windowTotal:Double = 0
+        
+        var res:[Double] = []
+
+        for (index, candlestick) in data {
+            if windowLength < interal {
+                windowLength++
+                windowTotal += candlestick.close
+            } else {
+                windowTotal = windowTotal - data[index + windowLength - 1].close + candlestick.close
+            }
+            res.append(windowTotal / windowLength) 
+        }
+        return res
+    }
+
+    var body: some VIew {
+`       let maxY = data.map{$0.high}.max() ?? 0
+        let minY = data.map($0.low).min() ?? 0
+
+        CandlestickChartView(
+            data:data,
+            maxY: maxY,
+            minY: minY
+        )
+        .frame(height:300)
+        .padding()
+    }
+}
