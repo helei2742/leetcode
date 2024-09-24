@@ -1,113 +1,369 @@
+//
+//  CandlestickChart.swift
+//  CoinWatch
+//
+//  Created by 何磊 on 2024/9/24.
+//
+
 import SwiftUI
 
+/**
+MA协议，用在Candlestick上
+*/
+protocol MAProtocol {
 
-struct Candlestick: Identifiable {
-    let id = UUID()
-    let openTime: Date,
-    let volume: Double,
-    let 
-    let open: Double
-    let close: Double
-    let high: Double
-    let low: Double
+    /**
+        MA价格字典 key: ma间隔， value: 价格
+    */
+    var dictOfMA:[Int: Double]
+
+
+    /**
+     计算ma均线
+     - Parameters:
+        - data: [Candlestick], k图的原始数据，
+        - interval: 计算ma的数组
+     - Returns: VOid
+     */
+    static func calculateMA(data:[Candlestick], interval:[Int] = [1]) -> Void
 }
 
+protocol BollProtocol {
 
-struct CandlestickChartView: View {
-    let data: [Candlestick]
-    let maxY: Double
-    let minY: Double
+    var bollLine: (Double, Double ,Double):(upper, ma, lower)
 
-    var body: some View {
-        GeometryReader { geometry in
-            let width = geometry.size.width / CGFloat(data.count)
-            
+    static func calculateBoll(data:[Candlestick], maInterval:Int = 1, n: Int = 2) -> Void {
+        for i in data-1..data.count {
+            let periodPrices = data[i-maInterval+1...i].map{$0.close}
+            let sum = periodPrices.reduce(0, +)
+            let average = sum / Double(maInterval)
 
-            HStack(alignment: .bottom, spacing: 0) {
-                FOrEach(data) { candlestick in 
-                    VStack {
-                        spacer()
+            let variance = periodPrices.map {pow{$0 - average, 2}}.reduce(0, +) / Double(maInterval)
+            let standardDeviation = sqrt(variance)
 
-                        //绘制上下影线
-                        LineView(
-                            high: candlestick.high,
-                            low: candlestick.low,
-                            maxY: maxY,
-                            minY: minY    
-                        )
+            let upper = average + (n * standardDeviation)
+            let lower = average - (n * standardDeviation)
 
-                        //绘制实体部分 (矩形)
-                        Rectangle()
-                        .fill(candlestick.close > candlestick.open ? Color.green : Color.red)
-                        .frame(width: width * 0.8, height: CGFloat(abs(candlestick.open - candlestick.close))/(maxY-minY)*geometry.size.height)
-                    }
-                    .frame(width:width, height: geometry.size.height)
+            data[i].bollLine = (upper, average, lower)
+        }
+    }
+}
+
+/**
+基础的，k线线图数据
+*/
+struct Candlestick: Identifiable, MAProtocol {
+
+    let id = UUID()
+
+    /**
+        开盘时间
+    */
+    let openTime: Date = Date()
+    
+    /**
+        量能
+    */
+    var volume: Double = 0.0
+
+    /**
+        开盘价格
+    */
+    let open: Double
+
+    /** 
+        收盘价格
+
+    */
+    let close: Double
+    
+    /**
+        最高价格
+
+    */
+    let high: Double
+    
+    /**
+        最低价格
+    */
+    let low: Double
+
+
+    /**
+        MAProtocol 协议里的ma均线字典
+    */
+    var dictOfMA:[Int: Double]
+
+
+    static func calculateMA(data:[Candlestick], maIntervals:[Int] = [1]) -> Void{
+
+        let intervalWindow = interval.reduce(into: [Int:(Int,Double)]) { dict, element in
+            dict[element] = (element, 0, 0)
+        }
+
+        
+        var currentIdx = data.count - 1
+        for candlestick in data {
+            for (interval, windowLength, windowTotal) in intervalWindow {
+                if windowLength < interval {
+                    windowLength += 1
+                    windowTotal += candlestick.close
+                } else {
+                    windowTotal = windowTotal - data[(currentIdx + windowLength - 1)].close + candlestick.close
                 }
+                let ma = windowTotal / Double(windowLength)
+                candlestick.dictOfMA[interval] = ma
+                currentIdx -= 1
             }
-        }   
+        }
+    }
+
+    /**
+        获取应该现实的颜色
+    - Parameters: 
+    - Returns: Color k蜡烛的颜色
+    */
+    func getColor() -> Color {
+        return close > open ? Color.green : Color.red
     }
 }
 
 
-struct LineView: Shape {
-    let high: Double
-    let low: Double
-    let maxY: Double
-    let minY: Double
+/**
+    蜡烛图
 
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let yHigh = CGFloat(maxY - high)/(maxY - minY) * rect.height
-        let yLow = CGFloat(maxY - low)/(maxY - minY) * rect.height
+    使用方式：
+        Chart() { element in
+            // 这里调用 generalChart() 方法
+            CandlestickChart().generalChart()
+        }
+*/
+struct CandlestickChart {
+
+    /**
+        高的比例，所有与高有关的数据都要乘
+    */
+    let heightRatio 
+
+    /**
+        一根蜡烛的宽度
+    */
+    let itemWidth
+
+
+    func generalChart () -> PointMark {
+        PointMark (
+            x: .value("日期", candlestick.openTime, unit: .day),
+            y: .value("美元", candlestick.close)
+        )
+        .marker(
+            CandlesstickItem(
+                candlestick: candlestick,
+                heightRatio: heightRatio,
+                itemWidth: itemWidth
+            )
+        )
+    }
+}
+
+/**
+    一根蜡烛的形状
+*/
+struct CandlesstickItem: Shape  {
     
-        path.move(to: CGPoint(x: rect.midX, y:yHigh))
-        path.addLine(to: CGPoint(x: rect.midX, y: yLow))
+    /**
+        一根k线图的数据
+    */
+    let candlestick: Candlestick
+
+    /**
+        高的比例，所有与高有关的数据都要乘
+    */
+    let heightRatio: Double
+
+    /**
+        一根蜡烛的宽度
+    */
+    let itemWidth: Double
+
+
+    
+    func path(in rect: CGRect) -> Path {
+        let rectangleHeight = CGFloat(abs(candlestick.open - candlestick.close) * heightRatio)
+
+        
+        var path = Path { path in
+            //绘制上下影线s
+            path.move(to: CGPoint(x: itemWidth / 2, y: candlestick.maxPrice * heightRatio))
+            path.addLine(to: CGPoint(x: itemWidth / 2, y: candlestick.minPrice * heightRatio))
+
+            //绘制实体部分 (矩形)
+            let rect = CGRect (
+                x: (itemWidth / 2) - (itemWidth / 4),
+                y: candlestick.close * heightRatio,
+                width: itemWidth / 2,
+                height:  CGFloat(abs(candlestick.open - candlestick.close) * heightRatio).
+            )
+            path.addRect(rect)       
+        }
+        .stroke(
+            candlestick.getColor(), 
+            lineWidth: 2
+        )
         return path
     }
 }
 
+//
+//  MergeView.swift
+//  CoinWatch
+//
+//  Created by 何磊 on 2024/9/24.
+//
+import SwiftUI
+import Foundation
 
-struct ContentView: View {
+struct MergeView: View {
     let data = [
-        candlestick(open: 150, close: 160, high: 165, low: 145)
-        candlestick(open: 160, close: 155, high: 170, low: 150)
-        candlestick(open: 156, close: 166, high: 167, low: 145)
-        candlestick(open: 170, close: 170, high: 170, low: 155)
-        candlestick(open: 180, close: 165, high: 182, low: 160)
-        candlestick(open: 190, close: 175, high: 191, low: 160)
+        Candlestick(open: 150, close: 160, high: 165, low: 145),
+        Candlestick(open: 160, close: 155, high: 170, low: 150),
+        Candlestick(open: 155, close: 170, high: 175, low: 150),
+        Candlestick(open: 170, close: 165, high: 180, low: 160),
+        Candlestick(open: 165, close: 175, high: 185, low: 160)
     ]
-    let interal: Int,
-    let dateUnit: String
 
+    let kInterval: Int
+    
+    let dateUnit: timeUnit
 
-    func calculateMA() -> [Double] {
-        var windowLength:Int = 1,
-        var windowTotal:Double = 0
+    let maxPrice: Double = 0
+
+    let minPrice: Double = 0
+
+    let maIntervals[Int] = [1, 5, 20]
         
-        var res:[Double] = []
 
-        for (index, candlestick) in data {
-            if windowLength < interal {
-                windowLength++
-                windowTotal += candlestick.close
-            } else {
-                windowTotal = windowTotal - data[index + windowLength - 1].close + candlestick.close
+    init (
+        data:[Candlestick],
+        interal:Int,
+        kLineInterval: KLineInterval
+    ) {
+        self.data = data,
+        self.kInterval: kLineInterval.rawValue.interval
+        self.dateUnit: kLineInterval.rawValue.timeUnit
+
+        self.maxPrice = data.map{ $0.hight }.max() ?? 0
+        self.minPrice = data.map{ $0.low }.max() ?? 0
+    }
+    
+    
+    var body: some View {
+        GeometryReader { geometry in 
+            ZStack {
+                let height:CGFloat = geometry.size.height
+                let itemWidth:CGFloat = geometry.size.width / CGFloat(data.count)
+                let heightRatio:Double = height / (maxPrice - minPrice) 
+
+                Chart(data, id: \.openTime) { candlestick in
+                    //k线图
+                    CandlestickChart(
+                        heightRatio: heightRatio,
+                        itemWidth: itemWidth
+                    )
+
+                    .generalChart()
+                    
+                    //均线图
+                    for maInterval in maIntervals {
+                        MAChart(maInterval: maInterval).generalChart()
+                    }
+
+                    //Boll
+
+                }
+
+            }.onAppear{
+                //计算ma
+                Candlestick.calculateMA(data: data, interval: maIntervals)
             }
-            res.append(windowTotal / windowLength) 
         }
-        return res
     }
+}
 
-    var body: some VIew {
-`       let maxY = data.map{$0.high}.max() ?? 0
-        let minY = data.map($0.low).min() ?? 0
+struct MAChart {
+    let maInterval 
 
-        CandlestickChartView(
-            data:data,
-            maxY: maxY,
-            minY: minY
+    func generalChart() -> Content {
+        LineMark() {
+            x: .value("日期", candlestick.openTime, unit: .day),
+            y: .value("美元", candlestick.dictOfMA[maInterval])
+        }
+    }
+}
+
+struct BollChart {
+    let maInterval: Int = 20
+    let n: Int = 2
+    
+    let maxPrice: Double
+
+    let minPrice: Double
+
+
+    func generalChart() -> Content {
+        
+
+        AreaMark(
+            x: .value("日期", candlestick.openTime, unit: .day),
+            yStart: .value("Minimum Price", candlestick.bollLine.lower),
+            yEnd: .value("Maximum Price", candlestick.bollLine.upper)
         )
-        .frame(height:300)
-        .padding()
     }
+}
+
+
+#Preview {
+    MergeView(interal: 4, dateUnit: "m")
+}
+enum KLineInterval:KLineIntervalItem {
+    case s_1 = KLineIntervalItem(1, .s)
+    case m_1 = KLineIntervalItem(1, .m)
+    case m_3 = KLineIntervalItem(3, .m)
+    case m_5 = KLineIntervalItem(5, .m)
+    case m_15 = KLineIntervalItem(15, .m)
+    case h_1 = KLineIntervalItem(1, .h)
+    case h_2 = KLineIntervalItem(2, .h)
+    case h_4 = KLineIntervalItem(4, .h)
+    case h_6 = KLineIntervalItem(6, .h)
+    case h_8 = KLineIntervalItem(8, .h)
+    case h_12 = KLineIntervalItem(12, .h)
+    case d_1 = KLineIntervalItem(1, .d)
+    case w_1 = KLineIntervalItem(1, .w)
+    case M_1 = KLineIntervalItem(1, .M)
+}
+enum TimeUnit: String {
+    case s
+    case m
+    case h
+    case d
+    case w
+    case M
+}
+struct KLineIntervalItem {
+    let interval:Int
+    let timeUnit:TimeUnit
+
+    init(_ interval:Int, _ timeUnit:TimeUnit) {
+        self.interal = interal
+        self.timeUnit = timeUnit
+    }
+
+    func toString() -> String {
+        return interval + timeUnit
+    }
+}
+
+enum APIResponseType:String {
+    case FULL
+    case MINI
 }
