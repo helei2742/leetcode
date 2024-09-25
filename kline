@@ -1,71 +1,121 @@
-//
-//  CandlestickChart.swift
-//  CoinWatch
-//
-//  Created by 何磊 on 2024/9/24.
-//
-
+import Foundation
 import SwiftUI
 
+
 /**
-MA协议，用在Candlestick上
+    线的数据集
 */
-protocol MAProtocol {
-
+struct LineDataset {
+    
     /**
-        MA价格字典 key: ma间隔， value: 价格
+        币种名称，如 BTCUSDT
     */
-    var dictOfMA:[Int: Double]
+    var symbol: String
+
+    var kLineInterval: KLineInterval,
+
+    private let dataset: [LineDataEntry]
+
+    /**
+        渲染当前视图需使用的dataset
+    */
+    var usableDataset: [LineDataEntry] {
+        get {
+            return dataset
+        }
+    }
+
+    var count: Int {
+        get {
+            return dataset.count
+        }
+    }
 
 
     /**
-     计算ma均线
-     - Parameters:
-        - data: [Candlestick], k图的原始数据，
-        - interval: 计算ma的数组
-     - Returns: VOid
-     */
-    static func calculateMA(data:[Candlestick], interval:[Int] = [1]) -> Void
-}
-
-protocol BollProtocol {
-
-    var bollLine: (Double, Double ,Double):(upper, ma, lower)
-
-    static func calculateBoll(data:[Candlestick], maInterval:Int = 1, n: Int = 2) -> Void {
-        for i in data-1..data.count {
-            let periodPrices = data[i-maInterval+1...i].map{$0.close}
-            let sum = periodPrices.reduce(0, +)
-            let average = sum / Double(maInterval)
-
-            let variance = periodPrices.map {pow{$0 - average, 2}}.reduce(0, +) / Double(maInterval)
-            let standardDeviation = sqrt(variance)
-
-            let upper = average + (n * standardDeviation)
-            let lower = average - (n * standardDeviation)
-
-            data[i].bollLine = (upper, average, lower)
+        最高价格
+    */
+    var maxPrice: Double {
+        get {
+            if !dataset.isEmpty {
+                let res:Double = 0
+                for entry in dataset {
+                    res = max(res, entry.open)
+                }
+                return res
+            }
+            return 0
         }
+    }
+
+    /**
+        最低价格
+    */
+    var minPrice: Double {
+        get {
+            if !dataset.isEmpty {
+                let res:Double = dataset[0]
+                for entry in dataset {
+                    res = min(res, entry.open)
+                }
+                return res
+            }
+            return 0
+        }           
+    }
+
+
+
+    
+    /**
+        加载数据
+    */
+    func loadLineData(whenComplate: (Bool) -> Void) {
+        BinanceApi.spotApi.kLineData(
+            symbol: symbol,
+            interval: kLineInterval,
+            startTime: Int?,
+            endTime: Int?,
+            timeZone: String? = "0(utc)",
+            limit: Int? = 500,
+            successCall: { data in
+                //更新dataset
+
+                let newData = generalJSONToLineDataEntryArray(data).sort(by:{$0.openTime > $1.openTime})
+                dataset.append(contentsOf: newData)
+                
+                whenComplate(true)
+            },
+            errorCall: { error in
+                whenComplate(false)
+            }
+        )
+    }
+
+    func generalJSONToLineDataEntryArray(data: JSON) -> [LineDataEntry] {
+        let res: [LineDataEntry] = []
+
+        return res
     }
 }
 
-/**
-基础的，k线线图数据
-*/
-struct Candlestick: Identifiable, MAProtocol {
 
+/**
+    一条线含的所有数据
+*/
+struct LineDataEntry: Identifiable {
+    
     let id = UUID()
 
     /**
         开盘时间
     */
-    let openTime: Date = Date()
-    
-    /**
-        量能
-    */
-    var volume: Double = 0.0
+    let openTime: Date
 
+    /**
+        收盘时间
+    */
+    let closeTime: Date
     /**
         开盘价格
     */
@@ -90,280 +140,489 @@ struct Candlestick: Identifiable, MAProtocol {
 
 
     /**
-        MAProtocol 协议里的ma均线字典
+        量能
     */
-    var dictOfMA:[Int: Double]
+    var volume: Double = 0.0
+}
 
 
-    static func calculateMA(data:[Candlestick], maIntervals:[Int] = [1]) -> Void{
+extension Double {
 
-        let intervalWindow = interval.reduce(into: [Int:(Int,Double)]) { dict, element in
-            dict[element] = (element, 0, 0)
+    func coinPriceFormat() -> String {
+        if self >= 1 || self <= -1 {
+            return String(format: "%0.2f", self)
+        } else {
+            let formatter = NumberFormatter()
+            formatter.minimummFractionDigits = 1
+            formatter.maximumFractionDigits - 8
+            formatter.numberStyle = .decimal
+
+            return formatter.strin(from: NSNmber(value: self)) ?? String(self)
+        }
+    }
+    
+}
+
+
+static func request(method: HTTPMethod = .get,
+            url urlStr: String,
+            body:[String: Any?]? = nil,
+            parameters: [String: Any?]? = nil,
+            successCall : ((JSON) -> Void)? = nil,
+            failureCall: ((BinanceAPIError) -> Void)? = nil,
+            isLoading:Bool? = nil
+) {
+    guard let url = URL(string: urlStr) else {
+        failureCall(.ERROR_UNKNOW)
+        return
+    }
+//        let headers:HTTPHeaders =  [
+//          
+//            "Accept":"application/json"
+//        ]
+//        
+    var request = URLRequest(url: url) 
+    request.httpMethod = "POST"
+
+    request.setValue("application/json;charset=UTF-8", forHTTPHeaderField: "Content-Type")
+    request.setValue("application/json;charset=UTF-8", forHTTPHeaderField: "Accept")
+    do {
+        reuqest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+    } catch {
+        failureCall(.ERROR_UNKNOW)
+        return
+    }
+
+    let task = URLSession.shared.dataTask(with: request) { (data, request, error) in
+        if let error = error {
+            failureCall(.ERROR_UNKNOW)
+            return
         }
 
+        guard let httpResponse = response as? HTTPURLResponse,(200, 299).contains(httpResponse.statusCode), let data = data else {
+            failureCall(.ERROR_UNKNOW)
+            return
+       }
+
+       do {
+            let json = JSON(data)
+            successCall(json)
+       }
+    }
+
+    task.resume()
+}
+
+
+
+
+import Foundation
+import SwiftUI
+
+
+
+struct KLineChart: View {
+    /**
+        当前K线视图的宽度
+    */
+    @State private var windowWidth: CGFloat = 0
+
+    /**
+        当前K线视图的高度
+    */
+    @State private var windowHeight: CGFloat = 0
+
+    /**
+        K线视图滑动的偏移量
+    */
+    @State private var scrollViewOffset:CGFloat = 0 
+
+    /**
+        当前选中的数据
+    */
+    @State private var selectedLineItem: (scrollPosition:CGFloat, itemData:LineDataset?) = (0, nil)
+
+    /**
+        是否长按k线的某点
+    */
+    @GestureState private var isLineItemLongPress = false
+
+
+    /**
+        当前是否在价值k线数据
+    */
+    @State private var isLoadingKLineData: Bool = false
+
+    /**
+        当前视图显示的K线线段的个数
+    */
+    let viewKLineItemCount:Int = 15
+
+    /**
+        k线元素之间的间距
+    */
+    let marginOfLineItem: CGFloat = 10
+
+
+    /**
+        坐标轴线的宽度
+    */
+    let scaleWidth: CGFloat = 2
+
+    /**
+        每个K线元素的宽度
+    */
+    var lineItemWidth: Double {
+        get {
+            return windowWidth / Double(viewKLineItemCount) - marginOfLineItem
+        }
+    }
+
+    /**
+        滚动区域的宽度，也就是k线图展示的区域。窗口宽度减去轴线宽度
+    */
+    var scrollAreaWidth: Double {
+        get {
+            lineItemWidth * dataset.count
+        }
+    }
+
+    /**
+        滚动区域的高度，也就是k线图展示的区域。窗口高度减去轴线宽度
+    */
+    var scrollAreaHeight: Double {
+        get {
+            windowHeight - scaleWidth
+        }
+    }
+
+    /**
+        组件item的高度比例，因为y轴是价格，所以表示单位价格的长度 height / (maxPrice - minPrice)
+    */
+    var heightRatio: Double = {
+        get {
+            windowHeight / (dataset.maxPrice - dataset.minPrice)
+        }
+    }
+
+
+    /**
+        数据集
+    */
+    var dataset: LineDataset
+
+
+    init(symbol: String, dataset: LineDataset) {
+        self.symbol = symbol
+        self.dataset = dataset
+    }
+
+    var body: some View {
         
-        var currentIdx = data.count - 1
-        for candlestick in data {
-            for (interval, windowLength, windowTotal) in intervalWindow {
-                if windowLength < interval {
-                    windowLength += 1
-                    windowTotal += candlestick.close
-                } else {
-                    windowTotal = windowTotal - data[(currentIdx + windowLength - 1)].close + candlestick.close
+        ZStack {
+
+           //背景显示的字
+           Text(dataset.symbol).font(.title)
+
+           //x线图 
+           kLineScrollArea
+
+           //显示十字线以及按住的KLineItem的信息
+           if isLineItemLongPress { //在长按
+                if selectedLineItem.itemData != nil {
+                    longPressPrintView
                 }
-                let ma = windowTotal / Double(windowLength)
-                candlestick.dictOfMA[interval] = ma
-                currentIdx -= 1
+           }
+        }
+    } 
+
+    /**
+        长按k线中的元素后展示的十字线和信息卡
+    */
+    @ViewBuilder
+    var longPressPrintView: some View {
+
+        // 十字线
+        
+        //获取相对于视图的x坐标
+        let xPosition = selectedLineItem.scrollPosition - scrollViewOffset
+        let itemData = selectedLineItem.itemData
+        Path { path in
+            path.move(to: CGPoint(x: xPosition, y: 0))
+            path.addLine(x: xPosition, y: s)
+        }
+
+        //信息卡片
+
+        //显示在坐标还是右边
+        let showOnLeft:Bool = xPosition > windowWidth / 2
+        HStack {   
+            if showOnLeft == false {
+                Spacer()
+            }
+
+            VStack {
+                HStack {
+                    Text("时间")
+                    Spacer()
+                    Text(String(itemData.openTime))
+                }
+                HStack {
+                    Text("开")
+                    Spacer()
+                    Text(itemData.open.coinPriceFormat())
+                }
+                HStack {
+                    Text("高")
+                    Spacer()
+                    Text(itemData.high.coinPriceFormat())
+                }
+                HStack {
+                    Text("低")
+                    Spacer()
+                    Text(itemData.low.coinPriceFormat())
+                }
+                HStack {
+                    Text("收")
+                    Spacer()
+                    Text(itemData.close.coinPriceFormat())
+                }
+            }
+            .font(.littleFont())    
+            .background(Color.black.opacty(0.5))
+            .foregroundStyle(.white)
+            .clipShape(
+                RoundedRectangle(cornerRadius: 10)
+            )
+
+
+            if showOnLeft {
+                Spacer()
             }
         }
     }
 
     /**
-        获取应该现实的颜色
-    - Parameters: 
-    - Returns: Color k蜡烛的颜色
+        K线滚动区域，添加了x，y轴
     */
-    func getColor() -> Color {
-        return close > open ? Color.green : Color.red
-    }
-}
+    @ViewBuilder
+    var kLineScrollArea: some View {
+        HStack {
 
+            // 绘制可滚动的k线展示区域以及x轴
+            scrollViewReader { proxy in
+                ScallView {
+                    GeometryReader { geometry in
+                        HStack{
+                            var idx = 0
+                            // 绘制每一根蜡烛
+                            ForEach(dataset.usableDataset) { lineDataEntry in
+                                CandlesstickShape(
+                                    lineDataEntry: lineDataEntry,
+                                    heightRatio: heightRatio
+                                )
+                                .frame(
+                                    width: lineItemWidth,
+                                    height: windowHeight
+                                )
+                                .gesture {
+                                    LongPressGesture(minimumDuration: 0.5)
+                                        .updating($isLineItemLongPress){ currentState, gestureState, transaction in
+                                            gestureState= currentState
+                                        }
+                                        .opChanged { _ in
+                                            //长按选中更新选中的数据以及x坐标
+                                            selectedLineItem.itemData = lineDataEntry
+                                            selectedLineItem.scrollPosition = idx * lineItemWidth + lineItemWidth / 2.0
+                                        }
+                                }
+                            }
+                        }
+                        .frame( //动态设置scollview的宽度
+                            width: scrollAreaWidth,
+                            height: scrollAreaHeight
+                        )
+                        .overlay ( //x轴
+                            VStack {
+                                Spacer()
+                            }
+                        )
+                        // .overlay ( // y轴
 
-/**
-    蜡烛图
+                        // )
+                        .onAppear {
+                            //设置K线视图宽度、高度
+                            windowWidth = geometry.size.width
+                            windowHeight = geometry.size.height
 
-    使用方式：
-        Chart() { element in
-            // 这里调用 generalChart() 方法
-            CandlestickChart().generalChart()
-        }
-*/
-struct CandlestickChart {
+                            //根据K线数据个数，滚动到相应位置
+                            if dataset.count >= viewKLineItemCount {
+                                proxy.scrollTo(scrollAreaWidth)
+                            }
+                        }
+                        .onPreferenceChange(ViewOffsetKey.self) {
+                            //实时更新偏移量
+                            scrollViewOffset = $0
 
-    /**
-        高的比例，所有与高有关的数据都要乘
-    */
-    let heightRatio 
+                            //剩余没展示的点不足以覆盖整个窗口，再次尝试请求数据，需要再获取k线数据
+                            let currentIndex:Int = scrollViewOffset / lineItemWidth
+                            if dataset.count >= viewKLineItemCount , currentIndex < viewKLineItemCount , !isLoadingKLineData {
+                                isLoadingKLineData = true
+                                
+                                // 闭包，网络请求完成后调用
+                                let closePackage = { res in
+                                    let oldWidth = scrollAreaWidth
+                                    let oldIndex = currentIndex
+                                    
+                                    switch res {
+                                    case false: // load k线数据失败
+                                        
+                                    case true: // 成功    
+                                        //计算当前点在加载新数据后，所在的位置，并将ScrollView移到该位置
+                                        let newWidth = scrollAreaWidth
+                                        let newScollOffset = (newWidth - oldWidth) + oldIndex * lineItemWidth
+                                        proxy.scrollTo(newScollOffset)    
+                                    }
+                                    isLoadingKLineData = false
+                                }
+                                
+                                dataset.loadLineData(
+                                    whenComplate: (res) -> closePackage(res)
+                                )
 
-    /**
-        一根蜡烛的宽度
-    */
-    let itemWidth
+                            }
+                        }
+                    }
+                } 
+            }
 
-
-    func generalChart () -> PointMark {
-        PointMark (
-            x: .value("日期", candlestick.openTime, unit: .day),
-            y: .value("美元", candlestick.close)
-        )
-        .marker(
-            CandlesstickItem(
-                candlestick: candlestick,
-                heightRatio: heightRatio,
-                itemWidth: itemWidth
+            //Y轴线
+             YAxisLine(
+                height: windowHeight,
+                max: maxPrice,
+                min: minPrice,
+                scaleNumber: 3
+            )   
+            .frame(
+                width: scaleWidth,
+                height: windowHeight
             )
-        )
+        }
     }
 }
+
+
+struct ViewOffsetKey: PreferenceKey {
+    typealias Value = CGFloat
+    static var defaultValue = CGFloat.zero
+    static func reduce(value: inout Value, nextValue: () -> Value) {
+        value += nextValue()
+    }
+}
+
 
 /**
     一根蜡烛的形状
 */
-struct CandlesstickItem: Shape  {
+struct CandlesstickShape: Shape  {
     
     /**
         一根k线图的数据
     */
-    let candlestick: Candlestick
+    let lineDataEntry: LineDataEntry
 
     /**
         高的比例，所有与高有关的数据都要乘
     */
     let heightRatio: Double
-
-    /**
-        一根蜡烛的宽度
-    */
-    let itemWidth: Double
-
-
     
     func path(in rect: CGRect) -> Path {
-        let rectangleHeight = CGFloat(abs(candlestick.open - candlestick.close) * heightRatio)
-
+        let itemWidth = rect.width
         
         var path = Path { path in
             //绘制上下影线s
-            path.move(to: CGPoint(x: itemWidth / 2, y: candlestick.maxPrice * heightRatio))
-            path.addLine(to: CGPoint(x: itemWidth / 2, y: candlestick.minPrice * heightRatio))
+            path.move(to: CGPoint(x: itemWidth / 2, y: lineDataEntry.open * heightRatio))
+            path.addLine(to: CGPoint(x: itemWidth / 2, y: lineDataEntry.close * heightRatio))
 
             //绘制实体部分 (矩形)
             let rect = CGRect (
                 x: (itemWidth / 2) - (itemWidth / 4),
-                y: candlestick.close * heightRatio,
+                y: lineDataEntry.close * heightRatio,
                 width: itemWidth / 2,
-                height:  CGFloat(abs(candlestick.open - candlestick.close) * heightRatio).
+                height:  CGFloat(abs(lineDataEntry.open - lineDataEntry.close) * heightRatio).
             )
             path.addRect(rect)       
         }
         .stroke(
-            candlestick.getColor(), 
+            lineDataEntry.getColor(), 
             lineWidth: 2
         )
         return path
     }
 }
 
-//
-//  MergeView.swift
-//  CoinWatch
-//
-//  Created by 何磊 on 2024/9/24.
-//
-import SwiftUI
-import Foundation
+/**
+    Y轴线
+*/
+struct YAxisLine: Shape {
 
-struct MergeView: View {
-    let data = [
-        Candlestick(open: 150, close: 160, high: 165, low: 145),
-        Candlestick(open: 160, close: 155, high: 170, low: 150),
-        Candlestick(open: 155, close: 170, high: 175, low: 150),
-        Candlestick(open: 170, close: 165, high: 180, low: 160),
-        Candlestick(open: 165, close: 175, high: 185, low: 160)
-    ]
+    /**
+        轴线高度
+    */
+    let height: CGFloat 
 
-    let kInterval: Int
-    
-    let dateUnit: timeUnit
+    /**
+        最大值
+    */
+    let max: CGFloat
 
-    let maxPrice: Double = 0
+    /**
+        最小值
+    */
+    let min: CGFloat
 
-    let minPrice: Double = 0
+    /**
+        刻度数
+    */
+    let scaleNumber: 
 
-    let maIntervals[Int] = [1, 5, 20]
+    func path(in rect: CGRect) -> Path {
+        let width = rect.width
+
+        let heightPrice = (max - min) / height
+
+        Path { path in
+            //画轴线
+            path.move(to: CGPoint(x: width / 2, y: height))
+            path.addLine(to: CGPoint(x: width / 2, y: 0))
         
+            //画刻度
+            let interval = height / scaleNumber
+            ForEach(0..<scaleNumber) {i in 
+                let height = i * interal
 
-    init (
-        data:[Candlestick],
-        interal:Int,
-        kLineInterval: KLineInterval
-    ) {
-        self.data = data,
-        self.kInterval: kLineInterval.rawValue.interval
-        self.dateUnit: kLineInterval.rawValue.timeUnit
+                let printPrice = height * heightPrice
 
-        self.maxPrice = data.map{ $0.hight }.max() ?? 0
-        self.minPrice = data.map{ $0.low }.max() ?? 0
-    }
-    
-    
-    var body: some View {
-        GeometryReader { geometry in 
-            ZStack {
-                let height:CGFloat = geometry.size.height
-                let itemWidth:CGFloat = geometry.size.width / CGFloat(data.count)
-                let heightRatio:Double = height / (maxPrice - minPrice) 
-
-                Chart(data, id: \.openTime) { candlestick in
-                    //k线图
-                    CandlestickChart(
-                        heightRatio: heightRatio,
-                        itemWidth: itemWidth
-                    )
-
-                    .generalChart()
-                    
-                    //均线图
-                    for maInterval in maIntervals {
-                        MAChart(maInterval: maInterval).generalChart()
-                    }
-
-                    //Boll
-
+                //刻度线
+                Path { path in
+                    path.move(to: CGFloat(x: 0, y:height))
+                    path.addLine(to: CGPoint(x: width, y:height))
                 }
 
-            }.onAppear{
-                //计算ma
-                Candlestick.calculateMA(data: data, interval: maIntervals)
+                Text(String(printPrice))
+                    .font(.footnote)
+                    .position(x: x, y: height)
             }
         }
-    }
-}
-
-struct MAChart {
-    let maInterval 
-
-    func generalChart() -> Content {
-        LineMark() {
-            x: .value("日期", candlestick.openTime, unit: .day),
-            y: .value("美元", candlestick.dictOfMA[maInterval])
-        }
-    }
-}
-
-struct BollChart {
-    let maInterval: Int = 20
-    let n: Int = 2
-    
-    let maxPrice: Double
-
-    let minPrice: Double
-
-
-    func generalChart() -> Content {
-        
-
-        AreaMark(
-            x: .value("日期", candlestick.openTime, unit: .day),
-            yStart: .value("Minimum Price", candlestick.bollLine.lower),
-            yEnd: .value("Maximum Price", candlestick.bollLine.upper)
+        .stroke(
+            lineDataEntry.getColor(), 
+            lineWidth: 2
         )
     }
 }
 
 
 #Preview {
-    MergeView(interal: 4, dateUnit: "m")
-}
-enum KLineInterval:KLineIntervalItem {
-    case s_1 = KLineIntervalItem(1, .s)
-    case m_1 = KLineIntervalItem(1, .m)
-    case m_3 = KLineIntervalItem(3, .m)
-    case m_5 = KLineIntervalItem(5, .m)
-    case m_15 = KLineIntervalItem(15, .m)
-    case h_1 = KLineIntervalItem(1, .h)
-    case h_2 = KLineIntervalItem(2, .h)
-    case h_4 = KLineIntervalItem(4, .h)
-    case h_6 = KLineIntervalItem(6, .h)
-    case h_8 = KLineIntervalItem(8, .h)
-    case h_12 = KLineIntervalItem(12, .h)
-    case d_1 = KLineIntervalItem(1, .d)
-    case w_1 = KLineIntervalItem(1, .w)
-    case M_1 = KLineIntervalItem(1, .M)
-}
-enum TimeUnit: String {
-    case s
-    case m
-    case h
-    case d
-    case w
-    case M
-}
-struct KLineIntervalItem {
-    let interval:Int
-    let timeUnit:TimeUnit
 
-    init(_ interval:Int, _ timeUnit:TimeUnit) {
-        self.interal = interal
-        self.timeUnit = timeUnit
-    }
-
-    func toString() -> String {
-        return interval + timeUnit
-    }
-}
-
-enum APIResponseType:String {
-    case FULL
-    case MINI
+    KLineChart()
 }
