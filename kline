@@ -1,654 +1,126 @@
-//
-//  LineDataset.swift
-//  CoinWatch
-//
-//  Created by 何磊 on 2024/9/25.
-//
-
-import Foundation
-import SwiftUI
-import SwiftyJSON
 
 /**
- 线的数据集
- */
-@Observable
-class LineDataset {
-    
+    绘制均线图
+*/
+struct MALine: Shape {
+
+    let color: Color
+
     /**
-     币种名称，如 BTCUSDT
-     */
-    var symbol: String
-    
-    var kLineInterval: KLineInterval
-    
-    var dataset: [LineDataEntry]
-    
-    init(symbol: String, kLineInterval: KLineInterval, dataset: [LineDataEntry]) {
-        self.symbol = symbol
-        self.kLineInterval = kLineInterval
-        self.dataset = dataset
-    }
-    
-    // /**
-    //  渲染当前视图需使用的dataset
-    //  */
-    // var usableDataset: [LineDataEntry] {
-    //     get {
-    //         return dataset
-    //     }
-    // }
-    
-    var count: Int = 0 
-    
-    /**
-     最高价格
-     */
-    var maxPrice: Double = 0
-    
-    /**
-     最低价格
-     */
-    var minPrice: Double = 0
-    
-    /**
-        下一次加载数据时的startTIme
+        均线间隔
     */
-    private startTime:Date = getStartTime(endTime: Date())
-    
-
-    func getStartTime(endTime:Date) -> Date{
-        return DateUtil.calDate(from: endTime, days: -1 * kLineInterval.rawValue.interval, timeUnit: kLineInterval.rawValue.timeUnit) 
-    }
+    let maInterval: Int
 
     /**
-     加载数据
-     */
-    func loadLineData(whenComplate: @escaping (Bool) -> Void) {
-        print("开始获取k线数据, 当前\(self.dataset.count)条")
-        BinanceApi.spotApi.kLineData(
-            symbol: symbol,
-            interval: kLineInterval,
-            startTime: Date? = startTime,
-            limit: 30,
-            successCall: { data in
-                //更新dataset
-                
-                let newData = self.generalJSONToLineDataEntryArray(data: data).sorted(by:{$0.openTime > $1.openTime})
-                
-                self.dataset.append(contentsOf: newData)
-                
-                //更新count，max，min等
-                self.count = self.dataset.count
+        数据
+    */
+    let lineDataEntryList: [lineDataEntry]
 
-                if self.count != 0 {
-                    let min:Double = self.dataset[0].low
-                    let max:Double = 0
+    /**
+        高的比例
+    */
+    let heightRatio: Double
 
-                    for entry in dataset {
-                        min = min(min, entry.low)
-                        max = max(max, entry.max)
-                    } 
-                    self.maxPrice = max
-                    self.minPrice = min
+    /**
+        单个k线数据的宽度
+    */
+    let entryWidth: Double
 
-                    //更新startTime
-                    self.startTime = getStartTime(endTime: Date(self.dataset[self.dataset.count-1].openTime))
-                
-                } else {
-                    self.startTime = getStartTime(endTime: Date())
+    func path(in rect: CGRect) -> Path {
+
+        Path { path in
+            if lineDataEntryList.isEmpty {
+                return
+            }
+            //绘制不同间隔的MA
+            var width:Double = entryWidth / 2
+            var isFirst:Bool = true
+            //ma的线
+            lineDataEntryList.forEach { dataEntry in
+
+                if let ma = dataEntry.dictOfMA[maInterval] {
+                    var y = ma * heightRatio
+
+                    switch isFirst {
+                        case true:
+                            path.move(to: CGPoint(x: width, y: y))
+                            isFirst = false
+                        case false:
+                            path.addLine(to: CGPoint(x: width, y: y))
+                    }
                 }
 
-                print("获取k线数据完成共： \(self.dataset.count) 条")
-                whenComplate(true)
-            },
-            failureCall: { error in
-                whenComplate(false)
-            }
-        )
-    }
-    
-    func generalJSONToLineDataEntryArray(data: JSON) -> [LineDataEntry] {
-        print("解析k线数据")
-        var res:[LineDataEntry] = []
-        // 遍历 JSON 数组
-        if let jsonArray = data.array {
-            res = jsonArray.map { json in
-                let openTime = json[0].int64Value
-                let open = json[1].doubleValue
-                let high = json[2].doubleValue
-                let low = json[3].doubleValue
-                let close = json[4].doubleValue
-                let volume = json[5].doubleValue
-                let closeTime = json[6].int64Value
-                
-                
-                return LineDataEntry(
-                    openTime: Date(timeIntervalSince1970:  TimeInterval(openTime/1000)),
-                    closeTime: Date(timeIntervalSince1970:  TimeInterval(closeTime/1000)),
-                    open: open,
-                    close: close,
-                    high: high,
-                    low: low
+                width += entryWidth
+
+                path.stroke (
+                    color,
+                    lineWidth: 1
                 )
             }
         }
-        print("解析k线数据success\n")
-        return res
     }
 }
 
 
-//
-//  KLineChart.swift
-//  CoinWatch
-//
-//  Created by 何磊 on 2024/9/25.
-//
-
-import Foundation
-import SwiftUI
-
-
-
-struct KLineChart: View {
-    
-    /**
-        当前K线视图的宽度
-    */
-    @State private var windowWidth: CGFloat = 0
-
-    /**
-        当前K线视图的高度
-    */
-    @State private var windowHeight: CGFloat = 0
-
-    /**
-        K线视图滑动的偏移量
-    */
-    @State private var scrollViewOffset:CGFloat = 0
-
-    /**
-        当前选中的数据
-    */
-    @State private var selectedPosition:CGPoint? = .zero
-
-    /**
-        是否长按k线的某点
-    */
-    @GestureState private var isLineItemLongPress = false
-
-
-    /**
-        当前是否在加载k线数据
-    */
-    @State private var isLoadingKLineData: Bool = false
-
-
-    @State private var kLineDataCount = dataset.count 
-
-    /**
-        当前视图显示的K线线段的个数
-    */
-    let viewKLineItemCount:Int = 15
-
-    /**
-        k线元素之间的间距
-    */
-    let marginOfLineItem: CGFloat = 10
-
-
-    /**
-        坐标轴线的宽度
-    */
-    let scaleWidth: CGFloat = 2
-
-    /**
-        每个K线元素的宽度
-    */
-    var lineItemWidth: Double {
-        get {
-            return windowWidth / Double(viewKLineItemCount) - marginOfLineItem
-        }
-    }
-
-    /**
-        滚动区域的宽度，也就是k线图展示的区域。窗口宽度减去轴线宽度
-    */
-    @State var scrollAreaWidth: Double {
-        get {
-            lineItemWidth * Double(dataset.count)
-        }
-    }
-
-    /**
-        滚动区域的高度，也就是k线图展示的区域。窗口高度减去轴线宽度
-    */
-    var scrollAreaHeight: Double {
-        get {
-            windowHeight - scaleWidth
-        }
-    }
-
-    /**
-        组件item的高度比例，因为y轴是价格，所以表示单位价格的长度 height / (maxPrice - minPrice)
-    */
-    var heightRatio: Double  {
-        get {
-            windowHeight / (dataset.maxPrice - dataset.minPrice)
-        }
-    }
-
-
-    /**
-        数据集
-    */
-    @State var dataset: LineDataset
-
-
-    init(dataset: LineDataset) {
-        self.dataset = dataset
-    }
-
-    var body: some View {
-        
-        ZStack {
-
-           //背景显示的字
-//           Text(dataset.symbol).font(.title)
-
-           //x线图
-           kLineScrollArea
-
-           //显示十字线以及按住的KLineItem的信息
-           if isLineItemLongPress { //在长按
-                if selectedPosition != .zero {
-                    longPressPrintView
-                }
-           }
-        }
-    }
-
-    /**
-        长按k线中的元素后展示的十字线和信息卡
-    */
-    @ViewBuilder
-    var longPressPrintView: some View {
-
-        // 十字线
-        
-        //获取相对于视图的x坐标
-        let xPosition = selectedPosition.x
-        let index = (scrollViewOffset + xPosition) / lineItemWidth
-        let itemData = dataset.get(index)
-        
-        Path { path in
-            path.move(to: CGPoint(x: xPosition, y: 0))
-            path.addLine(to: CGPoint(x: xPosition, y: scrollAreaHeight))
-        }
-
-        //信息卡片
-
-        //显示在坐标还是右边
-        let showOnLeft:Bool = xPosition > windowWidth / 2
-        HStack {
-            if showOnLeft == false {
-                Spacer()
-            }
-
-            VStack {
-                Text("时间")
-                Text("开")
-                Text("高")
-                Text("低")
-                Text("收")
-            }
-            
-            VStack{
-               Text(DateUtil.dateToStr(date: itemData.openTime?))
-               Text(itemData.open.coinPriceFormat())
-               Text(itemData.high.coinPriceFormat())
-               Text(itemData.low.coinPriceFormat())
-               Text(itemData.close.coinPriceFormat())
-            }
-            .font(.littleFont())
-            .background(Color.black.opacity(0.5))
-            .foregroundStyle(.white)
-            .clipShape(
-                RoundedRectangle(cornerRadius: 10)
-            )
-
-
-            if showOnLeft {
-                Spacer()
-            }
-        }
-    }
-
-    /**
-        K线滚动区域，添加了x，y轴
-    */
-    @ViewBuilder
-    var kLineScrollArea: some View {
-        HStack {
-            // 绘制可滚动的k线展示区域以及x轴
-            ScrollViewReader { proxy in
-                ScrollView {
-                    GeometryReader { geometry in
-                        HStack{
-                            // 绘制每一根蜡烛
-                            ForEach(dataset.usableDataset, id: \.id) { lineDataEntry in
-                                CandlesstickShape(
-                                    lineDataEntry: lineDataEntry,
-                                    heightRatio: heightRatio
-                                )
-                                .stroke(
-                                    lineDataEntry.getColor(),
-                                    lineWidth: 2
-                                )
-                                .frame(
-                                    width: lineItemWidth,
-                                    height: windowHeight
-                                )
-                               .gesture {
-                                   LongPressGesture(minimumDuration: 0.5)
-                                       .updating($isLineItemLongPress){ currentState, gestureState, transaction in
-                                           gestureState = currentState
-                                       }
-                                       .onChanged { value in
-                                            //长按选中更新选中的数据以及x坐标
-                                           selectedLineItemIndex = (value.position.x + scrollViewOffset) / lineItemWidth   
-                                        //    selectedLineItem.itemData = lineDataEntry?
-                                        //    selectedLineItem.scrollPosition = idx * lineItemWidth + lineItemWidth / 2.0
-                                       }
-                               }
-                            }
-                        }
-                        .frame( //动态设置scollview的宽度
-                            width: scrollAreaWidth,
-                            height: scrollAreaHeight
-                        )
-                        .overlay ( //x轴
-                            VStack {
-                                Spacer()
-                            }
-                        )
-                        // .overlay ( // y轴
-
-                        // )
-                        .onAppear {
-                            //设置K线视图宽度、高度
-                            windowWidth = geometry.size.width
-                            windowHeight = geometry.size.height
-                            
-                            isLoadingKLineData = true
-                            dataset.loadLineData { res in
-                                isLoadingKLineData = false
-                                print("load k 线数据完成 \n \(dataset.count)")
-                                //根据K线数据个数，滚动到相应位置
-                                if dataset.count >= viewKLineItemCount {
-                                    proxy.scrollTo(scrollAreaWidth)
-                                }
-                            }
-                            
-                        }
-                        .background(.blue)
-                        .onPreferenceChange(ViewOffsetKey.self) {
-                            //实时更新偏移量
-                            scrollViewOffset = $0
-
-                            //剩余没展示的点不足以覆盖整个窗口，再次尝试请求数据，需要再获取k线数据
-                            let currentIndex:Int = Int(scrollViewOffset / lineItemWidth)
-                            if dataset.count >= viewKLineItemCount , currentIndex < viewKLineItemCount , !isLoadingKLineData {
-                                isLoadingKLineData = true
-                                
-                   
-                                dataset.loadLineData(
-                                    whenComplate: { res in
-                                        // 闭包，网络请求完成后调用
-                                        let oldWidth = scrollAreaWidth
-                                        let oldIndex = currentIndex
-                                        
-                                        switch res {
-                                        case false: // load k线数据失败
-                                            print("e")
-                                        case true: // 成功
-                                            //计算当前点在加载新数据后，所在的位置，并将ScrollView移到该位置
-                                            let newWidth = scrollAreaWidth
-                                            let newScollOffset = (newWidth - oldWidth) + Double(oldIndex) * lineItemWidth
-                                            proxy.scrollTo(newScollOffset)
-                                        }
-                                        isLoadingKLineData = false
-                                    }
+                            //绘制均线
+                            maIntervals.forEach( maInterval in
+                                MALine(
+                                    color: CommonUtil.randomColor(),
+                                    maIntervals: maIntervals,
+                                    lineDataEntryList: dataset.dataset,
+                                    heightRatio: heightRatio,
+                                    entryWidth: lineItemWidth
                                 )
 
-                            }
-                        }
-                    }
-                }
-            }
-
-            //Y轴线
-             YAxisLine(
-                height: windowHeight,
-                max: dataset.maxPrice,
-                min: dataset.minPrice,
-                scaleNumber: 3
-            )
-             .stroke(
-                 .black,
-                 lineWidth: 1
-             )
-            .frame(
-                width: scaleWidth,
-                height: windowHeight
-            )
-        }
-    }
-}
-
-
-struct ViewOffsetKey: PreferenceKey {
-    typealias Value = CGFloat
-    static var defaultValue = CGFloat.zero
-    static func reduce(value: inout Value, nextValue: () -> Value) {
-        value += nextValue()
-    }
-}
-
+                            )
 
 /**
-    一根蜡烛的形状
+    X轴线
 */
-struct CandlesstickShape: Shape  {
-    
-    /**
-        一根k线图的数据
-    */
-    let lineDataEntry: LineDataEntry
-
-    /**
-        高的比例，所有与高有关的数据都要乘
-    */
-    let heightRatio: Double
-    
+struct XAxisLine: Shape {
     func path(in rect: CGRect) -> Path {
-        let itemWidth = rect.width
-        
-        return Path { path in
-            //绘制上下影线s
-            path.move(to: CGPoint(x: itemWidth / 2, y: lineDataEntry.open * heightRatio))
-            path.addLine(to: CGPoint(x: itemWidth / 2, y: lineDataEntry.close * heightRatio))
-
-            //绘制实体部分 (矩形)
-            let rect = CGRect (
-                x: (itemWidth / 2) - (itemWidth / 4),
-                y: lineDataEntry.close * heightRatio,
-                width: itemWidth / 2,
-                height:  CGFloat(abs(lineDataEntry.open - lineDataEntry.close) * heightRatio)
-            )
-            path.addRect(rect)
-        }
-    }
-}
-
-/**
-    Y轴线
-*/
-struct YAxisLine: Shape {
-
-    /**
-        轴线高度
-    */
-    let height: CGFloat
-
-    /**
-        最大值
-    */
-    let max: CGFloat
-
-    /**
-        最小值
-    */
-    let min: CGFloat
-
-    /**
-        刻度数
-    */
-    let scaleNumber:Int
-
-    func path(in rect: CGRect) -> Path {
-        let width = rect.width
-
-        let heightPrice = (max - min) / height
-
-        return Path { path in
-            //画轴线
-            path.move(to: CGPoint(x: width / 2, y: height))
-            path.addLine(to: CGPoint(x: width / 2, y: 0))
-        
-            //画刻度
-            let interval:CGFloat = height / Double(scaleNumber)
-            
-            var numbers: [Int] = Array(0...scaleNumber)
-            
-           ForEach(numbers.indices, id: \.self){i in
-               let height:CGFloat = Double(i) * interval
-
-               let printPrice = height * heightPrice
-
-               //刻度线
-               Path { path in
-                   path.move(to: CGFloat(x: 0, y:height))
-                   path.addLine(to: CGPoint(x: width, y:height))
-               }
-
-               Text(String(printPrice))
-                   .font(.footnote)
-                   .position(x: 0, y: height)
-           }
-        }
+        let height = rect.height  
+        let width = rect.width   
+        var path = Path()
+        //画轴线
+        path.move(to: CGPoint(x: 0, y: height / 2))
+        path.addLine(to: CGPoint(x: width, y: height / 2))
+    
+        //画刻度
+        let interval:CGFloat = height / Double(scaleNumber)
 
     }
 }
 
 
-#Preview {
-    let dataset:LineDataset = LineDataset(
-        symbol: "BTCUSDT",
-        kLineInterval: .d_1,
-        dataset: []
-    )
-    KLineChart(dataset: dataset)
-}
 
 
-//
-//  DateUtil.swift
-//  CoinWatch
-//
-//  Created by 何磊 on 2024/9/21.
-//
+    /**
+        计算均线
+    */
+    func calculateMA(maIntervals:[Int] = [1]) -> Void{
+        var intervalWindow: [Int:(interval:Int, windowLength:Int, windowTotal:Double)] = [:]
+        for element in maIntervals {
+            intervalWindow[element] = (element, 0, 0)
+        }
+      
 
-import Foundation
-  
+        var currentIdx = data.count - 1
+        for entry in datasett {
+            for (_, value) in intervalWindow {
+                var (interval, windowLength, windowTotal) = value
 
-class DateUtil {
-    
-    static let inner: Inner = Inner(pattern: "yyyy-MM-dd HH:mm:ss")
-    
-    
-    static func strToDate(str:String) -> Date {
-        return inner.strToDate(str: str) ?? Date()
-    }
-    
-    static func dateToStr(date: Date) -> String {
-        return inner.dayFormatter.string(from: date)
-    }
-    
-    static func calDate(from date: Date, days: Int, timeUnit: TimeUnit) -> Date? {
-        // 使用当前日历对象来进行日期计算
-        let calendar = Calendar.current
-        // 通过 subtracting 天数来获取目标日期
-        switch kLineInterval.rawValue.timeUnit {
-        case s:
-            return calendar.date(byAdding: .second, value: days, to: date)            
-        case m:
-            return calendar.date(byAdding: .minites, value: days, to: date)
-        case h:
-            return calendar.date(byAdding: .hour, value: days, to: date)
-        case d:
-            return calendar.date(byAdding: .day, value: days, to: date)
-        case w:
-            return calendar.date(byAdding: .week, value: days, to: date)
-        case M:
-            return calendar.date(byAdding: .mouth, value: days, to: date)
+                if windowLength < interval {
+                    windowLength += 1
+                    windowTotal += candlestick.close
+                } else {
+                    windowTotal = windowTotal - data[(currentIdx + windowLength - 1)].close + entry.close
+
+                    let ma = windowTotal / Double(windowLength)
+                    entry.dictOfMA[interval] = ma
+                }
+                
+                currentIdx -= 1
+            }
         }
     }
-    
-    static func dateToDay(date: Date) -> Date {
-        let calendar = Calendar.current
-        let components = calendar.dateComponents([.year, .month, .day], from: date)
-
-        return calendar.date(from: components)!
-    }
-    
-    static func areDatesOnSameDay(_ date1: Date, _ date2: Date) -> Bool {
-        let calendar = Calendar.current
-          
-        // 通过比较两个日期的年、月、日组件来确定它们是否是同一天
-        let components1 = calendar.dateComponents([.year, .month, .day], from: date1)
-        let components2 = calendar.dateComponents([.year, .month, .day], from: date2)
-          
-        // 检查这些组件是否相同
-        return components1.year == components2.year &&
-               components1.month == components2.month &&
-               components1.day == components2.day
-    }
-    
-    static func toYearMonthDayStr(date: Date) -> String {
-        return inner.dayFormatter.string(from: date)
-    }
-    
-    class Inner {
-        let dateFormatter:DateFormatter
-        
-        let dayFormatter: DateFormatter
-        
-        init(pattern: String) {
-            self.dateFormatter = DateFormatter()
-            self.dateFormatter.dateFormat = pattern
-            
-            self.dayFormatter = DateFormatter()
-            self.dayFormatter.dateFormat = "yyyy-MM-dd"
-        }
-
-        func strToDate(str: String) -> Date? {
-            // 设置日期格式以匹配你的字符串
-            
-            return dateFormatter.date(from: str)
-        }
-    }
-
-}
-
