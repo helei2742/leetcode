@@ -1,227 +1,53 @@
-package com.helei.tradedatacenter.entity;
-
-
-import com.alibaba.fastjson.JSON;
-import com.alibaba.fastjson.JSONObject;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.EqualsAndHashCode;
-import lombok.NoArgsConstructor;
-
-import java.util.*;
-import java.util.concurrent.atomic.AtomicInteger;
-
-/**
- * WebSocket里发送请求的格式
- */
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-@EqualsAndHashCode
-public class WebSocketCommand {
-
-    /**
-     * 请求的类型
-     */
-    private String method;
-
-    /**
-     * 参数
-     */
-    private JSONObject params;
-
-    /**
-     * id
-     */
-    private String id;
-
-    public synchronized void setParams(JSONObject params) {
-        this.params = params;
-    }
-
-    public synchronized void addParam(String key, Object value) {
-        if (params == null) {
-            params = new JSONObject();
-        }
-        params.put(key, value);
-    }
-
-    public static WebSocketCommandBuilder builder() {
-        return new WebSocketCommandBuilder();
-    }
-
-    static class WebSocketCommandBuilder{
-
-        private final WebSocketCommand command;
-
-        WebSocketCommandBuilder() {
-            command = new WebSocketCommand();
-            command.setId(UUID.randomUUID().toString());
-        }
-
-        public WebSocketCommand buildPing() {
-            return setCommandType(WebSocketCommandType.PING).build();
-        }
-
-        public WebSocketCommand buildPong() {
-            return setCommandType(WebSocketCommandType.PONG).build();
-        }
-
-        public WebSocketCommandBuilder setCommandType(WebSocketCommandType webSocketCommandType) {
-            command.setMethod(webSocketCommandType.getDescription());
-            return this;
-        }
-
-        public WebSocketCommandBuilder setParams(JSONObject param) {
-            command.setParams(param);
-            return this;
-        }
-
-        public WebSocketCommandBuilder noRateLimit() {
-            command.addParam("returnRateLimits ", true);
-            return this;
-        }
-
-        public WebSocketCommand build() {
-            return command;
-        }
-    }
-}
-
-
-
-enum WebSocketCommandType {
-
-    SUBSCRIBE("SUBSCRIBE"),
-    UNSUBSCRIBE("UNSUBSCRIBE"),
-    LIST_SUBSCRIPTIONS("LIST_SUBSCRIPTIONS"),
-    SET_PROPERTY("SET_PROPERTY"),
-    GET_PROPERTY("GET_PROPERTY"),
-    PING("ping")
-    PONG("pong")
-    ;
-    WebSocketCommandType(String description) {
-        this.description = description;
-    }
-
-    private final String description;
-
-    public String getDescription() {
-        return description;
-    }
-}
-
-class WebScoketUrl{
-    public static final String NORMAL_URL = "wss://ws-api.binance.com:443/ws-api/v3";
-
-    public static final String SPOT_TEST_URL = "wss://testnet.binance.vision/ws-api/v3";
-}
-
-package com.helei.tradedatacenter.entity;
-
-import cn.hutool.json.JSONObject;
-import com.alibaba.fastjson.JSON;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.EqualsAndHashCode;
-import lombok.NoArgsConstructor;
-
-import java.util.List;
-
-
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-@EqualsAndHashCode
-public class WebSocketResponse {
-
-    /**
-     * 请求的id
-     */
-    private Integer id;
-
-    /**
-     * 相应状态
-     */
-    private Integer status;
-
-    /**
-     * 响应内容
-     */
-    private JSON result;
-
-    /**
-     * 错误描述
-     */
-    private String error;
-
-    /**
-     * 限速状态
-     */
-    private List<RateLimit> rateLimits;
-}
-
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-@EqualsAndHashCode
-class RateLimit{
-    /**
-     * 	频率限制类型: REQUEST_WEIGHT, ORDERS
-     */
-    private String rateLimitType;
-
-    /**
-     * 	频率限制间隔: SECOND, MINUTE, HOUR, DAY
-     */
-    private String interval;
-
-    /**
-     * 频率限制间隔乘数
-     */
-    private Integer intervalNum;
-
-    /**
-     * 每个间隔的请求限制
-     */
-    private Integer limit;
-
-    /**
-     * 	每个间隔的当前使用情况
-     */
-    private Integer count;
-}
-
 
 package com.helei.tradedatacenter.netty.base;
 
 
+import com.alibaba.fastjson.JSON;
+import com.helei.tradedatacenter.netty.handler.RequestResponseHandler;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpObjectAggregator;
-import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
-import io.netty.handler.codec.http.websocketx.WebSocketClientHandshakerFactory;
-import io.netty.handler.codec.http.websocketx.WebSocketVersion;
-import io.netty.handler.codec.http.websocketx.extensions.compression.WebSocketClientCompressionHandler;
+import io.netty.handler.codec.http.websocketx.*;
+import io.netty.handler.proxy.Socks5ProxyHandler;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import io.netty.handler.stream.ChunkedWriteHandler;
 import lombok.extern.slf4j.Slf4j;
 
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 
+/**
+ * Websocket客户端
+ * @param <P> 请求体的类型
+ * @param <T> 返回值的类型
+ */
 @Slf4j
-public abstract class AbstractWebsocketClient {
+public abstract class AbstractWebsocketClient<P,T> {
 
+    /**
+     * websocket的url字符串
+     */
     private final String url;
 
-    private final AbstractWebSocketClientHandler handler;
+    /**
+     * netty pipeline 最后一个执行的handler
+     */
+    protected final AbstractWebSocketClientHandler<P,T> handler;
+
+    /**
+     * 执行回调的线程池
+     */
+    protected final ExecutorService callbackInvoker;
 
     private URI uri;
 
@@ -233,18 +59,34 @@ public abstract class AbstractWebsocketClient {
 
     private Channel channel;
 
+    private final RequestResponseHandler<T> requestResponseHandler;
+
     public AbstractWebsocketClient(
+            int threadPoolSize,
             String url,
-            AbstractWebSocketClientHandler handler
+            AbstractWebSocketClientHandler<P,T> handler
     ) throws URISyntaxException {
         this.url = url;
         this.handler = handler;
+        this.handler.websocketClient = this;
+
+        if (threadPoolSize <= 0) {
+            this.callbackInvoker = null;
+        }else {
+            this.callbackInvoker = Executors.newFixedThreadPool(threadPoolSize);
+        }
+
         resolveParamFromUrl();
+
+        requestResponseHandler = new RequestResponseHandler<>();
     }
 
     public void connect() throws Exception {
         log.info("websocket client 连接中....");
-
+        WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(
+                uri, WebSocketVersion.V13, null, true, new DefaultHttpHeaders()
+        );
+        handler.init(handshaker);
         final SslContext sslCtx;
         if (useSSL) {
             sslCtx = SslContextBuilder.forClient()
@@ -255,55 +97,109 @@ public abstract class AbstractWebsocketClient {
 
         EventLoopGroup group = new NioEventLoopGroup();
         try {
-            WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(uri, WebSocketVersion.V13, null, true, new DefaultHttpHeaders());
-
-            handler.init(handshaker);
-
             Bootstrap b = new Bootstrap();
             b.group(group)
                     .channel(NioSocketChannel.class)
-                    .handler(new ChannelInitializer<SocketChannel>() {
+                    .option(ChannelOption.TCP_NODELAY, true)
+                    .option(ChannelOption.SO_BROADCAST, true)
+                    .option(ChannelOption.SO_KEEPALIVE, true)
+                    .handler(new ChannelInitializer<NioSocketChannel>() {
                         @Override
-                        protected void initChannel(SocketChannel ch) {
+                        protected void initChannel(NioSocketChannel ch) {
                             ChannelPipeline p = ch.pipeline();
+                            p.addLast(new Socks5ProxyHandler(new InetSocketAddress("127.0.0.1", 7890)));
+
                             if (sslCtx != null) {
-                                p.addLast(sslCtx.newHandler(ch.alloc(), host, port));
+                                p.addLast(sslCtx.newHandler(ch.alloc(), uri.getHost(), port));
                             }
+
                             p.addLast(new HttpClientCodec());
                             p.addLast(new HttpObjectAggregator(8192));
-                            p.addLast(WebSocketClientCompressionHandler.INSTANCE);
+                            p.addLast(new ChunkedWriteHandler());
+                            p.addLast(new WebSocketFrameAggregator(8192));
+
                             p.addLast(handler);
                         }
                     });
 
-            channel = b.connect(uri.getHost(), port).sync().channel();
+            channel = b.connect(host, port).sync().channel();
 
+            // 8. 等待 WebSocket 握手完成
             handler.handshakeFuture().sync();
 
-//            // 在这里可以添加一个默认心跳 15s发一次
-//            channel.eventLoop().scheduleAtFixedRate(() -> {
-//                channel.writeAndFlush(new TextWebSocketFrame("pong"));
-//            }, 0, 15, TimeUnit.SECONDS);
+            // 发送 WebSocket 帧
+//            channel.writeAndFlush(new TextWebSocketFrame("Hello WebSocket Server through HTTP Proxy and SSL!"));
 
             channel.closeFuture().sync();
         } catch (Exception e) {
-//            channel.close();
-            log.error("websocket client 启动失败，失败原因：{}", e.getMessage());
-        } finally {
-            group.shutdownGracefully();
+//            close();
+            log.error("websocket client 启动失败", e);
         }
+//        finally {
+//            group.shutdownGracefully();
+//        }
     }
 
     /**
-     * 发送消息
-     * @param message message
+     * 发送请求, 注册响应监听
+     * @param id id
+     * @param request 请求体
+     * @param callback 请求结果的回调
      */
-    public void sendMessage(String message) {
-        // 进行注册
-        channel.writeAndFlush(message);
+    public void sendRequest(String id, P request, Consumer<T> callback){
+        sendRequest(id, request, callback, callbackInvoker);
+    }
+
+    /**
+     * 发送请求, 注册响应监听
+     * @param id id
+     * @param request 请求体
+     * @param callback 请求结果的回调
+     * @param executorService 执行回调的线程池，传入为空则会尝试使用本类的线程池以及netty线程池
+     */
+    public void sendRequest(String id, P request, Consumer<T> callback, ExecutorService executorService){
+        boolean flag = requestResponseHandler.registryRequest(id, response -> {
+            if (executorService == null) {
+                if (callbackInvoker == null) { //netty线程处理
+                    callback.accept(response);
+                } else { //此类线程处理
+                    callbackInvoker.submit(()->{
+                        callback.accept(response);
+                    });
+                }
+            } else { //参数线程池处理
+                executorService.submit(()->{
+                    callback.accept(response);
+                });
+            }
+
+        });
+
+        if (flag) {
+            channel.writeAndFlush(new TextWebSocketFrame(JSON.toJSONString(request)));
+        } else {
+            throw new IllegalArgumentException("request id registered");
+        }
     }
 
 
+    /**
+     * 发送ping
+     */
+    public abstract void sendPing();
+
+    /**
+     * 发送pong
+     */
+    public abstract void sendPong();
+
+    /**
+     * 发送请求,不组册监听
+     * @param request 请求体
+     */
+    public void sendRequest(P request){
+        channel.writeAndFlush(new TextWebSocketFrame(JSON.toJSONString(request)));
+    }
 
     /**
      * 解析参数
@@ -332,12 +228,35 @@ public abstract class AbstractWebsocketClient {
 
         useSSL = "wss".equalsIgnoreCase(scheme);
     }
+
+    public void close() {
+        if (channel != null) {
+            channel.close();
+        }
+    }
+
+    /**
+     * 提交请求的响应
+     * @param id id
+     * @param response response
+     * @return 是否成功
+     */
+    public boolean submitResponse(String id, T response) {
+        return requestResponseHandler.submitResponse(id, response);
+    }
+
+    /**
+     * 提交stream流的响应
+     * @param symbol symbol
+     * @param streamType streamType
+     * @param message message
+     */
+    public abstract void submitStreamResponse(String symbol, String streamType, T message);
 }
 
 
 package com.helei.tradedatacenter.netty.base;
 
-import com.alibaba.fastjson.JSON;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
@@ -351,16 +270,26 @@ import lombok.extern.slf4j.Slf4j;
 import io.netty.channel.*;
 
 
+/**
+ * WebSocket客户端处理器抽象类
+ * @param <P>
+ * @param <T>
+ */
 @Slf4j
-public abstract class AbstractWebSocketClientHandler extends SimpleChannelInboundHandler<Object> {
+public abstract class AbstractWebSocketClientHandler<P, T> extends SimpleChannelInboundHandler<Object> {
 
     private WebSocketClientHandshaker handshaker;
 
     private ChannelPromise handshakeFuture;
 
-    public ChannelFuture handshakeFuture() {
-        return handshakeFuture;
-    }
+    protected AbstractWebsocketClient<P, T> websocketClient;
+
+    /**
+     * 收到消息处理
+     * @param text 消息字符串
+     */
+    protected abstract void whenReceiveMessage(String text);
+
 
     public void init(WebSocketClientHandshaker handshaker) {
         this.handshaker = handshaker;
@@ -373,6 +302,7 @@ public abstract class AbstractWebSocketClientHandler extends SimpleChannelInboun
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
+        log.info("WebSocket Client connected!");
         handshaker.handshake(ctx.channel());
     }
 
@@ -384,47 +314,49 @@ public abstract class AbstractWebSocketClientHandler extends SimpleChannelInboun
     @Override
     public void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
         Channel ch = ctx.channel();
+        // 如果握手未完成，处理 FullHttpResponse
         if (!handshaker.isHandshakeComplete()) {
-            try {
-                handshaker.finishHandshake(ch, (FullHttpResponse) msg);
-                log.info("websocket client 连接成功");
-                handshakeFuture.setSuccess();
-            } catch (WebSocketHandshakeException e) {
-                log.info("websocket client 连接失败");
-                handshakeFuture.setFailure(e);
+            if (msg instanceof FullHttpResponse response) {
+                try {
+                    handshaker.finishHandshake(ch, response);
+                    System.out.println("WebSocket Handshake complete!");
+                    handshakeFuture.setSuccess();
+                } catch (WebSocketHandshakeException e) {
+                    System.out.println("WebSocket Handshake failed!");
+                    handshakeFuture.setFailure(e);
+                }
+                return;
             }
-            return;
         }
 
         if (msg instanceof FullHttpResponse response) {
             throw new IllegalStateException(
                     "Unexpected FullHttpResponse (getStatus=" + response.status() +
                             ", content=" + response.content().toString(CharsetUtil.UTF_8) + ')');
-        }
+        }  else if (msg instanceof WebSocketFrame frame) {
+            if (frame instanceof TextWebSocketFrame textFrame) {
+                log.info("websocket client 接收到的消息：{}",textFrame.text());
 
-        WebSocketFrame frame = (WebSocketFrame) msg;
-        if (frame instanceof TextWebSocketFrame) {
-            TextWebSocketFrame textFrame = (TextWebSocketFrame) frame;
-            log.info("websocket client 接收到的消息：{}",textFrame.text());
-            receiveMessage(JSON.parseObject(textFrame.text()));
-        } else if (frame instanceof PongWebSocketFrame) {
-            log.info("WebSocket Client received pong");
-        } else if (frame instanceof CloseWebSocketFrame) {
-            log.info("websocket client关闭");
-            ch.close();
+                whenReceiveMessage(textFrame.text());
+
+            } else if (frame instanceof PongWebSocketFrame) {
+                log.info("WebSocket Client received pong");
+            } else if (frame instanceof CloseWebSocketFrame) {
+                log.info("websocket client关闭");
+                ch.close();
+            }
         }
     }
 
-    protected void receiveMessage(JSON json) {}
+
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        cause.printStackTrace();
         if (!handshakeFuture.isDone()) {
             handshakeFuture.setFailure(cause);
         }
         ctx.close();
-        log.error("业务处理错误，websocket client关闭");
+        log.error("业务处理错误，websocket client关闭", cause);
     }
 
     @Override
@@ -469,7 +401,1032 @@ public abstract class AbstractWebSocketClientHandler extends SimpleChannelInboun
      * @param ctx ctx
      */
     protected void handleAllIdle(ChannelHandlerContext ctx) {
+        websocketClient.sendPing();
+    }
+
+    public ChannelFuture handshakeFuture() {
+        return handshakeFuture;
+    }
+}
+
+
+
+package com.helei.tradedatacenter.subscribe.binanceapi.api;
+
+import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.tradedatacenter.subscribe.binanceapi.AbstractBinanceWSApi;
+import com.helei.tradedatacenter.subscribe.binanceapi.BinanceWSApiClientClient;
+import com.helei.tradedatacenter.subscribe.binanceapi.constants.WebSocketCommandType;
+import com.helei.tradedatacenter.subscribe.binanceapi.dto.WebSocketCommandBuilder;
+import lombok.extern.slf4j.Slf4j;
+
+import java.net.URISyntaxException;
+import java.util.List;
+import java.util.function.Consumer;
+
+
+@Slf4j
+public class BinanceWSBaseApi extends AbstractBinanceWSApi {
+    public BinanceWSBaseApi(BinanceWSApiClientClient binanceWSApiClient) throws URISyntaxException {
+        super(binanceWSApiClient);
+    }
+
+
+    /**
+     * 测试服务端联通性
+     */
+    public void pingServer() {
+        binanceWSApiClient.sendPing();
+    }
+
+
+    /**
+     * 查询服务端的时间
+     * @param callback callback, 失败则会传入null. 由父类的线程池执行
+     */
+    public void queryServerTime(Consumer<Long> callback) {
+        JSONObject command = WebSocketCommandBuilder.builder().setCommandType(WebSocketCommandType.TIME).build();
+
+        String id = command.getString("id");
+        binanceWSApiClient.sendRequest(1, id, command, result -> {
+            if (result != null) {
+                try {
+                    callback.accept(result.getLong("serverTime"));
+                    log.debug("get server time [{}], request id[{}] success", result, id);
+                } catch (Exception e) {
+                    callback.accept(null);
+                    log.error("parse server time error, requestId [{}]", id,e);
+                }
+            } else {
+                callback.accept(null);
+                log.warn("get server time, request id[{}] fail", id);
+            }
+        });
+    }
+
+
+    /**
+     * 查询交易规范信息,
+     * @param permissions permissions
+     * @param callback callback。失败则会传入null. 由父类的线程池执行
+     */
+    public void queryExchangeInfo(
+            Consumer<JSONObject> callback,
+            List<String> permissions
+    ) {
+        queryExchangeInfo(null, null, permissions, callback);
+    }
+
+    /**
+     * 查询交易规范信息,
+     * @param symbols symbols
+     * @param callback callback。失败则会传入null. 由父类的线程池执行
+     */
+    public void queryExchangeInfo(
+            List<String> symbols,
+            Consumer<JSONObject> callback
+    ) {
+        queryExchangeInfo(null, symbols, null, callback);
+    }
+
+    /**
+     * 查询交易规范信息, symbol,
+     * @param symbol symbol
+     * @param callback callback。失败则会传入null. 由父类的线程池执行
+     */
+    public void queryExchangeInfo(
+            String symbol,
+            Consumer<JSONObject> callback
+    ) {
+        queryExchangeInfo(symbol, null, null, callback);
+    }
+
+
+    /**
+     * 查询交易规范信息, symbol,symbols,permissions三个参数只能生效一个，从前到后第一个不为空的生效
+     * @param symbol symbol
+     * @param symbols symbols
+     * @param permissions permissions
+     * @param callback callback。失败则会传入null. 由父类的线程池执行
+     */
+    public void queryExchangeInfo(
+            String symbol,
+            List<String> symbols,
+            List<String> permissions,
+            Consumer<JSONObject> callback
+    ) {
+
+
+        JSONObject jb = new JSONObject();
+        if (StrUtil.isNotBlank(symbol)) {
+            jb.put("symbol", symbol);
+        }
+        else if (symbols != null && !symbols.isEmpty()) {
+            jb.put("symbols", symbols);
+        }
+        else if (permissions != null && !permissions.isEmpty()) {
+            jb.put("permissions", permissions);
+        }
+        JSONObject command = WebSocketCommandBuilder
+                .builder()
+                .setCommandType(WebSocketCommandType.EXCHANGE_INFO)
+                .setParams(jb)
+                .build();
+
+        String id = command.getString("id");
+        binanceWSApiClient.sendRequest(20, id, command, callback);
+    }
+}
+
+
+
+package com.helei.tradedatacenter.subscribe.binanceapi.api;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.tradedatacenter.subscribe.binanceapi.AbstractBinanceWSApi;
+import com.helei.tradedatacenter.subscribe.binanceapi.BinanceWSApiClientClient;
+import com.helei.tradedatacenter.subscribe.binanceapi.constants.WebSocketCommandType;
+import com.helei.tradedatacenter.subscribe.binanceapi.dto.WebSocketCommandBuilder;
+import lombok.extern.slf4j.Slf4j;
+
+import java.net.URISyntaxException;
+import java.util.function.Consumer;
+
+
+/**
+ * 现货api
+ */
+@Slf4j
+public class BinanceWSSpotApi extends AbstractBinanceWSApi {
+
+
+    public BinanceWSSpotApi(BinanceWSApiClientClient binanceWSApiClient) throws URISyntaxException {
+        super(binanceWSApiClient);
+    }
+
+    /**
+     * 获取当前深度信息。
+     * 请注意，此请求返回有限的市场深度。
+     * 如果需要持续监控深度信息更新，请考虑使用 WebSocket Streams：
+     * <symbol>@depth<levels>
+     * <symbol>@depth
+     * 如果需要维护本地orderbook，您可以将 depth 请求与 <symbol>@depth streams 一起使用。
+     * 权重(IP): 根据限制调整：
+     * 限制	重量
+     * 1–100	5
+     * 101–500	25
+     * 501–1000	50
+     * 1001-5000	250
+     * 参数:
+     * 名称	类型	是否必需	描述
+     * symbol	STRING	YES
+     * limit	INT	NO	默认 100; 最大值 5000
+     *
+     * @param symbol   symbol
+     * @param limit    limit
+     * @param callback callback
+     *                 {
+     *                 "lastUpdateId": 2731179239,
+     *                 // bid 水平从最高价到最低价排序。
+     *                 "bids": [
+     *                 [
+     *                 "0.01379900",   // 价格
+     *                 "3.43200000"    // 重量
+     *                 ]
+     *                 ],
+     *                 // ask 水平从最低价到最高价排序。
+     *                 "asks": [
+     *                 [
+     *                 "0.01380000",
+     *                 "5.91700000"
+     *                 ]
+     *                 ]
+     *                 }
+     */
+    public void queryDepth(String symbol, Integer limit, Consumer<JSONObject> callback) {
+        int ipWeight = 100;
+        if (limit >= 1 && limit <= 100) {
+            ipWeight = 5;
+        } else if (limit >= 101 && limit <= 500) {
+            ipWeight = 25;
+        } else if (limit >= 501 && limit <= 1000) {
+            ipWeight = 50;
+        } else if (limit >= 1001 && limit <= 5000) {
+            ipWeight = 250;
+        } else {
+            ipWeight = 250;
+            limit = 5000;
+        }
+
+        WebSocketCommandBuilder builder = WebSocketCommandBuilder
+                .builder();
+        builder.setCommandType(WebSocketCommandType.DEPTH);
+        builder.addParam("symbol", symbol);
+        builder.addParam("limit", limit);
+        JSONObject command = builder
+                .build();
+
+        String id = command.getString("id");
+
+        binanceWSApiClient.sendRequest(ipWeight, id, command, callback);
+    }
+
+
+    /**
+     * 查询最近交易信息
+     *
+     * @param symbol   symbol
+     * @param limit    多少条
+     * @param callback callback
+     *                 [
+     *                 {
+     *                 "id": 194686783,
+     *                 "price": "0.01361000",
+     *                 "qty": "0.01400000",
+     *                 "quoteQty": "0.00019054",
+     *                 "time": 1660009530807,
+     *                 "isBuyerMaker": true,
+     *                 "isBestMatch": true
+     *                 }
+     *                 ]
+     */
+    public void queryTradesRecent(String symbol, int limit, Consumer<JSONObject> callback) {
+        JSONObject command = WebSocketCommandBuilder
+                .builder()
+                .setCommandType(WebSocketCommandType.TRADES_RECENT)
+                .addParam("symbol", symbol)
+                .addParam("limit", limit)
+                .build();
+
+
+        binanceWSApiClient.sendRequest(20, command.getString("id"), command, callback);
+    }
+}
+
+
+
+
+package com.helei.tradedatacenter.subscribe.binanceapi.api;
+
+import com.helei.tradedatacenter.subscribe.binanceapi.AbstractBinanceWSApi;
+import com.helei.tradedatacenter.subscribe.binanceapi.BinanceWSApiClientClient;
+import com.helei.tradedatacenter.subscribe.binanceapi.SubscribeResultInvocationHandler;
+import com.helei.tradedatacenter.subscribe.binanceapi.constants.WebSocketStreamType;
+import com.helei.tradedatacenter.subscribe.binanceapi.dto.StreamSubscribeEntity;
+
+import java.net.URISyntaxException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+
+/**
+ * 币按stream api
+ */
+public class BinanceWSStreamApi extends AbstractBinanceWSApi {
+
+    public BinanceWSStreamApi(BinanceWSApiClientClient binanceWSApiClient) throws URISyntaxException {
+        super(binanceWSApiClient);
+    }
+
+    public StreamCommandBuilder builder() {
+        return new StreamCommandBuilder(binanceWSApiClient);
+    }
+
+
+
+    public static class StreamCommandBuilder{
+        private final BinanceWSApiClientClient binanceWSApiClient;
+
+        private String symbol = null;
+
+        private List<StreamSubscribeEntity> subscribeList = null;
+
+        StreamCommandBuilder(BinanceWSApiClientClient binanceWSApiClient){
+            this.binanceWSApiClient = binanceWSApiClient;
+        }
+
+        /**
+         * 设置symbol
+         * @param symbol symbol
+         * @return StreamCommandBuilder
+         */
+        public StreamCommandBuilder symbol(String symbol) {
+            this.symbol = symbol;
+            return this;
+        }
+
+        /**
+         * 添加订阅类型， 必须在设置symbol之后
+         * @param subscribeType subscribeType
+         * @param invocationHandler invocationHandler
+         * @return StreamCommandBuilder
+         */
+        public synchronized StreamCommandBuilder addSubscribeType(
+                WebSocketStreamType subscribeType,
+                SubscribeResultInvocationHandler invocationHandler
+        ) {
+            return addSubscribeType(subscribeType, invocationHandler, null);
+        }
+
+        /**
+         * 添加订阅类型， 必须在设置symbol之后
+         * @param subscribeType subscribeType
+         * @param invocationHandler invocationHandler
+         * @param executorService 执行的线程池，如果设置了，在收到订阅的消息的时候会优先使用该线程池
+         * @return StreamCommandBuilder
+         */
+        public synchronized StreamCommandBuilder addSubscribeType(
+                WebSocketStreamType subscribeType,
+                SubscribeResultInvocationHandler invocationHandler,
+                ExecutorService executorService
+        ) {
+            if (subscribeList == null) {
+                subscribeList = new ArrayList<>();
+            }
+
+            subscribeList.add(new StreamSubscribeEntity(symbol, subscribeType, invocationHandler, executorService));
+            return this;
+        }
+
+        public void subscribe() {
+            binanceWSApiClient.subscribeStream(symbol, subscribeList);
+        }
     }
 
 }
+
+
+package com.helei.tradedatacenter.subscribe.binanceapi.constants;
+
+import lombok.Getter;
+
+@Getter
+public enum WebSocketCommandType {
+    /**
+     * 订阅
+     */
+    SUBSCRIBE("SUBSCRIBE"),
+    /**
+     * 取消订阅
+     */
+    UNSUBSCRIBE("UNSUBSCRIBE"),
+    /**
+     * 当前订阅
+     */
+    LIST_SUBSCRIPTIONS("LIST_SUBSCRIPTIONS"),
+    /**
+     * 设置属性
+     */
+    SET_PROPERTY("SET_PROPERTY"),
+    /**
+     * 获取属性
+     */
+    GET_PROPERTY("GET_PROPERTY"),
+    /**
+     * ping
+     */
+    PING("ping"),
+    /**
+     * ping
+     */
+    PONG("pong"),
+    /**
+     * 获取服务器时间
+     */
+    TIME("time"),
+    /**
+     * 获取交易规范信息
+     */
+    EXCHANGE_INFO("exchangeInfo"),
+    /**
+     * 获取深度信息
+     */
+    DEPTH("depth"),
+    TRADES_RECENT("trades.recent"),
+    ;
+
+    WebSocketCommandType(String description) {
+        this.description = description;
+    }
+
+    private final String description;
+
+}
+
+package com.helei.tradedatacenter.subscribe.binanceapi.constants;
+
+
+import lombok.Getter;
+
+@Getter
+public enum WebSocketStreamType {
+
+    /**
+     * 获取逐笔交易，逐笔交易推送每一笔成交的信息。 成交（或者说交易）的定义是仅有一个吃单者与一个挂单者相互交易。
+     */
+    TRADE("trade"),
+    /**
+     * 交易流归集，推送交易信息，是对单一订单的集合
+     */
+    AGG_TRADE("aggTrade"),
+
+    /**
+     * K线stream逐秒推送所请求的K线种类(最新一根K线)的更新。此更新是基于 UTC+0 时区的。
+     * Stream 名称: <symbol>@kline_<interval
+     */
+    KLINE("kline"),
+
+    /**
+     * K线stream逐秒推送所请求的K线种类(最新一根K线)的更新。此更新是基于 UTC+8 时区的。
+     * UTC+8 时区偏移量：
+     * K线间隔的开始和结束时间会基于 UTC+8 时区。例如， 1d K线将在 UTC+8 当天开始，并在 UTC+8 当日完结时随之结束。
+     * 请注意，Payload中的 E（event time），t（start time）和 T（close time）是 Unix 时间戳，它们始终以 UTC 格式解释。
+     * Stream 名称: <symbol>@kline_<interval>@+08:00
+     */
+    MOVE_KLINE("kline"),
+
+    /**
+     * 按Symbol刷新的最近24小时精简ticker信息
+     * Stream 名称: <symbol>@miniTicker
+     */
+    DAY_MINI_TICKER("24hrMiniTicker"),
+    ;
+
+
+    WebSocketStreamType(String description) {
+        this.description = description;
+    }
+
+    private final String description;
+}
+
+
+
+package com.helei.tradedatacenter.subscribe.binanceapi.dto;
+
+import com.helei.tradedatacenter.subscribe.binanceapi.SubscribeResultInvocationHandler;
+import com.helei.tradedatacenter.subscribe.binanceapi.constants.WebSocketStreamType;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+
+import java.util.concurrent.ExecutorService;
+
+
+/**
+ * 流订阅的实体
+ */
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@EqualsAndHashCode
+public class StreamSubscribeEntity {
+
+    /**
+     * 币种
+     */
+    private String symbol;
+
+    /**
+     * 流订阅的类型
+     */
+    private WebSocketStreamType subscribeType;
+
+    /**
+     * 订阅结果回调
+     */
+    private SubscribeResultInvocationHandler invocationHandler;
+
+    /**
+     * 执行回调的线程池
+     */
+    private ExecutorService callbackExecutor;
+}
+
+package com.helei.tradedatacenter.subscribe.binanceapi.dto;
+
+
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.tradedatacenter.subscribe.binanceapi.constants.WebSocketCommandType;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+
+import java.util.*;
+
+/**
+ * WebSocket里发送请求的格式
+ */
+@Data
+@EqualsAndHashCode
+public class WebSocketCommandBuilder {
+    private final JSONObject command;
+
+    WebSocketCommandBuilder() {
+        command = new JSONObject();
+        command.put("id", UUID.randomUUID().toString());
+    }
+
+    public static WebSocketCommandBuilder builder() {
+        return new WebSocketCommandBuilder();
+    }
+
+    public JSONObject buildPing() {
+        return setCommandType(WebSocketCommandType.PING).build();
+    }
+
+    public JSONObject buildPong() {
+        return setCommandType(WebSocketCommandType.PONG).build();
+    }
+
+    public WebSocketCommandBuilder setCommandType(WebSocketCommandType webSocketCommandType) {
+        command.put("method", webSocketCommandType.getDescription());
+        return this;
+    }
+
+    public WebSocketCommandBuilder setParams(JSONObject param) {
+        command.put("params", param);
+        return this;
+    }
+
+    public JSONObject build() {
+        return command;
+    }
+
+    /**
+     * 添加kv类型参数，
+     * @param key key
+     * @param value value
+     * @return WebSocketCommandBuilder
+     */
+    public WebSocketCommandBuilder addParam(String key, Object value) {
+        synchronized (command) {
+            if (!command.containsKey("params")) {
+                command.put("params", new JSONObject());
+            }
+            command.getJSONObject("params").put(key, value);
+        }
+        return this;
+    }
+    /**
+     * 添加array类型参数，
+     * @param value value
+     * @return WebSocketCommandBuilder
+     */
+    public WebSocketCommandBuilder addArrayParam(Object value) {
+        synchronized (command) {
+            if (!command.containsKey("params")) {
+                command.put("params", new JSONArray());
+            }
+            command.getJSONArray("params").add(value);
+        }
+        return this;
+    }
+}
+
+
+package com.helei.tradedatacenter.subscribe.binanceapi;
+
+import java.net.URISyntaxException;
+
+/**
+ * 币安接口基础类
+ */
+public class AbstractBinanceWSApi {
+    protected final BinanceWSApiClientClient binanceWSApiClient;
+
+    public AbstractBinanceWSApi(
+            BinanceWSApiClientClient binanceWSApiClient
+    ) throws URISyntaxException {
+        this.binanceWSApiClient = binanceWSApiClient;
+    }
+
+
+}
+
+
+
+
+package com.helei.tradedatacenter.subscribe.binanceapi;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.tradedatacenter.netty.base.AbstractWebsocketClient;
+import com.helei.tradedatacenter.subscribe.binanceapi.constants.WebSocketCommandType;
+import com.helei.tradedatacenter.subscribe.binanceapi.constants.WebSocketStreamType;
+import com.helei.tradedatacenter.subscribe.binanceapi.dto.StreamSubscribeEntity;
+import com.helei.tradedatacenter.subscribe.binanceapi.dto.WebSocketCommandBuilder;
+import lombok.extern.slf4j.Slf4j;
+
+import java.net.URISyntaxException;
+import java.util.List;
+import java.util.function.Consumer;
+
+/**
+ * 币按ws接口客户端抽象类
+ */
+@Slf4j
+public class AbstractBinanceWSApiClient extends AbstractWebsocketClient<JSONObject, JSONObject> {
+
+    /**
+     * 处理ip限制相关
+     */
+    private final IpWeightSupporter ipWeightSupporter;
+
+
+    /**
+     * 处理stream流相关
+     */
+    private final BinanceWSStreamSupporter binanceWSStreamSupporter;
+
+    public AbstractBinanceWSApiClient(
+            int threadPoolSize,
+            String url,
+            IpWeightSupporter ipWeightSupporter,
+            BinanceWSStreamSupporter binanceWSStreamSupporter,
+            AbstractBinanceWSApiClientHandler handler
+    ) throws URISyntaxException {
+        super(threadPoolSize, url, handler);
+
+        this.ipWeightSupporter = ipWeightSupporter;
+
+        this.binanceWSStreamSupporter = binanceWSStreamSupporter;
+    }
+
+
+    @Override
+    public void sendPing() {
+        JSONObject command = WebSocketCommandBuilder.builder().buildPing();
+        log.info("send ping command: {}", command);
+        sendRequest(1, command.getString("id"), command, response -> {
+            log.info("get pong response: {}", response);
+        });
+    }
+
+    @Override
+    public void sendPong() {
+        JSONObject command = WebSocketCommandBuilder.builder().buildPing();
+        log.info("send pong command: {}", command);
+
+        //不注册监听
+        sendRequest(command);
+    }
+
+    @Override
+    public void submitStreamResponse(String symbol, String streamType, JSONObject message) {
+        binanceWSStreamSupporter.publishStreamResponse(symbol, streamType, message, callbackInvoker);
+    }
+
+
+    /**
+     * 发生请求
+     * @param ipWeight ip weight
+     * @param id   请求的id
+     * @param request   请求体
+     * @param callback  回调
+     */
+    public void sendRequest(
+            int ipWeight,
+            String id,
+            JSONObject request,
+            Consumer<JSONObject> callback
+    ) {
+        if (ipWeightSupporter.submitIpWeight(ipWeight)) {
+            super.sendRequest(id, request, response -> {
+                if (response != null) {
+                    log.debug("send request id[{}] success, response[{}]", id, response);
+                    callback.accept(response.getJSONObject("result"));
+                } else {
+                    callback.accept(null);
+                    log.error("send request id[{}] fail", id);
+                }
+            });
+        } else {
+            log.warn("current ipWeight[{}] not support send request", ipWeightSupporter.currentWeight());
+        }
+    }
+
+    /**
+     * 订阅stream
+     * @param symbol 需订阅的币种symbol
+     * @param subList 需订阅的类型
+     */
+    public void subscribeStream(String symbol, List<StreamSubscribeEntity> subList) {
+        WebSocketCommandBuilder builder = WebSocketCommandBuilder.builder().setCommandType(WebSocketCommandType.SUBSCRIBE);
+
+        for (StreamSubscribeEntity subscribeEntity : subList) {
+            WebSocketStreamType subscribeType = subscribeEntity.getSubscribeType();
+            String paramLine = binanceWSStreamSupporter.generateParamLine(subscribeType, symbol);
+            log.debug("generate param line for type[{}]-symbol[{}], result[{}]", subscribeType, symbol, paramLine);
+            builder.addArrayParam(paramLine);
+        }
+
+        JSONObject command = builder.build();
+        log.info("subscribe stream command: {}", command);
+        String id = command.getString("id");
+        sendRequest(1, id, command, response -> {
+            if (response != null) {
+                log.debug("get subscribe response: {}", response);
+                binanceWSStreamSupporter.submitSubscribe(symbol, subList);
+            }else {
+                log.error("get subscribe response error, requestId[{}]", id);
+            }
+        });
+    }
+}
+
+
+
+
+
+package com.helei.tradedatacenter.subscribe.binanceapi;
+
+import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.tradedatacenter.netty.base.AbstractWebSocketClientHandler;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+public class AbstractBinanceWSApiClientHandler extends AbstractWebSocketClientHandler<JSONObject, JSONObject> {
+
+
+    @Override
+    protected void whenReceiveMessage(String text) {
+        JSONObject message = JSONObject.parseObject(text);
+
+        String id = message.getString("id");
+
+        if (StrUtil.isBlank(id)) {
+            //没有id，是服务端推送的消息
+            String streamType = message.getString("e");
+            String symbol = message.getString("s");
+
+            log.debug("streamType[{}],symbol[{}] get stream response [{}]", streamType, symbol, message);
+            websocketClient.submitStreamResponse(symbol, streamType, message);
+        } else {
+            //有id，是发送请求的响应
+            //提交response
+            websocketClient.submitResponse(id, message);
+        }
+    }
+
+}
+
+
+
+package com.helei.tradedatacenter.subscribe.binanceapi;
+
+import com.helei.tradedatacenter.subscribe.binanceapi.api.BinanceWSBaseApi;
+import com.helei.tradedatacenter.subscribe.binanceapi.api.BinanceWSSpotApi;
+import com.helei.tradedatacenter.subscribe.binanceapi.api.BinanceWSStreamApi;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+
+import java.net.URISyntaxException;
+
+
+/**
+ * 币安ws接口客户端
+ */
+@Getter
+@Slf4j
+public class BinanceWSApiClientClient extends AbstractBinanceWSApiClient {
+
+
+    /**
+     * 基础的api
+     */
+    private final BinanceWSBaseApi baseApi;
+
+    /**
+     * 现货相关的api
+     */
+    private final BinanceWSSpotApi spotApi;
+
+    /**
+     * stream流推送相关api
+     */
+    private final BinanceWSStreamApi streamApi;
+
+    public BinanceWSApiClientClient(
+            int threadPoolSize,
+            String url,
+            IpWeightSupporter ipWeightSupporter,
+            AbstractBinanceWSApiClientHandler handler
+    ) throws URISyntaxException {
+        super(threadPoolSize, url, ipWeightSupporter, new BinanceWSStreamSupporter(), handler);
+
+        baseApi = new BinanceWSBaseApi(this);
+        spotApi = new BinanceWSSpotApi(this);
+        streamApi = new BinanceWSStreamApi(this);
+    }
+}
+
+
+
+package com.helei.tradedatacenter.subscribe.binanceapi;
+
+
+import lombok.extern.slf4j.Slf4j;
+
+
+/**
+ * BinanceWSApiClient的消息处理器
+ */
+@Slf4j
+public class BinanceWSApiClientClientHandler extends AbstractBinanceWSApiClientHandler {
+
+
+
+}
+
+
+package com.helei.tradedatacenter.subscribe.binanceapi;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.tradedatacenter.subscribe.binanceapi.constants.WebSocketStreamType;
+import com.helei.tradedatacenter.subscribe.binanceapi.dto.StreamSubscribeEntity;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+
+
+
+@Slf4j
+public class BinanceWSStreamSupporter {
+    private final Map<WebSocketStreamType, AbstractBinanceWSSHandler> handlerMap;
+
+    private final ConcurrentMap<String, StreamSubscribeEntity> subscribeMap;
+
+    public BinanceWSStreamSupporter() {
+        this.handlerMap = new HashMap<>();
+        this.subscribeMap = new ConcurrentHashMap<>();
+
+        //TODO 配置化
+        this.handlerMap.put(WebSocketStreamType.TRADE, new AbstractBinanceWSSHandler(WebSocketStreamType.TRADE) {
+            @Override
+            public String buildParamLine(String symbol) {
+                return symbol + "@" + streamType.getDescription();
+            }
+        });
+    }
+
+    /**
+     * 生成参数行
+     * @param streamType stream订阅类型
+     * @param symbol    币种
+     * @return 参数行
+     */
+    public String generateParamLine(WebSocketStreamType streamType, String symbol) {
+        AbstractBinanceWSSHandler handler = handlerMap.get(streamType);
+        if (handler == null) {
+            log.warn("No handler for stream type {}", streamType);
+            return null;
+        } else {
+            return handler.buildParamLine(symbol);
+        }
+    }
+
+    /**
+     * 创建订阅
+     * @param symbol symbol
+     * @param subList  stream订阅类型列表
+     */
+    public void submitSubscribe(String symbol, List<StreamSubscribeEntity> subList) {
+        for (StreamSubscribeEntity subscribeEntity : subList) {
+            String key = generateKey(symbol, subscribeEntity.getSubscribeType().getDescription());
+            subscribeMap.putIfAbsent(key, subscribeEntity);
+        }
+    }
+
+    /**
+     * 收到订阅的消息，执行相应的回调
+     * 1.首先会优先使用 StreamSubscribeEntity中传入的线程池执行
+     * 2.如果没有则会用AbstractBinanceWSApiClient中的线程池执行
+     * 3.如果还没有，使用netty线程池执行
+     * @param symbol          symbol
+     * @param streamType      streamType
+     * @param message         message
+     * @param callbackInvoker callbackInvoker
+     */
+    public void publishStreamResponse(String symbol, String streamType, JSONObject message, ExecutorService callbackInvoker) {
+
+        String key = generateKey(symbol, streamType);
+
+        StreamSubscribeEntity subscribeEntity = subscribeMap.get(key);
+        if (subscribeEntity == null) {
+            log.error("No subscribe entity for stream type {}", key);
+            return;
+        }
+
+        try {
+            ExecutorService executor = subscribeEntity.getCallbackExecutor();
+            if (executor != null) {
+                executor.submit(()->{
+                    subscribeEntity.getInvocationHandler().invoke(symbol, streamType, message);
+                });
+            } else if (callbackInvoker != null){
+                callbackInvoker.submit(()->{
+                    subscribeEntity.getInvocationHandler().invoke(symbol, streamType, message);
+                });
+            } else {
+                subscribeEntity.getInvocationHandler().invoke(symbol, streamType, message);
+                log.warn("use netty thread pool execute, symbol [{}]", key);
+            }
+        } catch (Exception e) {
+            log.error("publish stream response error, symbol[{}], streamType[{}]", symbol, streamType, e);
+        }
+    }
+
+    /**
+     * 根据symbol和subscribeType 生成 key
+     * @param symbol symbol
+     * @param subscribeType subscribeType
+     * @return subscribeMap的key
+     */
+    private static String generateKey(String symbol, String subscribeType) {
+        return symbol + "-" + subscribeType;
+    }
+
+
+    public static abstract class AbstractBinanceWSSHandler {
+        protected final WebSocketStreamType streamType;
+
+        AbstractBinanceWSSHandler(WebSocketStreamType streamType) {
+            this.streamType = streamType;
+        }
+
+        public abstract String buildParamLine(String symbol);
+    }
+}
+
+
+package com.helei.tradedatacenter.subscribe.binanceapi;
+
+
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * 实时计算ip weight
+ */
+@Slf4j
+public class IpWeightSupporter {
+
+    private final String ip;
+
+    /**
+     * 当前的ip weight
+     */
+    private final AtomicInteger ipWeight;
+
+    public IpWeightSupporter(String ip) {
+        this.ip = ip;
+        this.ipWeight = new AtomicInteger(0);
+    }
+
+    /**
+     * 提交ip权重，返回boolean代表能否不受限制的安全执行
+     * @param ipWeight 请求的权重
+     * @return 是否建议执行
+     */
+    public boolean submitIpWeight(int ipWeight) {
+        //TODO 添加逻辑，判断是否能够执行
+        this.ipWeight.addAndGet(ipWeight);
+        return true;
+    }
+
+    /**
+     * 获取当前的 ip weight
+     * @return ip weight
+     */
+    public Integer currentWeight() {
+        return ipWeight.get();
+    }
+}
+
+
+package com.helei.tradedatacenter.subscribe.binanceapi;
+
+
+import com.alibaba.fastjson.JSONObject;
+
+
+/**
+ * 订阅流消息结果处理
+ */
+public interface SubscribeResultInvocationHandler {
+
+    void invoke(String symbol, String subscribeType, JSONObject result);
+
+}
+
 
