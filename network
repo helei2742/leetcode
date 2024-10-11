@@ -1,35 +1,61 @@
-package com.helei.tradedatacenter.subscribe.binanceapi;
+package com.helei.tradedatacenter;
 
-import com.helei.tradedatacenter.subscribe.binanceapi.constants.WebSocketStreamType;
-import com.helei.tradedatacenter.subscribe.binanceapi.constants.WebSocketUrl;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
+import com.helei.tradedatacenter.datasource.MemoryKLineSource;
+import com.helei.tradedatacenter.entity.KLine;
+import com.helei.tradedatacenter.indicator.Indicator;
+import com.helei.tradedatacenter.indicator.calculater.BaseIndicatorCalculator;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.ProcessFunction;
+import org.apache.flink.util.Collector;
+
+import java.util.ArrayList;
+import java.util.List;
 
 
-@SpringBootTest
-class BinanceWSApiClientTest {
-    private static BinanceWSApiClientClient binanceWSApiClient = null;
+public class AutoTradeTask {
+    private final StreamExecutionEnvironment env;
 
-    @BeforeAll
-    public static void before() {
-        BinanceWSApiClientClientHandler handler = new BinanceWSApiClientClientHandler();
-        try {
-            binanceWSApiClient = new BinanceWSApiClientClient(4, WebSocketUrl.NORMAL_URL, new IpWeightSupporter("ip"),handler);
-            binanceWSApiClient.connect();
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+    private final DataStream<KLine> kLineStream;
+
+    private final List<DataStream<KLine>> indicatorStreamList;
+
+    public AutoTradeTask() {
+        // 设置 Flink 流环境
+        env = StreamExecutionEnvironment.getExecutionEnvironment();
+
+        // 使用自定义 SourceFunction 生成 K 线数据流
+        MemoryKLineSource memoryKLineSource = new MemoryKLineSource();
+        kLineStream = env.addSource(memoryKLineSource);
+        this.indicatorStreamList = new ArrayList<>();
     }
 
-    @Test
-    public void testBinanceWSApiClient() {
-        binanceWSApiClient.getStreamApi()
-                .builder()
-                .symbol("btcusdt")
-                .addSubscribeType(WebSocketStreamType.TRADE, ((symbol, subscribeType, result) -> {
-                    System.out.println(symbol);
-                }))
-                .subscribe();
+    public <T extends Indicator> AutoTradeTask addIndicator(BaseIndicatorCalculator<T> calculator) {
+        DataStream<KLine> streamOperator = kLineStream
+                .keyBy(KLine::getSymbol) // 按股票代码分组
+                .process(calculator);
+        indicatorStreamList.add(streamOperator);
+        return this;
+    }
+
+    public void execute() throws Exception {
+
+        DataStream<KLine> indicatorStream = indicatorStreamList.get(0);
+        if (indicatorStream != null) {
+            for (int i = 1; i < indicatorStreamList.size(); i++) {
+                indicatorStream.union(indicatorStreamList.get(i));
+            }
+            //TODO 信号处理
+            indicatorStream
+                    .process(new ProcessFunction<KLine,String>() {
+                        @Override
+                        public void processElement(KLine kLine, ProcessFunction<KLine, String>.Context context, Collector<String> collector) throws Exception {
+                            collector.collect(kLine.toString());
+                        }
+                    })
+                    .print();
+        }
+
+        env.execute();
     }
 }
