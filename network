@@ -1,61 +1,89 @@
-package com.helei.tradedatacenter;
+package com.helei.tradedatacenter.indicator.calculater;
 
-import com.helei.tradedatacenter.datasource.MemoryKLineSource;
 import com.helei.tradedatacenter.entity.KLine;
-import com.helei.tradedatacenter.indicator.Indicator;
-import com.helei.tradedatacenter.indicator.calculater.BaseIndicatorCalculator;
-import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.ProcessFunction;
-import org.apache.flink.util.Collector;
+import com.helei.tradedatacenter.indicator.PST;
+import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.configuration.Configuration;
 
 import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 
+public class PSTCalculator extends BaseIndicatorCalculator<PST> {
 
-public class AutoTradeTask {
-    private final StreamExecutionEnvironment env;
+    private final int windowLength;
 
-    private final DataStream<KLine> kLineStream;
+    private ListState<KLine> windowDataState;
 
-    private final List<DataStream<KLine>> indicatorStreamList;
-
-    public AutoTradeTask() {
-        // 设置 Flink 流环境
-        env = StreamExecutionEnvironment.getExecutionEnvironment();
-
-        // 使用自定义 SourceFunction 生成 K 线数据流
-        MemoryKLineSource memoryKLineSource = new MemoryKLineSource();
-        kLineStream = env.addSource(memoryKLineSource);
-        this.indicatorStreamList = new ArrayList<>();
+    protected PSTCalculator(
+            String name,
+            int windowLength,
+            int pCount,
+            int sCount
+    ) {
+        super(name);
+        this.windowLength = windowLength;
     }
 
-    public <T extends Indicator> AutoTradeTask addIndicator(BaseIndicatorCalculator<T> calculator) {
-        DataStream<KLine> streamOperator = kLineStream
-                .keyBy(KLine::getSymbol) // 按股票代码分组
-                .process(calculator);
-        indicatorStreamList.add(streamOperator);
-        return this;
+    @Override
+    public void open(Configuration parameters) throws Exception {
+        this.windowDataState =  getRuntimeContext().getListState(new ListStateDescriptor<>("windowDataState", KLine.class));
     }
 
-    public void execute() throws Exception {
+    @Override
+    public PST calculateInKLine(KLine kLine) throws Exception {
+        LinkedList<Double> priceList = new LinkedList<>();
+        Iterator<KLine> iterator = windowDataState.get().iterator();
 
-        DataStream<KLine> indicatorStream = indicatorStreamList.get(0);
-        if (indicatorStream != null) {
-            for (int i = 1; i < indicatorStreamList.size(); i++) {
-                indicatorStream.union(indicatorStreamList.get(i));
+        if (!iterator.hasNext()) {
+            return null;
+        }
+        KLine pre = iterator.next();
+        if (!iterator.hasNext()) {
+            return null;
+        }
+        KLine cur = iterator.next();
+
+        /**
+         * 相对高点
+         */
+        List<KLine> high = new ArrayList<>();
+
+        /**
+         * 相对低点
+         */
+        List<KLine> low = new ArrayList<>();
+
+        /**
+         * 压力
+         */
+        List<Double> pList = new ArrayList<>();
+
+        /**
+         * 支撑
+         */
+        List<Double> sList = new ArrayList<>();
+
+        //取趋势线
+        while (iterator.hasNext()) {
+            KLine next = iterator.next();
+            //相对低点
+            if (cur.getClose() < next.getClose() && pre.getClose() > cur.getClose()) {
+                low.add(cur);
+                //添加压力线，为前一个的相对高点
+                pList.add(cur.getClose());
             }
-            //TODO 信号处理
-            indicatorStream
-                    .process(new ProcessFunction<KLine,String>() {
-                        @Override
-                        public void processElement(KLine kLine, ProcessFunction<KLine, String>.Context context, Collector<String> collector) throws Exception {
-                            collector.collect(kLine.toString());
-                        }
-                    })
-                    .print();
+
+            //相对高点
+            if (cur.getClose() > next.getClose() && pre.getClose() < cur.getClose()) {
+                high.add(cur);
+            }
         }
 
-        env.execute();
+
+
+        return null;
     }
 }
