@@ -2,693 +2,220 @@ package com.helei.tradedatacenter.datasource;
 
 import com.helei.cexapi.binanceapi.constants.KLineInterval;
 import com.helei.tradedatacenter.entity.KLine;
-import org.apache.flink.streaming.api.functions.source.SourceFunction;
-
-public abstract class BaseKLineSource implements SourceFunction<KLine> {
-    private volatile boolean isRunning = true;
-
-    public final KLineInterval kLineInterval;
-
-    protected BaseKLineSource(KLineInterval kLineInterval) {
-        this.kLineInterval = kLineInterval;
-    }
-
-    @Override
-    public void run(SourceContext<KLine> sourceContext) throws Exception {
-        while (isRunning) {
-            KLine kLine = loadKLine();
-
-            if (kLine != null) {
-                sourceContext.collect(kLine);
-            }
-        }
-    }
-
-    protected abstract KLine loadKLine() throws Exception;
-
-
-    @Override
-    public void cancel() {
-        isRunning = false;
-    }
-}
-
-
-
-
-package com.helei.tradedatacenter.datasource;
-
-import com.helei.cexapi.binanceapi.constants.KLineInterval;
-import com.helei.tradedatacenter.entity.KLine;
-import com.helei.tradedatacenter.util.KLineBuffer;
-import lombok.extern.slf4j.Slf4j;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
+import java.util.Random;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
-
-/**
- * 内存的k线数据源
- */
-@Slf4j
-public class MemoryKLineSource extends BaseKLineSource {
-    private final String id = UUID.randomUUID().toString();
-
-    private static final Map<String, KLineBuffer> kLineBufferMap = new HashMap<>();
+public class RandomKLineSource extends BaseKLineSource {
 
     private final String symbol;
 
+    private final AtomicLong startTimeStamp;
 
-    public MemoryKLineSource(
-            String symbol,
-            KLineInterval interval,
-            LocalDateTime startTime,
-            MemoryKLineDataPublisher memoryKLineDataPublisher) {
-        super(interval);
+    private final Random random = new Random();
+
+    private final Double maxPrice;
+
+    private final Double minPrice;
+
+    public RandomKLineSource(String symbol, KLineInterval kLineInterval, LocalDateTime startTimeStamp, Double maxPrice, Double minPrice) {
+        super(kLineInterval);
         this.symbol = symbol;
-        kLineBufferMap.put(id, memoryKLineDataPublisher.registry(symbol, interval, startTime));
-    }
 
+        this.startTimeStamp = new AtomicLong(startTimeStamp.toInstant(ZoneOffset.UTC).toEpochMilli());
+        this.maxPrice = maxPrice;
+        this.minPrice = minPrice;
+    }
 
     @Override
     protected KLine loadKLine() throws Exception {
-        KLineBuffer kLineBuffer = kLineBufferMap.get(id);
-        if (kLineBuffer == null) {
-            log.error("didn't registry kline[{}]-[{}] on memoryKLineDataPublisher", symbol, kLineInterval.getDescribe());
-        }
-        return kLineBuffer.take();
+
+        double nextLow = minPrice + (maxPrice - minPrice) * random.nextDouble();
+        double nextHigh = nextLow + (maxPrice - nextLow) * random.nextDouble();
+        double nextOpen = nextLow + (nextHigh - nextLow) * random.nextDouble();
+        double nextClose = nextLow + (nextHigh - nextLow) * random.nextDouble();
+
+        double volume = 10 + (Double.MAX_VALUE / 2 - 10) * random.nextDouble();
+
+        long plus = kLineInterval.getSecond() * 1000;
+        long openTime = startTimeStamp.getAndAdd(plus);
+
+        TimeUnit.MILLISECONDS.sleep(200);
+
+        KLine kLine = new KLine(symbol, nextOpen, nextClose, nextHigh, nextLow, volume, openTime, openTime + plus - 1000, true, kLineInterval, new HashMap<>());
+        return kLine;
     }
 }
+package com.helei.tradedatacenter.support;
 
 
-package com.helei.tradedatacenter.dto;
-
-import com.helei.cexapi.binanceapi.constants.order.TradeSide;
-import lombok.*;
-
-import java.math.BigDecimal;
-
-
-/**
- * 原始订单数据
- */
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-@EqualsAndHashCode
-@Builder
-public class OriginOrder {
-
-    /**
-     * 系统中的订单id
-     */
-    private String orderId;
-
-    /**
-     * 交易对
-     */
-    private String symbol;
-
-    /**
-     * 交易方向
-     */
-    private TradeSide tradeSide;
-
-    /**
-     * 目标价格
-     */
-    private BigDecimal targetPrice;
-
-    /**
-     * 止损价格
-     */
-    private BigDecimal stopPrice;
-}
-
-package com.helei.tradedatacenter.entity;
-
-import com.helei.cexapi.binanceapi.constants.order.TradeSide;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import java.time.LocalDateTime;
-
-
-
-/**
- * 交易信号
- */
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-@Builder
-public class TradeSignal {
-
-    /**
-     * 信号名
-     */
-    private String name;
-
-    /**
-     * 信号描述
-     */
-    private String description;
-
-    /**
-     * 发出这个信号的k线
-     */
-    private KLine kLine;
-
-    /**
-     * 当前时间
-     */
-    private LocalDateTime createTime;
-
-    /**
-     * 交易方向
-     */
-    private TradeSide tradeSide;
-
-    /**
-     * 当前价格
-     */
-    private Double currentPrice;
-
-    /**
-     * 目标价格
-     */
-    private Double targetPrice;
-
-    /**
-     * 止损价格
-     */
-    private Double stopPrice;
-
-    /**
-     * 信号是否过期
-     */
-    private Boolean isExpire;
-
-    /**
-     * 获取信号流的名字
-     * @return streamName
-     */
-    public String getStreamKey() {
-        return kLine.getSymbol();
-    }
-}
-
-
-
-
-package com.helei.tradedatacenter.resolvestream.decision;
-
-import com.helei.cexapi.binanceapi.constants.order.BaseOrder;
-import com.helei.tradedatacenter.dto.OriginOrder;
-import com.helei.tradedatacenter.entity.TradeSignal;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.streaming.api.functions.ProcessFunction;
-import org.apache.flink.util.Collector;
-
-import java.util.List;
-
-
-@Slf4j
-@Getter
-@Setter
-public abstract class AbstractDecisionMaker extends ProcessFunction<List<TradeSignal>, OriginOrder> {
-
-    private final String name;
-
-    protected AbstractDecisionMaker(String name) {
-        this.name = name;
-    }
-
-    @Override
-    public void open(Configuration parameters) throws Exception {
-
-    }
-
-    @Override
-    public void processElement(List<TradeSignal> windowSignal, ProcessFunction<List<TradeSignal>, OriginOrder>.Context context, Collector<OriginOrder> collector) throws Exception {
-        if (windowSignal.isEmpty()) {
-            log.debug("[{}] 时间窗口内没有信号", name);
-        } else {
-            log.info("[{}] 当前时间窗口，产生[{}]个信号", name, windowSignal.size());
-            OriginOrder order = decisionAndBuilderOrder(windowSignal);
-
-            if (order != null) {
-                log.info("[{}] 窗口内信号满足决策下单条件，下单[{}}", name, order);
-                collector.collect(order);
-            }
-        }
-    }
-
-    public abstract OriginOrder decisionAndBuilderOrder(List<TradeSignal> windowSignal);
-}
-
-package com.helei.tradedatacenter.resolvestream.decision.config;
-
-
-import lombok.*;
-
-/**
- * 决策条件
- */
-@Data
-public abstract class DecisionConfig {
-
-    private final String name;
-
-    public DecisionConfig(String name) {
-        this.name = name;
-    }
-}
-
-package com.helei.tradedatacenter.resolvestream.decision.config;
-
-
-import com.helei.tradedatacenter.resolvestream.indicator.config.BollConfig;
-import com.helei.tradedatacenter.resolvestream.indicator.config.PSTConfig;
-import lombok.*;
-
-/**
- * boll决策配置
- */
-@Getter
-public class PSTBollDecisionConfig_v1 extends DecisionConfig{
-
-    private PSTConfig pstConfig;
-
-    private BollConfig bollConfig;
-
-    public PSTBollDecisionConfig_v1() {
-        super("趋势线结合Boll信号决策");
-    }
-
-    public PSTBollDecisionConfig_v1(PSTConfig pstConfig, BollConfig bollConfig) {
-        super("趋势线结合Boll信号决策");
-        this.pstConfig = pstConfig;
-        this.bollConfig = bollConfig;
-    }
-
-}
-
-package com.helei.tradedatacenter.resolvestream.decision;
-
-
-import com.helei.tradedatacenter.dto.OriginOrder;
-import com.helei.tradedatacenter.entity.TradeSignal;
-import com.helei.tradedatacenter.resolvestream.decision.config.PSTBollDecisionConfig_v1;
-import lombok.extern.slf4j.Slf4j;
-
-import java.math.BigDecimal;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
-
-/**
- * 根据PST和Boll指标决策下单
- */
-@Slf4j
-public class PSTBollDecisionMaker extends AbstractDecisionMaker {
-
-    private final PSTBollDecisionConfig_v1 config;
-
-    public PSTBollDecisionMaker(PSTBollDecisionConfig_v1 config) {
-        super(config.getName());
-        this.config = config;
-
-    }
-
-
-    @Override
-    public OriginOrder decisionAndBuilderOrder(List<TradeSignal> windowSignal) {
-        String pstKey = config.getPstConfig().getIndicatorName();
-        String bollKey = config.getBollConfig().getIndicatorName();
-
-        Map<String, List<TradeSignal>> signalMap = windowSignal.stream().collect(Collectors.groupingBy(TradeSignal::getName));
-
-        List<TradeSignal> pstSignals = signalMap.get(pstKey);
-        List<TradeSignal> bollSignals = signalMap.get(bollKey);
-
-        if (pstSignals.isEmpty() || bollSignals.isEmpty()) {
-            log.warn("pst和boll信号不满足共振， 不生成订单");
-            return null;
-        }
-
-        TradeSignal newPstSignal = pstSignals.get(pstSignals.size() - 1);
-        TradeSignal newBollSignal = bollSignals.get(bollSignals.size() - 1);
-
-        //TODO 仅仅测试用
-        return buildMarketOrder(newBollSignal);
-    }
-
-
-    private static OriginOrder buildMarketOrder(TradeSignal newBollSignal) {
-        return OriginOrder
-                .builder()
-                .symbol(newBollSignal.getKLine().getSymbol())
-                .tradeSide(newBollSignal.getTradeSide())
-                .targetPrice(BigDecimal.valueOf(newBollSignal.getTargetPrice()))
-                .stopPrice(BigDecimal.valueOf(newBollSignal.getStopPrice()))
-                .build();
-    }
-}
-
-package com.helei.tradedatacenter.resolvestream.order;
-
-import com.helei.tradedatacenter.dto.OriginOrder;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
-
-@Slf4j
-public abstract class AbstractOrderCommitter extends RichSinkFunction<OriginOrder> {
-
-
-    @Override
-    public void invoke(OriginOrder order, Context context) throws Exception {
-
-        if (commitTradeOrder(order)) {
-            log.info("Order committed successfully");
-        } else {
-            log.error("Order committed error");
-            //TODO 重试？？
-        }
-    }
-
-    public abstract boolean commitTradeOrder(OriginOrder order);
-}
-
-
-
-package com.helei.tradedatacenter.resolvestream.order;
-
-import com.alibaba.fastjson.JSONObject;
+import com.helei.cexapi.CEXApiFactory;
 import com.helei.cexapi.binanceapi.BinanceWSApiClient;
-import com.helei.cexapi.binanceapi.api.BinanceWSTradeApi;
-import com.helei.cexapi.binanceapi.constants.order.BaseOrder;
+import com.helei.cexapi.binanceapi.constants.KLineInterval;
+import com.helei.cexapi.constants.WebSocketUrl;
+import com.helei.tradedatacenter.AutoTradeTask;
+import com.helei.tradedatacenter.TradeSignalService;
+import com.helei.tradedatacenter.datasource.MemoryKLineDataPublisher;
+import com.helei.tradedatacenter.datasource.MemoryKLineSource;
+import com.helei.tradedatacenter.datasource.RandomKLineSource;
 import com.helei.tradedatacenter.dto.OriginOrder;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.concurrent.ExecutionException;
-
-
-/**
- * 币安订单提交
- */
-@Slf4j
-public class BinanceOrderCommitter extends AbstractOrderCommitter {
-
-    private final BinanceWSTradeApi tradeApi;
-
-    public BinanceOrderCommitter(BinanceWSApiClient binanceWSApiClient) {
-        tradeApi = binanceWSApiClient.getTradeApi();
-    }
-
-
-    @Override
-    public boolean commitTradeOrder(OriginOrder order) {
-        JSONObject response = null;
-        try {
-            //TODO 用户
-            response = tradeApi.commitOrder(null, null).get();
-
-            if (response == null) {
-                log.error("get trade response is null");
-                return false;
-            }
-        } catch (InterruptedException | ExecutionException e) {
-            log.error("get trade response error", e);
-        }
-
-
-        return false;
-    }
-}
-
-package com.helei.tradedatacenter.resolvestream.signal;
-
-import com.helei.cexapi.binanceapi.constants.order.TradeSide;
 import com.helei.tradedatacenter.entity.KLine;
 import com.helei.tradedatacenter.entity.TradeSignal;
-import com.helei.tradedatacenter.resolvestream.indicator.Boll;
+import com.helei.tradedatacenter.resolvestream.GroupSignalResolver;
+import com.helei.tradedatacenter.resolvestream.decision.PSTBollDecisionMaker;
+import com.helei.tradedatacenter.resolvestream.decision.config.PSTBollDecisionConfig_v1;
+import com.helei.tradedatacenter.resolvestream.indicator.calculater.BollCalculator;
+import com.helei.tradedatacenter.resolvestream.indicator.calculater.MACDCalculator;
+import com.helei.tradedatacenter.resolvestream.indicator.calculater.PSTCalculator;
 import com.helei.tradedatacenter.resolvestream.indicator.config.BollConfig;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.flink.api.common.functions.OpenContext;
-import org.apache.flink.api.common.state.ValueState;
-import org.apache.flink.api.common.state.ValueStateDescriptor;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.streaming.api.TimerService;
-
-import java.io.IOException;
-import java.time.LocalDateTime;
-
-@Slf4j
-public class BollSignalMaker extends AbstractSignalMaker {
-
-    private final BollConfig bollConfig;
-
-    /**
-     * 上一个实时k
-     */
-    private ValueState<KLine> lastRealTimeKLineState;
-
-
-    public BollSignalMaker(BollConfig bollConfig) {
-        super(true);
-        this.bollConfig = bollConfig;
-    }
-
-    @Override
-    public void onOpen(OpenContext openContext) throws Exception {
-        lastRealTimeKLineState = getRuntimeContext().getState(new ValueStateDescriptor<>(bollConfig.getIndicatorName() + "_lastKLineState", TypeInformation.of(KLine.class)));
-    }
-
-
-    @Override
-    protected TradeSignal resolveHistoryKLine(KLine kLine, TimerService timerService) throws IOException {
-        return tryBuildCenterSignal(kLine);
-    }
-
-    @Override
-    protected TradeSignal resolveRealTimeKLine(KLine kLine, TimerService timerService) throws IOException {
-        return tryBuildUpDownSignal(kLine);
-    }
-
-    /**
-     * 上下轨信号
-     *
-     * @param kLine kLine
-     * @return TradeSignal
-     */
-    private TradeSignal tryBuildUpDownSignal(KLine kLine) throws IOException {
-        KLine lastRealTimeKLine = lastRealTimeKLineState.value();
-        if (lastRealTimeKLine == null) {
-            return null;
-        }
-
-        Boll boll = kLine.getIndicator(bollConfig);
-        if (boll == null) return null;
-
-        double price = kLine.getClose();
-        Double upper = boll.getUpper();
-        Double lower = boll.getLower();
-        Double sma = boll.getSma();
-
-        //1.上下轨信号
-        if (price >= upper) { //触碰boll上轨，卖出信号
-            return buildSignal(kLine, TradeSide.SALE, "触碰boll上轨", sma, kLine.getHigh());
-        }
-        if (price <= lower) { //触碰boll下轨，买入信号
-            return buildSignal(kLine, TradeSide.BUY, "触碰boll下轨", sma, kLine.getLow());
-        }
-
-        lastRealTimeKLineState.update(kLine);
-        return null;
-    }
-
-    /**
-     * 中轨穿越信号
-     *
-     * @param kLine kLine
-     * @return TradeSignal
-     */
-    private TradeSignal tryBuildCenterSignal(KLine kLine) {
-        Boll curBoll = kLine.getIndicator(bollConfig);
-        if (curBoll == null) return null;
-
-        if (kLine.getOpen() < curBoll.getSma() && kLine.getClose() > curBoll.getSma()) { //上穿中轨
-            return buildSignal(kLine, TradeSide.BUY, "上穿中轨", curBoll.getUpper(), kLine.getLow());
-        }
-
-        if (kLine.getOpen() < curBoll.getSma() && kLine.getClose() < curBoll.getSma()) {
-            return buildSignal(kLine, TradeSide.SALE, "下穿中轨", curBoll.getLower(), kLine.getHigh());
-        }
-
-        return null;
-    }
-
-    private TradeSignal buildSignal(KLine kLine, TradeSide tradeSide, String description, double target, double stop) {
-        return TradeSignal.builder()
-                .name(bollConfig.getIndicatorName())
-                .description(description)
-                .tradeSide(tradeSide)
-                .currentPrice(kLine.getClose())
-                .kLine(kLine)
-                .createTime(LocalDateTime.now())
-                .targetPrice(target)
-                .stopPrice(stop)
-                .build();
-    }
-}
-package com.helei.tradedatacenter;
-
-import com.helei.cexapi.binanceapi.constants.order.BaseOrder;
-import com.helei.tradedatacenter.dto.OriginOrder;
-import com.helei.tradedatacenter.entity.TradeSignal;
-import com.helei.tradedatacenter.resolvestream.decision.AbstractDecisionMaker;
+import com.helei.tradedatacenter.resolvestream.indicator.config.MACDConfig;
+import com.helei.tradedatacenter.resolvestream.indicator.config.PSTConfig;
 import com.helei.tradedatacenter.resolvestream.order.AbstractOrderCommitter;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.flink.api.common.functions.AggregateFunction;
-import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.datastream.KeyedStream;
-import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
+import com.helei.tradedatacenter.resolvestream.signal.BollSignalMaker;
+import com.helei.tradedatacenter.resolvestream.signal.PSTSignalMaker;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.test.context.SpringBootTest;
 
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.Iterator;
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
-@Slf4j
-public class AutoTradeTask {
+@SpringBootTest
+public class RandomKLineSourceTest {
+    private static String btcusdt = "btcusdt";
 
+    private static String ethusdt = "ethusdt";
 
-    /**
-     * 信号流服务
-     */
-    private final TradeSignalService tradeSignalService;
-
-    /**
-     * 决策器
-     */
-    private final List<AbstractDecisionMaker> decisionMakers;
-
-    /**
-     * 订单提交器
-     */
-    private final List<AbstractOrderCommitter> orderCommiters;
+    private static RandomKLineSource btc_1d_source;
 
 
+    @Autowired
+    @Qualifier("flinkEnv")
+    private StreamExecutionEnvironment env;
 
-    public AutoTradeTask(TradeSignalService tradeSignalService) {
-        this.tradeSignalService = tradeSignalService;
+    @Autowired
+    @Qualifier("flinkEnv2")
+    private StreamExecutionEnvironment env2;
 
-        this.decisionMakers = new ArrayList<>();
 
-        this.orderCommiters = new ArrayList<>();
+    @BeforeAll
+    public static void before() {
+        try {
+            btc_1d_source = new RandomKLineSource(btcusdt, KLineInterval.d_1, LocalDateTime.of(2022, 10, 3, 0, 0),2000.0, 19000.0);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
-    /**
-     * 添加决策器
-     *
-     * @param decisionMaker 决策器
-     * @return this
-     */
-    public AutoTradeTask addDecisionMaker(AbstractDecisionMaker decisionMaker) {
-        this.decisionMakers.add(decisionMaker);
-        return this;
-    }
+    @Test
+    public void testAutoTradeV2() throws Exception {
+        PSTConfig pstConfig = new PSTConfig(60, 3, 3);
 
+        BollConfig bollConfig = new BollConfig(15);
+        TradeSignalService tradeSignalService = TradeSignalService
+                .builder(env)
+                .buildResolver()
+                .addKLineSource(btc_1d_source)
+                .addIndicator(new PSTCalculator(pstConfig))
+                .addIndicator(new MACDCalculator(new MACDConfig(12, 26, 9)))
+                .addIndicator(new BollCalculator(bollConfig))
+                .addSignalMaker(new BollSignalMaker(bollConfig))
+                .addSignalMaker(new PSTSignalMaker(pstConfig))
+                .addGroupSignalResolver(new GroupSignalResolver() {
+                    private transient BufferedWriter writer;
 
-    /**
-     * 添加订单提交器
-     *
-     * @param orderCommiter 订单提交器
-     * @return this
-     */
-    public AutoTradeTask addOrderCommiter(AbstractOrderCommitter orderCommiter) {
-        this.orderCommiters.add(orderCommiter);
-        return this;
-    }
-
-    public void execute(String name) throws Exception {
-        if (decisionMakers.isEmpty()) {
-            throw new IllegalArgumentException("没有添加决策器");
-        }
-
-        KeyedStream<TradeSignal, String> signalStream = tradeSignalService.getCombineTradeSignalStream();
-
-
-        DataStream<List<TradeSignal>> windowSignal = signalStream
-                .window(SlidingEventTimeWindows.of(Duration.ofMinutes(5), Duration.ofSeconds(1)))
-                .aggregate(new AggregateFunction<TradeSignal, List<TradeSignal>, List<TradeSignal>>() {
                     @Override
-                    public List<TradeSignal> createAccumulator() {
-                        return new ArrayList<>();
+                    public void open(Configuration parameters) throws Exception {
+                        writer = new BufferedWriter(new FileWriter("test-kline-file.txt", true));
                     }
 
                     @Override
-                    public List<TradeSignal> add(TradeSignal signal, List<TradeSignal> tradeSignals) {
-                        tradeSignals.add(signal);
-                        return tradeSignals;
+                    public void invoke(Tuple2<KLine, List<TradeSignal>> value, Context context) throws Exception {
+                        List<TradeSignal> list = value.getField(1);
+
+//                        if (list.isEmpty()) return;
+
+                        writer.write("\n<<start>>\n");
+                        writer.write(value.getField(0).toString());
+                        writer.newLine();
+
+                        for (TradeSignal tradeSignal : list) {
+                            writer.write(tradeSignal.toString());
+                        }
+                        writer.write("\n<<end>>\n");
+                        writer.flush();
                     }
 
+                    // 任务结束时调用，关闭文件流
                     @Override
-                    public List<TradeSignal> getResult(List<TradeSignal> tradeSignals) {
-                        return tradeSignals;
+                    public void close() throws Exception {
+                        if (writer != null) {
+                            writer.flush();
+                            writer.close(); // 关闭文件流
+                        }
+                        super.close();
                     }
+                })
+//                .addSignalMaker(new PSTSignalMaker(pstConfig))
+                .addInService()
+                .build();
 
+        AutoTradeTask autoTradeTask = new AutoTradeTask(tradeSignalService);
+
+        autoTradeTask
+                .addDecisionMaker(new PSTBollDecisionMaker(new PSTBollDecisionConfig_v1(pstConfig, bollConfig)))
+                .addOrderCommiter(new AbstractOrderCommitter() {
                     @Override
-                    public List<TradeSignal> merge(List<TradeSignal> tradeSignals, List<TradeSignal> acc1) {
-                        tradeSignals.addAll(acc1);
-                        return tradeSignals;
+                    public boolean commitTradeOrder(OriginOrder order) {
+                        System.out.println(order);
+                        return false;
                     }
-                });
-
-        //4、决策器，
-        Iterator<AbstractDecisionMaker> decisionMakerIterator = decisionMakers.iterator();
-
-        KeyedStream<OriginOrder, String> orderStream = windowSignal.process(decisionMakerIterator.next()).keyBy(OriginOrder::getSymbol);
-
-        while (decisionMakerIterator.hasNext()) {
-            orderStream.union(windowSignal.process(decisionMakerIterator.next()));
-        }
-
-        //最后将决策走到订单提交器
-        for (AbstractOrderCommitter orderCommitter : orderCommiters) {
-            orderStream.addSink(orderCommitter);
-        }
-
-        tradeSignalService.getEnv().execute(name);
+                })
+                .execute("test");
     }
 
 }
+
 
 package com.helei.tradedatacenter;
 
 import com.helei.tradedatacenter.datasource.BaseKLineSource;
 import com.helei.tradedatacenter.entity.KLine;
 import com.helei.tradedatacenter.entity.TradeSignal;
+import com.helei.tradedatacenter.resolvestream.GroupSignalResolver;
+import com.helei.tradedatacenter.resolvestream.SignalSplitResolver;
 import com.helei.tradedatacenter.resolvestream.indicator.Indicator;
 import com.helei.tradedatacenter.resolvestream.indicator.calculater.BaseIndicatorCalculator;
 import com.helei.tradedatacenter.resolvestream.signal.AbstractSignalMaker;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.flink.api.common.state.*;
+import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.streaming.api.datastream.BroadcastStream;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.datastream.KeyedStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
+import org.apache.flink.util.Collector;
 
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
+import java.util.*;
 import java.util.function.Function;
 
 
@@ -716,6 +243,7 @@ public class TradeSignalService {
 
     /**
      * 添加信号流处理器
+     *
      * @param resolver resolver
      */
     public void addTradeSignalStreamResolver(TradeSignalStreamResolver resolver) {
@@ -725,6 +253,7 @@ public class TradeSignalService {
 
     /**
      * 当前信号流处理器是否为空
+     *
      * @return boolean
      */
     public boolean isEmpty() {
@@ -734,6 +263,7 @@ public class TradeSignalService {
 
     /**
      * 获取联合的交易信号流，，根据交易对名symbol进行的keyby
+     *
      * @return KeyedStream
      */
     public KeyedStream<TradeSignal, String> getCombineTradeSignalStream() {
@@ -750,8 +280,9 @@ public class TradeSignalService {
         return combineStream.keyBy(TradeSignal::getStreamKey);
     }
 
-
-
+    /**
+     * 交易信号流处理器
+     */
     @Getter
     public static class TradeSignalStreamResolver {
         /**
@@ -767,12 +298,22 @@ public class TradeSignalService {
         /**
          * 指标计算器
          */
-        private final List<BaseIndicatorCalculator<? extends Indicator>> indicatorCalList;
+        private final List<BaseIndicatorCalculator> indicatorCalList;
 
         /**
          * 信号处理器
          */
         private final List<AbstractSignalMaker> signalMakers;
+
+        /**
+         * 分组信号处理器，会将信号按k线进行分组
+         */
+        private final List<GroupSignalResolver> groupSignalResolvers;
+
+
+        private final MapStateDescriptor<String, Tuple2<KLine, List<TradeSignal>>> broadcastStateDescriptor = new MapStateDescriptor<>("broadcast-close-kline",
+                BasicTypeInfo.STRING_TYPE_INFO, TypeInformation.of(new TypeHint<Tuple2<KLine, List<TradeSignal>>>() {
+        }));
 
 
         public TradeSignalStreamResolver(StreamExecutionEnvironment env) {
@@ -781,9 +322,16 @@ public class TradeSignalService {
             this.indicatorCalList = new ArrayList<>();
 
             this.signalMakers = new ArrayList<>();
+
+            this.groupSignalResolvers = new ArrayList<>();
         }
 
 
+        /**
+         * 开始执行产生信号流
+         *
+         * @return 信号流
+         */
         public DataStream<TradeSignal> makeSignalStream() {
             if (kLineSource == null) {
                 throw new IllegalArgumentException("未添加k线数据源");
@@ -792,11 +340,12 @@ public class TradeSignalService {
             //1. 使用自定义 SourceFunction 生成 K 线数据流
             KeyedStream<KLine, String> kLineStream = env.addSource(kLineSource).keyBy(KLine::getStreamKey);
 
+//            kLineStream.print();
             // 2.指标处理，串行
-            for (BaseIndicatorCalculator<? extends Indicator> calculator : indicatorCalList) {
+            for (BaseIndicatorCalculator<?> calculator : indicatorCalList) {
                 kLineStream = kLineStream.process(calculator).keyBy(KLine::getStreamKey);
             }
-
+//            kLineStream.print();
             if (signalMakers.isEmpty()) {
                 throw new IllegalArgumentException("没有信号生成器");
             }
@@ -812,7 +361,31 @@ public class TradeSignalService {
             }
 
 
+            if (!groupSignalResolvers.isEmpty()) {
+                buildAndSinkGroupStream(kLineStream, signalStream);
+            }
+
             return signalStream;
+        }
+
+
+        /**
+         * 根据kline中已完结k线，将signal按照k线进行分组。得到新的流后调用GroupSignalResolver进行sink
+         *
+         * @param kLineStream  kLineStream
+         * @param signalStream signalStream
+         */
+        private void buildAndSinkGroupStream(KeyedStream<KLine, String> kLineStream, DataStream<TradeSignal> signalStream) {
+
+            BroadcastStream<TradeSignal> broadcastSignalStream = signalStream.broadcast(broadcastStateDescriptor);
+
+            DataStream<Tuple2<KLine, List<TradeSignal>>> groupSignalStream = kLineStream
+                    .connect(broadcastSignalStream)
+                    .process(new SignalSplitResolver(broadcastStateDescriptor));
+
+            for (GroupSignalResolver groupSignalResolver : groupSignalResolvers) {
+                groupSignalStream.addSink(groupSignalResolver);
+            }
         }
     }
 
@@ -865,10 +438,10 @@ public class TradeSignalService {
          * 添加指标计算器
          *
          * @param calculator 指标计算器
-         * @param <T>        指标类型
+         * @param <>         指标类型
          * @return this
          */
-        public <T extends Indicator> TradeSignalStreamResolverBuilder addIndicator(BaseIndicatorCalculator<T> calculator) {
+        public TradeSignalStreamResolverBuilder addIndicator(BaseIndicatorCalculator calculator) {
             tradeSignalStreamResolver.getIndicatorCalList().add(calculator);
             return this;
         }
@@ -885,255 +458,100 @@ public class TradeSignalService {
         }
 
 
+        /**
+         * 添加组信号处理器
+         *
+         * @param groupSignalResolver 组信号处理器
+         * @return this
+         */
+        public TradeSignalStreamResolverBuilder addGroupSignalResolver(GroupSignalResolver groupSignalResolver) {
+            tradeSignalStreamResolver.getGroupSignalResolvers().add(groupSignalResolver);
+            return this;
+        }
+
+
         public TradeSignalServiceBuilder addInService() {
             return addInService.apply(tradeSignalStreamResolver);
         }
     }
 }
+package com.helei.tradedatacenter.resolvestream;
 
-package com.helei.tradedatacenter.support;
-
-
-import com.helei.cexapi.CEXApiFactory;
-import com.helei.cexapi.binanceapi.BinanceWSApiClient;
-import com.helei.cexapi.binanceapi.constants.order.BaseOrder;
-import com.helei.cexapi.constants.WebSocketUrl;
-import com.helei.tradedatacenter.AutoTradeTask;
-import com.helei.cexapi.binanceapi.constants.KLineInterval;
-import com.helei.tradedatacenter.TradeSignalService;
-import com.helei.tradedatacenter.datasource.HistoryKLineLoader;
-import com.helei.tradedatacenter.datasource.MemoryKLineDataPublisher;
-import com.helei.tradedatacenter.datasource.MemoryKLineSource;
-import com.helei.tradedatacenter.resolvestream.decision.AbstractDecisionMaker;
 import com.helei.tradedatacenter.entity.KLine;
 import com.helei.tradedatacenter.entity.TradeSignal;
-import com.helei.tradedatacenter.resolvestream.decision.PSTBollDecisionMaker;
-import com.helei.tradedatacenter.resolvestream.decision.config.PSTBollDecisionConfig_v1;
-import com.helei.tradedatacenter.resolvestream.indicator.calculater.BollCalculator;
-import com.helei.tradedatacenter.resolvestream.indicator.calculater.MACDCalculator;
-import com.helei.tradedatacenter.resolvestream.indicator.calculater.PSTCalculator;
-import com.helei.tradedatacenter.resolvestream.indicator.calculater.RSICalculator;
-import com.helei.tradedatacenter.resolvestream.indicator.config.BollConfig;
-import com.helei.tradedatacenter.resolvestream.indicator.config.MACDConfig;
-import com.helei.tradedatacenter.resolvestream.indicator.config.PSTConfig;
-import com.helei.tradedatacenter.resolvestream.indicator.config.RSIConfig;
-import com.helei.tradedatacenter.resolvestream.order.AbstractOrderCommitter;
-import com.helei.tradedatacenter.resolvestream.signal.BollSignalMaker;
-import com.helei.tradedatacenter.resolvestream.signal.PSTSignalMaker;
-import com.helei.tradedatacenter.util.KLineBuffer;
-import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestInstance;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.test.context.SpringBootTest;
+import org.apache.flink.api.common.state.*;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.streaming.api.functions.co.KeyedBroadcastProcessFunction;
+import org.apache.flink.util.Collector;
 
-import java.time.LocalDateTime;
-import java.util.Arrays;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
 
 
 @Slf4j
-@SpringBootTest
-@TestInstance(TestInstance.Lifecycle.PER_CLASS)
-public class KLineTradingDecision {
-    private MemoryKLineDataPublisher dataPublisher;
+public class SignalSplitResolver extends KeyedBroadcastProcessFunction<String, KLine, TradeSignal, Tuple2<KLine, List<TradeSignal>>> {
 
-    private MemoryKLineSource memoryKLineSource_btc_15m;
-    private MemoryKLineSource memoryKLineSource_btc_2h;
+    private final MapStateDescriptor<String, Map<Long, List<TradeSignal>>> broadcastStateDescriptor;
 
-    private MemoryKLineSource memoryKLineSource_eth;
+    private final String SIGNAL_CACHE_KEY = "signalCache";
 
-    private String btcusdt = "btcusdt";
+    private ValueState<Tuple2<KLine, List<TradeSignal>>> timebaseSignalState;
 
-    private String ethusdt = "ethusdt";
 
-    BinanceWSApiClient streamClient;
-    BinanceWSApiClient normalClient;
+    public SignalSplitResolver(MapStateDescriptor<String, Map<Long, List<TradeSignal>>> broadcastStateDescriptor) {
+        this.broadcastStateDescriptor = broadcastStateDescriptor;
+    }
 
-    @BeforeAll
-    public void before() {
-        try {
-            streamClient = CEXApiFactory.binanceApiClient(4, WebSocketUrl.WS_STREAM_URL);
-            normalClient = CEXApiFactory.binanceApiClient(4, WebSocketUrl.WS_NORMAL_URL);
+    @Override
+    public void open(Configuration parameters) throws Exception {
+        timebaseSignalState = getRuntimeContext().getState(new ValueStateDescriptor<>("timebaseSignalState", TypeInformation.of(new TypeHint<Tuple2<KLine, List<TradeSignal>>>() {})));
+    }
 
-            CompletableFuture.allOf(streamClient.connect(), normalClient.connect()).get();
+    @Override
+    public void processElement(KLine kLine, KeyedBroadcastProcessFunction<String, KLine, TradeSignal, Tuple2<KLine, List<TradeSignal>>>.ReadOnlyContext readOnlyContext, Collector<Tuple2<KLine, List<TradeSignal>>> collector) throws Exception {
+        // 从状态中获取划分规则
+        Tuple2<KLine, List<TradeSignal>> curTuple = timebaseSignalState.value();
 
-            dataPublisher = new MemoryKLineDataPublisher(streamClient, normalClient, 100, 200, 3)
-                    .addListenKLine(btcusdt, Arrays.asList(KLineInterval.M_1, KLineInterval.h_2, KLineInterval.m_15))
-                    .addListenKLine(ethusdt, Arrays.asList(KLineInterval.M_1, KLineInterval.d_1, KLineInterval.m_15));
-
-            memoryKLineSource_btc_15m = new MemoryKLineSource(btcusdt, KLineInterval.m_15, LocalDateTime.of(2020, 1, 1, 0, 0), dataPublisher);
-            memoryKLineSource_btc_2h = new MemoryKLineSource(btcusdt, KLineInterval.h_2, LocalDateTime.of(2020, 1, 1, 0, 0), dataPublisher);
-
-            memoryKLineSource_eth = new MemoryKLineSource(ethusdt, KLineInterval.m_15, LocalDateTime.of(2020, 1, 1, 0, 0), dataPublisher);
-        } catch (Exception e) {
-            e.printStackTrace();
+        if (curTuple == null) {
+            timebaseSignalState.update(new Tuple2<>(kLine, new ArrayList<>()));
         }
-    }
+        if (!kLine.isEnd()) return;
+        // 来到新的k线
+        //更新当前k状态
+        BroadcastState<String, Tuple2<KLine, List<TradeSignal>>> broadcastState = context.getBroadcastState(broadcastStateDescriptor);
 
-    @Autowired
-    @Qualifier("flinkEnv")
-    private StreamExecutionEnvironment env;
-    @Autowired
-    @Qualifier("flinkEnv2")
-    private StreamExecutionEnvironment env2;
+        Tuple2<KLine, List<TradeSignal>> tuple2 = broadcastState.get(SIGNAL_CACHE_KEY);
 
-    @Test
-    public void testIndicator() throws Exception {
-        String macdName = "MACD-12-26-9";
-        String rsiName = "RSI";
-//        new Thread(()->{
-//            try {
-//                new AutoTradeTask(env, memoryKLineSource_btc)
-//                        .addIndicator(new MACDCalculator(macdName, 12, 26, 9))
-//                        .addIndicator(new RSICalculator(rsiName, 15))
-//                        .addSignalMaker(new AbstractSignalMaker(true) {
-//                            @Override
-//                            public void onOpen(OpenContext openContext) throws Exception {
-//
-//                            }
-//
-//                            @Override
-//                            protected void stateUpdate(KLine kLine) throws IOException {
-//                                System.out.println(kLine);
-//                            }
-//
-//                            @Override
-//                            protected TradeSignal buildSignal(KLine kLine) throws IOException {
-//                                return null;
-//                            }
-//                        })
-//                        .addDecisionMaker(new AbstractDecisionMaker() {
-//                            @Override
-//                            public BaseOrder decisionAndBuilderOrder(TradeSignal signal) {
-//
-//                                return null;
-//                            }
-//                        })
-//                        .addOrderCommiter(new AbstractOrderCommitter() {
-//                            @Override
-//                            public boolean commitTradeOrder(BaseOrder order) {
-//                                return false;
-//                            }
-//                        })
-//                        .execute("btc");
-//            } catch (Exception e) {
-//                throw new RuntimeException(e);
-//            }
-//
-//        }).start();
-//        new Thread(()->{
-//            try {
-//                PSTConfig pstConfig = new PSTConfig(60, 3, 3);
-//                new AutoTradeTask(env2, memoryKLineSource_eth)
-////                        .addIndicator(new MACDCalculator(new MACDConfig(12, 26, 9)))
-////                        .addIndicator(new RSICalculator(new RSIConfig(15)))
-//                        .addIndicator(new PSTCalculator(pstConfig))
-//                        .addSignalMaker(new PSTSignalMaker(pstConfig))
-//                        .addDecisionMaker(new AbstractDecisionMaker() {
-//                            @Override
-//                            public BaseOrder decisionAndBuilderOrder(TradeSignal signal) {
-//                                System.out.println(signal);
-//                                return null;
-//                            }
-//                        })
-//                        .addOrderCommiter(new AbstractOrderCommitter() {
-//                            @Override
-//                            public boolean commitTradeOrder(BaseOrder order) {
-//                                return false;
-//                            }
-//                        })
-//                        .execute("eth");
-//            } catch (Exception e) {
-//                throw new RuntimeException(e);
-//            }
-//
-//        }).start();
-//        TimeUnit.SECONDS.sleep(1000);
-    }
+        if (tuple2 != null) collector.collect(tuple2);
 
-    @Test
-    public void testAutoTradeV2() throws Exception {
-        PSTConfig pstConfig = new PSTConfig(60, 3, 3);
-
-        BollConfig bollConfig = new BollConfig(15);
-        TradeSignalService tradeSignalService = TradeSignalService
-                .builder(env)
-                .buildResolver()
-                .addKLineSource(memoryKLineSource_btc_15m)
-                .addIndicator(new MACDCalculator(new MACDConfig(12, 26, 9)))
-                .addIndicator(new RSICalculator(new RSIConfig(15)))
-                .addIndicator(new PSTCalculator(pstConfig))
-                .addSignalMaker(new PSTSignalMaker(pstConfig))
-                .addInService()
-                .buildResolver()
-                .addKLineSource(memoryKLineSource_btc_2h)
-                .addIndicator(new MACDCalculator(new MACDConfig(12, 26, 9)))
-                .addIndicator(new BollCalculator(bollConfig))
-                .addSignalMaker(new BollSignalMaker(bollConfig))
-                .addInService()
-                .build();
-
-        AutoTradeTask autoTradeTask = new AutoTradeTask(tradeSignalService);
-
-        autoTradeTask
-                .addDecisionMaker(new PSTBollDecisionMaker(new PSTBollDecisionConfig_v1(pstConfig, bollConfig)))
-                .addOrderCommiter(new AbstractOrderCommitter() {
-                    @Override
-                    public boolean commitTradeOrder(BaseOrder order) {
-                        return false;
-                    }
-                })
-                .execute("test");
-    }
-
-    @SneakyThrows
-    @Test
-    public void testPST() {
+        broadcastState.put(SIGNAL_CACHE_KEY, new Tuple2<>(kLine, new ArrayList<>()));
 
     }
 
-    @Test
-    public void testHistoryKLineLoader() throws InterruptedException {
+    @Override
+    public void processBroadcastElement(TradeSignal signal, KeyedBroadcastProcessFunction<String, KLine, TradeSignal, Tuple2<KLine, List<TradeSignal>>>.Context context, Collector<Tuple2<KLine, List<TradeSignal>>> collector) throws Exception {
+        BroadcastState<String, Map<Long, List<TradeSignal>>> signalState = context.getBroadcastState(broadcastStateDescriptor);
 
-        KLineBuffer kb = new KLineBuffer(10);
+        Map<Long, List<TradeSignal>> timebaseSignals = signalState.get(SIGNAL_CACHE_KEY);
 
-//        ArrayBlockingQueue<KLine> abq = new ArrayBlockingQueue<>(10);
-        AtomicInteger counter = new AtomicInteger();
+        Long timebase = signal.getKLine().getOpenTime();
 
-        new HistoryKLineLoader(200, normalClient, Executors.newFixedThreadPool(2))
-                .startLoad("btcusdt", KLineInterval.m_15, LocalDateTime.of(2020, 1, 1, 0, 0), kLines -> {
-                    System.out.println("get klines count " + kLines.size());
-                    for (KLine kLine : kLines) {
-                        try {
-                            kb.put(kLine);
-                        } catch (InterruptedException e) {
-                            throw new RuntimeException(e);
-                        }
-                        System.out.println("add kline " + counter.incrementAndGet() + ", buffer size " + kb.size());
-                    }
-                }).thenRun(() -> {
-                    System.out.println("end of history");
-                });
+        timebaseSignals.compute(timebase, (k,v)->{
+            if (v == null) {
+                v = new ArrayList<>();
+            }
+            v.add(signal);
+            return v;
+        });
 
-        KLine aline = null;
-        while (true) {
-
-            aline = kb.take();
-            System.out.println(aline);
-            TimeUnit.SECONDS.sleep(1);
-            log.info("get line [{}]", aline);
-        }
-
-//        TimeUnit.SECONDS.sleep(1000);
+        return;
     }
-
 }
 
