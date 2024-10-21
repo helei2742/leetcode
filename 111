@@ -1,0 +1,20 @@
+// Step 1: 使用 `row_number` 实现窗口函数
+Table tmp_dwi_v2_t_ticket_td_order_hi_01 = tEnv
+    .from("ipd_ops_sdi.sdi_v2_t_ticket_td_order_hi")  // 选择源表
+    .addColumns(
+        call("row_number").over(
+            partitionBy($("id"))
+            .orderBy($("create_datetime").desc())
+        ).as("rn")  // 使用 row_number() over partition by id order by create_datetime desc 实现窗口
+    )
+    .filter($("rn").isEqual(1))  // 过滤出 rn = 1 的行
+    .as("t1");  // 创建临时表
+
+// Step 2: 实现增量数据合入
+Table tmp_dwi_v2_t_ticket_td_order_hi_02 = tEnv
+    .from("ipd_ops_dwi.dwi_v2_t_ticket_td_order_hi")  // 目标表
+    .leftOuterJoin(tmp_dwi_v2_t_ticket_td_order_hi_01, $("t1.id").isEqual($("t2.id")))  // 左连接
+    .where($("t2.id").isNull())  // 过滤出目标表中没有匹配增量数据的行
+    .select($("t1.*"));  // 选择目标表的全部列
+
+// 最终可以通过 tEnv 将 tmp_dwi_v2_t_ticket_td_order_hi_02 输出或进一步操作
