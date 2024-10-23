@@ -1,0 +1,59 @@
+WITH temp2 AS (
+    SELECT 
+        t1.td_order_id AS busi_no,
+        t1.title,
+        t1.issue_desc,
+        t1.status,
+        t1.td_type,
+        biz_domain,
+        t1.request_user_id AS user_by,
+        CASE
+            WHEN COALESCE(d.l1_dept_code, '-1') = COALESCE(d.l0_dept_code, '-1')
+            THEN '-1' ELSE COALESCE(d.l1_dept_code, '-1')
+        END AS l1_dept_code,
+        CASE
+            WHEN COALESCE(d.l1_dept_cn_name, '异常部门') = COALESCE(d.l0_dept_cn_name, '异常部门')
+            THEN '异常部门' ELSE d.l1_dept_cn_name
+        END AS l1_dept_cn_name,
+        -- 类似的 case 语句处理
+        CASE
+            WHEN COALESCE(d.l6_dept_code, '-1') = COALESCE(d.l5_dept_code, '-1')
+            THEN '-1' ELSE COALESCE(d.l6_dept_code, '-1')
+        END AS l6_dept_code,
+        CASE
+            WHEN COALESCE(d.l6_dept_cn_name, '异常部门') = COALESCE(d.l5_dept_cn_name, '异常部门')
+            THEN '异常部门' ELSE COALESCE(d.l6_dept_cn_name, '异常部门')
+        END AS l6_dept_cn_name,
+        t2.dimension_code AS product_code,
+        t2.dimension_cn_name AS product_name,
+        CASE
+            WHEN COALESCE(t2.prod_fm_code, '-1') = COALESCE(t2.parent_code, '-1')
+            THEN NULL ELSE t2.prod_fm_code
+        END AS spdt_code,
+        -- 继续处理其他字段...
+        DENSE_RANK() OVER (PARTITION BY t1.td_order_id ORDER BY t3.label DESC) AS parent_rn,
+        ROW_NUMBER() OVER (PARTITION BY t1.td_order_id, t3.label ORDER BY t3.operate_datetime ASC) AS sub_rn,
+        t1.relate_user,
+        t1.related_service_order,
+        t1.sla_status
+    FROM temp t1
+    LEFT JOIN ipd_ops_dim.dim_pub_rels_emp_dept_t d
+        ON LOWER(created_by) = LOWER(d.w3_account)
+    LEFT JOIN ipd_ops_dim.dim_pub_ci_ciinfo ci
+        ON t1.request_ci_id = ci.ci_id
+    LEFT JOIN (
+        SELECT 
+            service_id,
+            CASE WHEN TRIM(request_ci_id) = '' THEN NULL ELSE request_ci_id END AS request_ci_id,
+            CASE WHEN TRIM(ci_module_id) = '' THEN NULL ELSE ci_module_id END AS ci_module_id
+        FROM ipd_ops_dwi.dwi_v2_t_importal_service_request_hi
+    ) sd ON t1.related_service_order = sd.service_id
+    LEFT JOIN ipd_ops_dim.dim_pub_ci_ciinfo t4
+        ON sd.request_ci_id = t4.ci_id
+    LEFT JOIN ipd_ops_dim.dim_pub_dimension_ipmt t2
+        ON COALESCE(ci.app_id, t1.module_id, t4.app_id, sd.ci_module_id) = t2.dimension_code
+    LEFT JOIN not_close_detail t3
+        ON t1.td_order_id = t3.td_order_id
+        AND t1.status = t3.to_status
+)
+SELECT * FROM temp2;
