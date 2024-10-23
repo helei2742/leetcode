@@ -1,11 +1,25 @@
-with tmp_dwi_v2_t_ticket_td_order_hi_01 as
-(
-select t.*
-  from (
-     select t1.*
-           ,row_number() over(partition by t1.id
-                                  order by t1.create_datetime desc) as rn
-       from ipd_ops_sdi.sdi_v2_t_ticket_td_order_hi t1
-       ) t
- where t.rn = 1
+close_detail as (
+select	td_order_id
+	from ipd_ops_sdi.sdi_t_ticket_td_order_operation_record
+	where to_status in  ('4','20','30')
+	group by td_order_id
+),
+not_close_detail as (
+select	td_order_id
+		,to_status
+		,operate_datetime
+		,sum(case
+			when to_status = nvl(lag_to_status,to_status) then 0
+			else 1
+		end ) over(partition by td_order_id order by operate_datetime asc) as label
+	from
+		(select	td_order_id
+				,to_status
+				,operate_datetime
+				,lag(nvl(to_status,'-1')) over(partition by td_order_id order by operate_datetime asc) as lag_to_status
+			from ipd_ops_sdi.sdi_t_ticket_td_order_operation_record t1
+			where not exists(select 1
+								from close_detail t2
+								where t2.td_order_id = t1.td_order_id)
+		) t2
 ),
