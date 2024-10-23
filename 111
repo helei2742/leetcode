@@ -26,6 +26,45 @@ not_close_detail AS (
         td_order_id,
         to_status,
         operate_datetime,
+        COUNT(CASE 
+                WHEN to_status = COALESCE(lag_to_status, to_status) THEN 0 
+                ELSE 1 
+            END) AS label
+    FROM 
+        lagged_data
+    GROUP BY 
+        td_order_id, to_status, operate_datetime
+)
+
+
+WITH close_detail AS (
+    SELECT 
+        td_order_id
+    FROM 
+        ipd_ops_sdi.sdi_t_ticket_td_order_operation_record
+    WHERE 
+        to_status IN ('4', '20', '30')
+    GROUP BY 
+        td_order_id
+),
+lagged_data AS (
+    SELECT 
+        t1.td_order_id,
+        t1.to_status,
+        t1.operate_datetime,
+        LAG(t1.to_status, 1, '-1') OVER (PARTITION BY t1.td_order_id ORDER BY t1.operate_datetime) AS lag_to_status
+    FROM 
+        ipd_ops_sdi.sdi_t_ticket_td_order_operation_record t1
+    LEFT JOIN 
+        close_detail t2 ON t1.td_order_id = t2.td_order_id
+    WHERE 
+        t2.td_order_id IS NULL
+),
+not_close_detail AS (
+    SELECT 
+        td_order_id,
+        to_status,
+        operate_datetime,
         SUM(CASE 
                 WHEN to_status = COALESCE(lag_to_status, to_status) THEN 0 
                 ELSE 1 
