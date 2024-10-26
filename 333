@@ -1,153 +1,86 @@
-Table temp = tEnv
-    .from("ipd_ops_dwi_dwi_v2_t_ticket_td_order_hi")
-    .leftOuterJoin(
-        tEnv.from("ipd_ops_dwi_dwi_v2_t_importal_service_request_hi")
-            .select(
-                $("service_id"),
-                $("status").isNotNull().and($("status").length().gt(0)).as("status")
-            ),
-        $("related_service_order").isEqual($("service_id"))
-    )
-    .leftOuterJoin(
-        tEnv.from("ipd_ops_dwr_pub_dwr_pub_td_im_sub_order_full")
-            .where($("order_type").isEqual("TD").and($("rel_type").isEqual("SD"))),
-        $("related_service_order").isEqual($("rel_busi_no"))
-    )
-    .select(
-        $("t1.*"),
-        $("status").notIn("4", "20", "30")
-            .and($("curr_processor").isEqual($("created_by")))
-            .as("to_do_person"),
-        $("status").notIn("4", "20", "30")
-            .and($("curr_processor").isEqual($("created_by")))
-            .as("to_do_applicant"),
-        $("status").notIn("4", "20", "30")
-            .or($("status").isEqual("3").and($("t2.status").notIn("4")))
-            .and($("curr_processor").isNotEqual($("created_by")))
-            .as("tmp_trace_person"),
-        $("status").notIn("4", "20", "30")
-            .or($("status").isEqual("3").and($("t2.status").notIn("4")))
-            .and($("curr_processor").isNotEqual($("created_by")))
-            .as("tmp_trace_upgrade"),
-        $("t3.relate_user")
-    )
-    .where($("related_service_order").isNotNull().and($("status").notIn("4", "20", "30")));
-
-
-
-
-
-Table closeDetail = tEnv
-    .from("ipd_ops_sdi_sdi_t_ticket_td_order_operation_record")
-    .filter($("to_status").in("4", "20", "30"))
-    .groupBy($("td_order_id"))
-    .select($("td_order_id"));
-
-
-
-
-Table notCloseDetail = tEnv
-    .from("ipd_ops_sdi_sdi_t_ticket_td_order_operation_record")
-    .filter(
-        !exists(tEnv.from("close_detail").filter($("td_order_id").isEqual($("t1.td_order_id"))))
-    )
-    .select(
-        $("td_order_id"),
-        $("to_status"),
-        $("operate_datetime"),
-        $("to_status").isNotEqual($("lag_to_status"))
-            .when(true, 1)
-            .otherwise(0)
-            .sum().over(partitionBy($("td_order_id")).orderBy($("operate_datetime")).as("label"))
-    );
-
-
-
-Table temp = tEnv
-    .from("temp")
-    .select(
-        $("td_order_id").as("busi_no"),
-        $("title"),
-        $("issue_desc"),
-        $("status"),
-        $("td_type"),
-        $("biz_domain"),
-        $("request_user_id").as("user_by"),
-        $("l1_dept_code"),
-        $("l1_dept_cn_name"),
-        $("l2_dept_code"),
-        $("l2_dept_cn_name"),
-        $("l3_dept_code"),
-        $("l3_dept_cn_name"),
-        $("l4_dept_code"),
-        $("l4_dept_cn_name"),
-        $("l5_dept_code"),
-        $("l5_dept_cn_name"),
-        $("l6_dept_code"),
-        $("l6_dept_cn_name"),
-        $("product_code"),
-        $("product_name"),
-        $("spdt_code"),
-        $("spdt_name"),
-        $("pdt_code"),
-        $("pdt_name"),
-        $("sub_product_code"),
-        $("sub_product_name"),
-        $("module_code"),
-        $("module_cn_name"),
-        $("app_id"),
-        $("app_cn_name"),
-        $("created_by"),
-        $("curr_processor").as("curr_process_user"),
-        $("opened_by").as("opened_user"),
-        $("open_datetime").as("open_time"),
-        $("upgrade_cnt").minus(1).as("sla_upgrade_cnt"),
-        $("sla_status").ge(2).as("sla_break_flag"),
-        when($("sla_status").isEqual(11), "分析中").as("respond_sla_status"),
-        when($("sla_status").isEqual(2), "处理中").as("closed_sla_status"),
-        $("open_datetime")
-            .minus($("unix_timestamp"))
-            .div(60 * 60 * 24)
-            .as("saty_time"),
-        $("related_service_order").as("relate_order_no"),
-        when($("status").in("11", "2"),
-            $("from_unixtime")
-                .add($("unix_timestamp"), lit(8 * 60 * 60))
-                .as("sla_time")),
-        $("to_do_person"),
-        $("to_do_applicant"),
-        $("tmp_trace_person"),
-        $("tmp_trace_upgrade"),
-        $("operate_datetime"),
-        denseRank().over(partitionBy($("td_order_id")).orderBy($("t3.label").desc())).as("parent_rn"),
-        rowNumber().over(partitionBy($("td_order_id"), $("t3.label")).orderBy($("operate_datetime").asc())).as("sub_rn"),
-        $("relate_user"),
-        $("related_service_order"),
-        $("sla_status")
-    );
-
-
-Table temp2 = temp
-    .leftOuterJoin(
-        tEnv.from("ipd_ops_dim_dim_pub_rels_emp_dept_t").where(lower($("created_by")).isEqual(lower($("w3_account")))),
-        $("created_by").isEqual($("w3_account"))
-    )
-    .leftOuterJoin(
-        tEnv.from("ipd_ops_dim_dim_pub_ci_ciinfo"),
-        $("request_ci_id").isEqual($("ci_id"))
-    )
-    .leftOuterJoin(
-        tEnv.from("ipd_ops_dim_dim_pub_dimension_ipmt"),
-        coalesce($("ci.app_id"), $("module_id"), $("t4.app_id"), $("sd.ci_module_id")).isEqual($("dimension_code"))
-    )
-    .leftOuterJoin(
-        tEnv.from("not_close_detail"),
-        $("td_order_id").isEqual($("t3.td_order_id"))
-            .and($("status").isEqual($("t3.to_status")))
-    );
-
-
-
-
-when($("sla_status").isEqual(11), "分析中").as("respond_sla_status"),
-when($("sla_status").isEqual(2), "处理中").as("closed_sla_status"),
+insert overwrite table ipd_ops_dwr_pub.dwr_pub_yygzt_v2_td_order_full
+select	 busi_no
+        ,title
+        ,issue_desc
+        ,case
+			when status = '0' then '起草中'
+			when status = '1' then '待确认'
+			when status = '2' then '处理中'
+			when status = '3' then '待验证'
+			when status = '4' then '已关闭'
+			when status = '11' then '分析中'
+			when status = '12' then '拒绝待确认'
+			when status = '20' then '已拒绝'
+			when status = '30' then '已取消'
+		end as status
+		,case
+			when td_type = 1 then '工程能力类'
+			when td_type = 2 then '数据类'
+			when td_type = 3 then '流程类'
+			when td_type = 4 then '业务部门类' else '其他'
+		end as order_type
+		,biz_domain as issue_domain
+        ,nvl(user_by,'--') as  user_by
+        ,l1_dept_code
+        ,l1_dept_cn_name
+        ,l2_dept_code
+        ,l2_dept_cn_name
+        ,l3_dept_code
+        ,l3_dept_cn_name
+        ,l4_dept_code
+        ,l4_dept_cn_name
+        ,l5_dept_code
+        ,l5_dept_cn_name
+        ,l6_dept_code
+        ,l6_dept_cn_name
+		,product_code
+        ,product_name
+        ,spdt_code
+        ,spdt_name
+        ,pdt_code
+        ,pdt_name
+        ,sub_product_code
+        ,sub_product_name
+        ,module_code
+        ,module_cn_name
+        ,app_id
+        ,app_cn_name
+		,created_by
+        ,curr_process_user
+        ,opened_user
+        ,open_time
+		,deal_time
+        ,sla_upgrade_cnt
+        ,sla_break_flag
+        ,respond_sla_status
+		,closed_sla_status
+		,saty_time
+		,relate_order_no
+		,sla_warn
+		,sla_time
+		,sla_status
+		,to_do_person
+		,to_do_applicant
+		,trace_person
+		,trace_upgrade
+		,case
+			when to_do_person is not null   then '未处理'
+			else '其他'
+		end as label_priority_01
+		,case
+			when (trace_person is not null or trace_upgrade is not null) and sla_upgrade_cnt = 3 then '三次升级'
+			when (trace_person is not null or trace_upgrade is not null) and sla_upgrade_cnt = 2 then '二次升级'
+			when (trace_person is not null or trace_upgrade is not null) and sla_upgrade_cnt = 1 then '一次升级'
+			when (trace_person is not null or trace_upgrade is not null) and sla_upgrade_cnt = 0 and sla_status  - 1 >=0 then '即将打破SLA'
+			when (trace_person is not null or trace_upgrade is not null) and user_by = trace_upgrade then '待其它环节处理'
+			when trace_person is not null or trace_upgrade is not null then   '其他'
+		end as label_priority_02
+		,operate_datetime as status_start_time
+		,round((unix_timestamp() - unix_timestamp(operate_datetime))/(24*60*60),2) as status_stay_duration
+		,case
+			when related_service_order regexp 'SD' then relate_user  else created_by
+		end as team_dept_user
+		,cast(current_timestamp as string) as ops_insert_time
+	from temp2
+	where parent_rn = 1
+	and sub_rn = 1;
