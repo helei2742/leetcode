@@ -1,3 +1,67 @@
+
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.serialization.StringSerializer;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.Statement;
+import java.util.Properties;
+
+public class PgTableToKafka {
+    private static final String KAFKA_TOPIC = "your_topic";
+    private static final String KAFKA_BOOTSTRAP_SERVERS = "localhost:9092";
+
+    private static final String POSTGRES_URL = "jdbc:postgresql://localhost:5432/your_database";
+    private static final String POSTGRES_USER = "your_user";
+    private static final String POSTGRES_PASSWORD = "your_password";
+    private static final String TARGET_TABLE = "your_table";
+
+    public static void main(String[] args) {
+        // 设置Kafka生产者属性
+        Properties kafkaProps = new Properties();
+        kafkaProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA_BOOTSTRAP_SERVERS);
+        kafkaProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        kafkaProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+
+        try (KafkaProducer<String, String> producer = new KafkaProducer<>(kafkaProps);
+             Connection conn = DriverManager.getConnection(POSTGRES_URL, POSTGRES_USER, POSTGRES_PASSWORD);
+             Statement stmt = conn.createStatement()) {
+
+            // 查询表结构
+            String query = "SELECT * FROM " + TARGET_TABLE + " LIMIT 1"; // 只查询一行数据获取元数据
+            ResultSet rs = stmt.executeQuery(query);
+            ResultSetMetaData metaData = rs.getMetaData();
+
+            // 构建表结构的JSON字符串
+            StringBuilder schemaInfo = new StringBuilder();
+            schemaInfo.append("{ \"table\": \"" + TARGET_TABLE + "\", \"columns\": [");
+
+            for (int i = 1; i <= metaData.getColumnCount(); i++) {
+                schemaInfo.append("{");
+                schemaInfo.append("\"name\": \"").append(metaData.getColumnName(i)).append("\", ");
+                schemaInfo.append("\"type\": \"").append(metaData.getColumnTypeName(i)).append("\"");
+                schemaInfo.append("}");
+                if (i < metaData.getColumnCount()) {
+                    schemaInfo.append(", ");
+                }
+            }
+            schemaInfo.append("] }");
+
+            // 将表结构推送到 Kafka
+            ProducerRecord<String, String> record = new ProducerRecord<>(KAFKA_TOPIC, schemaInfo.toString());
+            producer.send(record);
+            System.out.println("Schema info sent to Kafka topic '" + KAFKA_TOPIC + "': " + schemaInfo);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+
 WITH not_close_detail AS (
     SELECT 
         td_order_id,
