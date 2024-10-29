@@ -1,0 +1,92 @@
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.serialization.StringSerializer;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.Statement;
+import java.util.Properties;
+import java.util.Random;
+
+public class PgDataGeneratorToKafka {
+    private static final String KAFKA_TOPIC = "your_topic";
+    private static final String KAFKA_BOOTSTRAP_SERVERS = "localhost:9092";
+
+    private static final String POSTGRES_URL = "jdbc:postgresql://localhost:5432/your_database";
+    private static final String POSTGRES_USER = "your_user";
+    private static final String POSTGRES_PASSWORD = "your_password";
+    private static final String TARGET_TABLE = "your_table";
+
+    public static void main(String[] args) {
+        Properties kafkaProps = new Properties();
+        kafkaProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA_BOOTSTRAP_SERVERS);
+        kafkaProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        kafkaProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+
+        try (KafkaProducer<String, String> producer = new KafkaProducer<>(kafkaProps);
+             Connection conn = DriverManager.getConnection(POSTGRES_URL, POSTGRES_USER, POSTGRES_PASSWORD);
+             Statement stmt = conn.createStatement()) {
+
+            // 获取表的列信息
+            String query = "SELECT * FROM " + TARGET_TABLE + " LIMIT 1"; // 只查询一行数据以获取元数据
+            ResultSet rs = stmt.executeQuery(query);
+            ResultSetMetaData metaData = rs.getMetaData();
+
+            // 随机数据生成器
+            Random random = new Random();
+
+            // 根据列信息生成随机数据
+            for (int recordNum = 0; recordNum < 10; recordNum++) { // 生成 10 条模拟数据
+                StringBuilder record = new StringBuilder("{");
+
+                for (int i = 1; i <= metaData.getColumnCount(); i++) {
+                    String columnName = metaData.getColumnName(i);
+                    String columnType = metaData.getColumnTypeName(i);
+
+                    record.append("\"").append(columnName).append("\": ");
+                    record.append(generateRandomData(columnType, random));
+
+                    if (i < metaData.getColumnCount()) {
+                        record.append(", ");
+                    }
+                }
+                record.append("}");
+
+                // 发送到 Kafka
+                ProducerRecord<String, String> kafkaRecord = new ProducerRecord<>(KAFKA_TOPIC, record.toString());
+                producer.send(kafkaRecord);
+                System.out.println("Sent record to Kafka: " + record);
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static String generateRandomData(String columnType, Random random) {
+        switch (columnType) {
+            case "INT4":  // PostgreSQL INTEGER 类型
+                return String.valueOf(random.nextInt(100));
+            case "FLOAT4":  // PostgreSQL FLOAT 类型
+                return String.valueOf(random.nextFloat() * 100);
+            case "VARCHAR":  // PostgreSQL VARCHAR 类型
+                return "\"" + getRandomString(5, random) + "\"";
+            case "TIMESTAMP":  // PostgreSQL TIMESTAMP 类型
+                return "\"" + System.currentTimeMillis() + "\"";  // 使用当前时间戳
+            default:
+                return "\"unknown\"";
+        }
+    }
+
+    private static String getRandomString(int length, Random random) {
+        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        StringBuilder sb = new StringBuilder(length);
+        for (int i = 0; i < length; i++) {
+            sb.append(chars.charAt(random.nextInt(chars.length())));
+        }
+        return sb.toString();
+    }
+}
