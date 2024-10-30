@@ -1,381 +1,671 @@
+package com.helei.dto.account;
 
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.serialization.StringSerializer;
+import com.helei.dto.AssetInfo;
+import lombok.*;
 
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
-import java.sql.Statement;
-import java.util.Properties;
+import java.util.List;
 
-public class PgTableToKafka {
-    private static final String KAFKA_TOPIC = "your_topic";
-    private static final String KAFKA_BOOTSTRAP_SERVERS = "localhost:9092";
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@EqualsAndHashCode
+@ToString
+public class AccountBalanceInfo {
 
-    private static final String POSTGRES_URL = "jdbc:postgresql://localhost:5432/your_database";
-    private static final String POSTGRES_USER = "your_user";
-    private static final String POSTGRES_PASSWORD = "your_password";
-    private static final String TARGET_TABLE = "your_table";
+    private String uId;
 
-    public static void main(String[] args) {
-        // 设置Kafka生产者属性
-        Properties kafkaProps = new Properties();
-        kafkaProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA_BOOTSTRAP_SERVERS);
-        kafkaProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
-        kafkaProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+    private String accountType;
 
-        try (KafkaProducer<String, String> producer = new KafkaProducer<>(kafkaProps);
-             Connection conn = DriverManager.getConnection(POSTGRES_URL, POSTGRES_USER, POSTGRES_PASSWORD);
-             Statement stmt = conn.createStatement()) {
+    private Long updateTime;
 
-            // 查询表结构
-            String query = "SELECT * FROM " + TARGET_TABLE + " LIMIT 1"; // 只查询一行数据获取元数据
-            ResultSet rs = stmt.executeQuery(query);
-            ResultSetMetaData metaData = rs.getMetaData();
+    private List<AssetInfo> balances;
 
-            // 构建表结构的JSON字符串
-            StringBuilder schemaInfo = new StringBuilder();
-            schemaInfo.append("{ \"table\": \"" + TARGET_TABLE + "\", \"columns\": [");
+    /**
+     * 获取账户可用的usdt
+     * @return 可用的usdt
+     */
+    public Double getFreeUsdt() {
+        if (balances == null || balances.isEmpty()) return 0.0;
 
-            for (int i = 1; i <= metaData.getColumnCount(); i++) {
-                schemaInfo.append("{");
-                schemaInfo.append("\"name\": \"").append(metaData.getColumnName(i)).append("\", ");
-                schemaInfo.append("\"type\": \"").append(metaData.getColumnTypeName(i)).append("\"");
-                schemaInfo.append("}");
-                if (i < metaData.getColumnCount()) {
-                    schemaInfo.append(", ");
-                }
+        for (AssetInfo balance : balances) {
+            if (balance.getAsset().equalsIgnoreCase("usdt")) {
+                return balance.getFree();
             }
-            schemaInfo.append("] }");
-
-            // 将表结构推送到 Kafka
-            ProducerRecord<String, String> record = new ProducerRecord<>(KAFKA_TOPIC, schemaInfo.toString());
-            producer.send(record);
-            System.out.println("Schema info sent to Kafka topic '" + KAFKA_TOPIC + "': " + schemaInfo);
-
-        } catch (Exception e) {
-            e.printStackTrace();
         }
+        return 0.0;
     }
 }
 
-WITH not_close_detail AS (
-    SELECT 
-        td_order_id,
-        to_status,
-        operate_datetime,
-        label
-    FROM 
-        some_table  -- 在这里放置 not_close_detail 表来源
-),
-temp_view AS (
-    SELECT 
-        t1.td_order_id AS busi_no,
-        t1.title,
-        t1.issue_desc,
-        t1.status,
-        t1.td_type,
-        biz_domain,
-        t1.request_user_id AS user_by,
-        CASE
-            WHEN COALESCE(d.l1_dept_code, '-1') = COALESCE(d.l0_dept_code, '-1')
-            THEN '-1' ELSE COALESCE(d.l1_dept_code, '-1')
-        END AS l1_dept_code,
-        CASE
-            WHEN COALESCE(d.l1_dept_cn_name, '异常部门') = COALESCE(d.l0_dept_cn_name, '异常部门')
-            THEN '异常部门' ELSE d.l1_dept_cn_name
-        END AS l1_dept_cn_name,
-        CASE
-            WHEN COALESCE(d.l2_dept_code, '-1') = COALESCE(d.l1_dept_code, '-1')
-            THEN '-1' ELSE COALESCE(d.l2_dept_code, '-1')
-        END AS l2_dept_code,
-        CASE
-            WHEN COALESCE(d.l2_dept_cn_name, '异常部门') = COALESCE(d.l1_dept_cn_name, '异常部门')
-            THEN '异常部门' ELSE COALESCE(d.l2_dept_cn_name, '异常部门')
-        END AS l2_dept_cn_name,
-        CASE
-            WHEN COALESCE(d.l3_dept_code, '-1') = COALESCE(d.l2_dept_code, '-1')
-            THEN '-1' ELSE COALESCE(d.l3_dept_code, '-1')
-        END AS l3_dept_code,
-        CASE
-            WHEN COALESCE(d.l3_dept_cn_name, '异常部门') = COALESCE(d.l2_dept_cn_name, '异常部门')
-            THEN '异常部门' ELSE COALESCE(d.l3_dept_cn_name, '异常部门')
-        END AS l3_dept_cn_name,
-        CASE
-            WHEN COALESCE(d.l4_dept_code, '-1') = COALESCE(d.l3_dept_code, '-1')
-            THEN '-1' ELSE COALESCE(d.l4_dept_code, '-1')
-        END AS l4_dept_code,
-        CASE
-            WHEN COALESCE(d.l4_dept_cn_name, '异常部门') = COALESCE(d.l3_dept_cn_name, '异常部门')
-            THEN '异常部门' ELSE COALESCE(d.l4_dept_cn_name, '异常部门')
-        END AS l4_dept_cn_name,
-        CASE
-            WHEN COALESCE(d.l5_dept_code, '-1') = COALESCE(d.l4_dept_code, '-1')
-            THEN '-1' ELSE COALESCE(d.l5_dept_code, '-1')
-        END AS l5_dept_code,
-        CASE
-            WHEN COALESCE(d.l5_dept_cn_name, '异常部门') = COALESCE(d.l4_dept_cn_name, '异常部门')
-            THEN '异常部门' ELSE COALESCE(d.l5_dept_cn_name, '异常部门')
-        END AS l5_dept_cn_name,
-        CASE
-            WHEN COALESCE(d.l6_dept_code, '-1') = COALESCE(d.l5_dept_code, '-1')
-            THEN '-1' ELSE COALESCE(d.l6_dept_code, '-1')
-        END AS l6_dept_code,
-        CASE
-            WHEN COALESCE(d.l6_dept_cn_name, '异常部门') = COALESCE(d.l5_dept_cn_name, '异常部门')
-            THEN '异常部门' ELSE COALESCE(d.l6_dept_cn_name, '异常部门')
-        END AS l6_dept_cn_name,
-        t2.dimension_code AS product_code,
-        t2.dimension_cn_name AS product_name,
-        CASE
-            WHEN COALESCE(t2.prod_fm_code, '-1') = COALESCE(t2.parent_code, '-1')
-            THEN NULL ELSE t2.prod_fm_code
-        END AS spdt_code,
-        CASE
-            WHEN COALESCE(t2.prod_fm_code, '-1') = COALESCE(t2.parent_code, '-1')
-            THEN NULL ELSE t2.prod_fm_cn_name
-        END AS spdt_name,
-        CASE
-            WHEN COALESCE(t2.prod_code, '-1') = COALESCE(t2.prod_fm_code, '-1')
-            THEN NULL ELSE t2.prod_code
-        END AS pdt_code,
-        CASE
-            WHEN COALESCE(t2.prod_code, '-1') = COALESCE(t2.prod_fm_code, '-1')
-            THEN NULL ELSE t2.prod_cn_name
-        END AS pdt_name,
-        CASE
-            WHEN COALESCE(t2.sub_prod_code, '-1') = COALESCE(t2.prod_code, '-1')
-            THEN NULL ELSE t2.sub_prod_code
-        END AS sub_product_code,
-        CASE
-            WHEN COALESCE(t2.sub_prod_code, '-1') = COALESCE(t2.prod_code, '-1')
-            THEN NULL ELSE t2.sub_prod_cn_name
-        END AS sub_product_name,
-        CASE
-            WHEN COALESCE(t2.app_module_id, '-1') = COALESCE(t2.sub_prod_code, '-1')
-            THEN NULL ELSE t2.app_module_id
-        END AS module_code,
-        CASE
-            WHEN COALESCE(t2.app_module_id, '-1') = COALESCE(t2.sub_prod_code, '-1')
-            THEN NULL ELSE t2.app_module_cn_name
-        END AS module_cn_name,
-        CASE
-            WHEN COALESCE(t2.app_id, '-1') = COALESCE(t2.app_module_id, '-1')
-            THEN NULL ELSE t2.app_id
-        END AS app_id,
-        CASE
-            WHEN COALESCE(t2.app_id, '-1') = COALESCE(t2.app_module_id, '-1')
-            THEN NULL ELSE t2.app_cn_name
-        END AS app_cn_name,
-        t1.created_by,
-        t1.curr_processor AS curr_process_user,
-        t1.opened_by AS opened_user,
-        t1.open_datetime AS open_time,
-        NULL AS deal_time,
-        t1.upgrade_cnt - 1 AS sla_upgrade_cnt,
-        CASE
-            WHEN t1.sla_status >= 2 THEN 1 ELSE 0
-        END AS sla_break_flag,
-        CASE
-            WHEN t1.sla_status = '11' THEN '分析中'
-        END AS respond_sla_status,
-        CASE
-            WHEN t1.sla_status = '2' THEN '处理中'
-        END AS closed_sla_status,
-        ROUND((UNIX_TIMESTAMP(CURRENT_TIMESTAMP) - UNIX_TIMESTAMP(t1.open_datetime))/(60*60*24), 2) AS saty_time,
-        t1.related_service_order AS relate_order_no,
-        NULL AS sla_warn,
-        CASE
-            WHEN t1.status IN ('11', '2') THEN FROM_UNIXTIME(UNIX_TIMESTAMP(t1.status_sla_break_datetime_only) + 8*60*60, 'yyyy-MM-dd HH:mm:ss')
-        END AS sla_time,
-        t1.to_do_person,
-        t1.to_do_applicant,
-        t1.tmp_trace_person AS trace_person,
-        t1.tmp_trace_upgrade AS trace_upgrade,
-        t1.operate_datetime,
-        DENSE_RANK() OVER (PARTITION BY t1.td_order_id ORDER BY t3.label DESC) AS parent_rn,
-        ROW_NUMBER() OVER (PARTITION BY t1.td_order_id, t3.label ORDER BY t3.operate_datetime ASC) AS sub_rn,
-        t1.relate_user,
-        t1.related_service_order,
-        t1.sla_status
-    FROM 
-        temp t1
-    LEFT JOIN 
-        ipd_ops_dim.dim_pub_rels_emp_dept_t d
-    ON 
-        LOWER(t1.created_by) = LOWER(d.w3_account)
-    LEFT JOIN 
-        ipd_ops_dim.dim_pub_ci_ciinfo ci  -- 获取 app_id
-    ON 
-        t1.request_ci_id = ci.ci_id
-    LEFT JOIN 
-        (
-            SELECT 
-                service_id,
-                CASE WHEN COALESCE(TRIM(request_ci_id), '') = '' THEN NULL ELSE request_ci_id END AS request_ci_id,
-                CASE WHEN COALESCE(TRIM(ci_module_id), '') = '' THEN NULL ELSE ci_module_id END AS ci_module_id
-            FROM 
-                ipd_ops_dwi.dwi_v2_t_importal_service_request_hi
-        ) sd
-    ON 
-        t1.related_service_order = sd.service_id
-    LEFT JOIN 
-        ipd_ops_dim.dim_pub_ci_ciinfo t4
-    ON 
-        sd.request_ci_id = t4.ci_id
-    LEFT JOIN 
-        ipd_ops_dim.dim_pub_dimension_ipmt t2
-    ON 
-        COALESCE(ci.app
+package com.helei.dto.account;
 
 
-<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
+import com.helei.constants.RunEnv;
+import com.helei.constants.TradeType;
+import com.helei.dto.ASKey;
+import io.protostuff.runtime.RuntimeEnv;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
-    <groupId>com.huawei.scs</groupId>
-    <artifactId>scs-flink-sdk-original-api</artifactId>
-    <version>1.0-SNAPSHOT</version>
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-    <properties>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.source>1.8</maven.compiler.source>
-        <maven.compiler.target>1.8</maven.compiler.target>
-        <scala.version>2.11</scala.version>
-        <flink.version>1.12.2-hw-ei-312010</flink.version>
-        <flink.kafka.version>1.12.0</flink.kafka.version>
-        <scope>provided</scope>
-    </properties>
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@Builder
+public class UserAccountInfo {
 
-    <dependencies>
-        <!--确保该包位于dependences的最前面,防止冲突-->
-        <dependency>
-            <groupId>com.huawei.scs</groupId>
-            <artifactId>scs-common-flink-v112</artifactId>
-            <version>1.2-RELEASE</version>
-        </dependency>
-        <!-- Use this dependency if you are using the DataStream API -->
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-streaming-java_${scala.version}</artifactId>
-            <version>${flink.version}</version>
-            <scope>${scope}</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-streaming-scala_${scala.version}</artifactId>
-            <version>${flink.version}</version>
-            <scope>${scope}</scope>
-        </dependency>
+    private long userId;
 
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-connector-kafka_${scala.version}</artifactId>
-            <version>${flink.version}</version>
-            <scope>${scope}</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-connector-jdbc_${scala.version}</artifactId>
-            <version>${flink.version}</version>
-            <scope>${scope}</scope>
-        </dependency>
+    /**
+     * 验证key
+     */
+    private ASKey asKey;
 
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-clients_${scala.version}</artifactId>
-            <version>${flink.version}</version>
-            <scope>${scope}</scope>
-        </dependency>
+    /**
+     * 是否可用
+     */
+    private final AtomicBoolean usable = new AtomicBoolean(false);
 
-        <!--公共包-->
-        <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-classic</artifactId>
-            <version>1.2.3</version>
-        </dependency>
+    /**
+     * 运行环境，测试网还是主网
+     */
+    private RunEnv runEnv;
 
-        <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-core</artifactId>
-            <version>1.2.3</version>
-        </dependency>
+    /**
+     * 交易类型
+     */
+    private TradeType tradeType;
 
-        <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-access</artifactId>
-            <version>1.2.3</version>
-        </dependency>
-        <dependency>
-            <groupId>net.logstash.logback</groupId>
-            <artifactId>logstash-logback-encoder</artifactId>
-            <version>6.3</version>
-            <scope>runtime</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-table-api-java-bridge_2.11</artifactId>
-            <version>${flink.version}</version>
-            <scope>provided</scope>
-        </dependency>
+    /**
+     * 订阅的交易对
+     */
+    private List<String> subscribeSymbol;
 
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-table-planner_2.11</artifactId>
-            <version>${flink.version}</version>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-table-planner-blink_2.11</artifactId>
-            <version>${flink.version}</version>
-            <scope>provided</scope>
-        </dependency>
+    /**
+     * 账户仓位设置
+     */
+    private AccountLocationConfig accountLocationConfig;
 
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-json</artifactId>
-            <version>${flink.version}</version>
-        </dependency>
+    /**
+     * 账户资金信息
+     */
+    private AccountBalanceInfo accountBalanceInfo;
+}
 
-        <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
-            <version>42.5.1</version>
-        </dependency>
+package com.helei.dto.account;
 
-    </dependencies>
 
-    <build>
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
-        <plugins>
-            <!-- Maven Assembly Plugin -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-assembly-plugin</artifactId>
-                <version>2.6</version>
-                <configuration>
-                    <!-- get all project dependencies -->
-                    <descriptorRefs>
-                        <descriptorRef>jar-with-dependencies</descriptorRef>
-                    </descriptorRefs>
-                </configuration>
-                <executions>
-                    <execution>
-                        <id>make-assembly</id>
-                        <!-- bind to the packaging phase -->
-                        <phase>package</phase>
-                        <goals>
-                            <goal>single</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-        </plugins>
-    </build>
-</project>
+import java.util.List;
+
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@Builder
+public class UserInfo {
+
+    /**
+     * 用户id
+     */
+    private long id;
+
+    /**
+     * 用户名
+     */
+    private String username;
+
+    /**
+     * 密码
+     */
+    private String password;
+
+    /**
+     * 邮箱
+     */
+    private String email;
+
+
+    /**
+     * 用户的账户信息
+     */
+    private List<UserAccountInfo> accountInfos;
+}
+
+package com.helei.binanceapi.config;
+
+
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.TradeType;
+import lombok.Data;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.InputStream;
+import java.io.Serializable;
+import java.util.Map;
+
+@Data
+public class BinanceApiConfig implements Serializable {
+    private static final String CONFIG_FILE = "binance-api-config.yaml";
+
+    public static final CEXType cexType = CEXType.BINANCE;
+
+    public static final BinanceApiConfig INSTANCE;
+
+    private BinanceURL test_net;
+
+    private BinanceURL normal;
+
+    static {
+        Yaml yaml = new Yaml();
+        try (InputStream inputStream = BinanceApiConfig.class.getClassLoader().getResourceAsStream(CONFIG_FILE)) {
+            if (inputStream == null) {
+                throw new IllegalArgumentException("File not found: " + CONFIG_FILE);
+            }
+            Map<String, Object> yamlData = yaml.load(inputStream);
+            Map<String, Object> shinano = (Map<String, Object>) yamlData.get("shinano");
+            Map<String, Object> quantity = (Map<String, Object>) shinano.get("quantity");
+            Map<String, Object> api = (Map<String, Object>) quantity.get("api");
+            Map<String, Object> binance = (Map<String, Object>) api.get("binance");
+
+            INSTANCE = yaml.loadAs(yaml.dump(binance), BinanceApiConfig.class);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to load YAML file: " + CONFIG_FILE, e);
+        }
+    }
+
+    /**
+     * 获取环境url
+     * @param runEnv runEnv
+     * @param tradeType tradeType
+     * @return BinanceTypedUrl
+     */
+    public BinanceTypedUrl getEnvUrlSet(RunEnv runEnv, TradeType tradeType) {
+        return switch (runEnv) {
+            case NORMAL -> normal.getMarketUrlByTradeType(tradeType);
+            case TEST_NET -> test_net.getMarketUrlByTradeType(tradeType);
+        };
+    }
+
+    @Data
+    public static class BinanceURL implements Serializable  {
+        /**
+         * 现货相关 api
+         */
+        private BinanceTypedUrl spot;
+
+        /**
+         * 合约相关 api
+         */
+        private BinanceTypedUrl u_contract;
+
+        /**
+         * 根据交易类型获取市场api
+         * @param tradeType tradeType
+         * @return market url
+         */
+        public BinanceTypedUrl getMarketUrlByTradeType(TradeType tradeType) {
+            return switch (tradeType) {
+                case SPOT -> spot;
+                case CONTRACT -> u_contract;
+            };
+        }
+    }
+
+    @Data
+    public static class BinanceTypedUrl implements Serializable  {
+
+        /**
+         * rest api url
+         */
+        private String rest_api_url;
+
+        /**
+         * 市场数据 api
+         */
+        private String ws_market_url;
+
+        /**
+         * 市场数据stream api, 推送使用
+         */
+        private String ws_market_stream_url;
+
+        /**
+         * 账户信息推送api
+         */
+        private String ws_account_info_stream_url;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(INSTANCE);
+    }
+}
+
+
+package com.helei.cexapi;
+
+
+import com.helei.binanceapi.BinanceWSApiClient;
+import com.helei.binanceapi.BinanceWSApiClientHandler;
+import com.helei.binanceapi.api.rest.BinanceUContractMarketRestApi;
+import com.helei.binanceapi.supporter.IpWeightSupporter;
+import lombok.extern.slf4j.Slf4j;
+
+import javax.net.ssl.SSLException;
+import java.net.InetSocketAddress;
+import java.net.URISyntaxException;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+
+@Slf4j
+public class CEXApiFactory {
+
+    private static final String CLIENT_CONNECT_KEY_SPACER = "<@>?";
+    //TODO 配置化
+//    private static InetSocketAddress proxy = new InetSocketAddress("127.0.0.1", 7897);
+    private static InetSocketAddress proxy = new InetSocketAddress("127.0.0.1", 7890);
+//    private static InetSocketAddress proxy = null;
+
+    private static IpWeightSupporter ipWeightSupporter = new IpWeightSupporter("localIp");
+
+    private static final ConcurrentMap<String, BinanceWSApiClient> CLIENT_CONNECTION_MAP = new ConcurrentHashMap<>();
+
+    public static BinanceWSApiClient binanceApiClient(
+            String url,
+            String name
+    ) {
+        String clientKey = buildClientConnectKey(url, name);
+
+        BinanceWSApiClient binanceWSApiClient = CLIENT_CONNECTION_MAP.get(clientKey);
+        if (binanceWSApiClient != null) {
+            log.info("已存在链接客户端 [{}] - [{}]", name, url);
+            return binanceWSApiClient;
+        }
+
+        BinanceWSApiClient client;
+        synchronized (CEXApiFactory.class) {
+            try {
+                log.info("创建链接客户端 [{}] - [{}]", name, url);
+
+                client = binanceApiClient(url);
+                client.setName(name);
+                CLIENT_CONNECTION_MAP.put(clientKey, client);
+
+                log.info("创建链接客户端 [{}] - [{}] 成功", name, url);
+            } catch (Exception e) {
+                log.error("创建链接客户端 [{}] - [{}] 失败", name, url, e);
+                throw new RuntimeException("创建连接客户端失败", e);
+            }
+        }
+        return client;
+    }
+
+    protected static BinanceWSApiClient binanceApiClient(
+            String url
+    ) throws URISyntaxException, SSLException {
+
+        BinanceWSApiClientHandler handler = new BinanceWSApiClientHandler();
+
+        BinanceWSApiClient client = new BinanceWSApiClient(
+                url,
+                ipWeightSupporter,
+                handler
+        );
+        client.setProxy(proxy);
+        client.setName("binance-api-client-" + UUID.randomUUID().toString().substring(0, 8));
+
+        return client;
+    }
+
+    public static BinanceUContractMarketRestApi binanceUContractMarketRestApi(String baseUrl,
+                                                                              ExecutorService executor) {
+        return new BinanceUContractMarketRestApi(executor, baseUrl, ipWeightSupporter);
+    }
+
+
+    /**
+     * 创建客户端链接的key，保证同一个名和url只有一个链接
+     * @param url url
+     * @param name name
+     * @return String
+     */
+    private static String buildClientConnectKey(String url, String name) {
+        return name + CLIENT_CONNECT_KEY_SPACER + url;
+    }
+}
+
+
+package com.helei.reaktimedatacenter.config;
+
+import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Slf4j
+@Configuration
+public class ApplicationSpringConfig {
+
+    @Value("${spring.kafka.bootstrap-servers}")
+    private String bootstrapServers;
+
+    @Bean(name = "kafkaAdminClient")
+    public AdminClient kafkaAdminClient() {
+        Map<String, Object> configs = new HashMap<>();
+        configs.put("bootstrap.servers", bootstrapServers);  // 确保这里是 bootstrap.servers
+        return AdminClient.create(configs);
+    }
+
+}
+
+
+package com.helei.reaktimedatacenter.service.impl;
+
+import com.helei.binanceapi.BinanceWSAccountStreamClient;
+import com.helei.binanceapi.BinanceWSApiClient;
+import com.helei.binanceapi.config.BinanceApiConfig;
+import com.helei.binanceapi.dto.accountevent.AccountEvent;
+import com.helei.cexapi.CEXApiFactory;
+import com.helei.cexapi.client.BinanceAccountMergeClient;
+import com.helei.constants.RunEnv;
+import com.helei.constants.TradeType;
+import com.helei.dto.ASKey;
+import com.helei.dto.account.UserAccountInfo;
+import com.helei.dto.account.UserInfo;
+import com.helei.reaktimedatacenter.service.AccountRealtimeDataService;
+import com.helei.reaktimedatacenter.service.UserService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+
+@Slf4j
+@Service
+public class BinanceAccountRTDataService implements AccountRealtimeDataService {
+
+    private static final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+
+    private static final int ACCOUNT_STREAM_START_TIMES_LIMIT = 3;
+
+    private final BinanceApiConfig binanceApiConfig = BinanceApiConfig.INSTANCE;
+
+    @Autowired
+    private UserService userService;
+
+
+    public void startAllUserInfoStream() {
+        log.info("开始获取所有用户的账户信息流");
+
+        List<CompletableFuture<Void>> list = userService.queryAll().stream().map(userInfo -> CompletableFuture.runAsync(() -> startSyncUserInfo(userInfo), executor)).toList();
+        list.forEach(CompletableFuture::join);
+
+        log.info("所有用户账户信息流获取完毕，共[{}]个用户", list.size());
+    }
+
+
+    public void startSyncUserInfo(UserInfo userInfo) {
+        log.info("开始获取用户id[{}]-name[{}]拥有账户信息流", userInfo.getId(), userInfo.getUsername());
+
+        List<UserAccountInfo> accountInfos = userInfo.getAccountInfos();
+
+        if (accountInfos == null || accountInfos.isEmpty()) {
+            log.warn("用户[{}]-id[{}]没有注册交易账户信息", userInfo.getUsername(), userInfo.getId());
+            return;
+        }
+
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+
+        for (UserAccountInfo accountInfo : accountInfos) {
+            long userId = accountInfo.getUserId();
+            RunEnv runEnv = accountInfo.getRunEnv();
+            TradeType tradeType = accountInfo.getTradeType();
+            ASKey asKey = accountInfo.getAsKey();
+            BinanceApiConfig.BinanceTypedUrl envUrlSet = binanceApiConfig.getEnvUrlSet(runEnv, tradeType);
+
+            log.info("开始获取账户信息流, userId[{}], runEnv[{}], tradeType[{}]", userInfo.getUsername(), runEnv, tradeType);
+
+            CompletableFuture<Void> future = CompletableFuture
+                    //获取流客户端
+                    .supplyAsync(() -> {
+                        BinanceWSAccountStreamClient binanceWSAccountStreamClient = null;
+
+                        for (int i = 0; i < ACCOUNT_STREAM_START_TIMES_LIMIT; i++) {
+                            try {
+                                log.info("第 [{}] 次获取账户信息流, userId[{}], runEnv[{}], tradeType[{}]", i, userInfo.getUsername(), runEnv, tradeType);
+
+                                binanceWSAccountStreamClient = buildAccountInfoStream(envUrlSet, asKey, userId);
+
+                                log.info("第 [{}] 次获取账户信息流成功, userId[{}], runEnv[{}], tradeType[{}], listenKey[{}]", i, userInfo.getUsername(), runEnv, tradeType, binanceWSAccountStreamClient.getListenKey());
+
+                                return binanceWSAccountStreamClient;
+                            } catch (Exception e) {
+                                log.error("第 [{}] 次获取账户信息流失败， userId[{}], runEnv[{}], tradeType[{}]", i, userInfo.getUsername(), runEnv, tradeType, e);
+
+                                if (i == ACCOUNT_STREAM_START_TIMES_LIMIT - 1) {
+                                    log.error("重试次数 [{}] 超过了限制[{}], 不再继续重试", i, ACCOUNT_STREAM_START_TIMES_LIMIT);
+                                }
+                            }
+                        }
+
+                        return binanceWSAccountStreamClient;
+                    }, executor)
+                    //开启流客户端
+                    .thenAcceptAsync(this::startSyncAccountInfo, executor);
+
+            futures.add(future);
+        }
+
+        futures.forEach(CompletableFuture::join);
+
+        log.info("用户id[{}]-name[{}]所有账户信息流[共{}个]开启成功", userInfo.getId(), userInfo.getUsername(), futures.size());
+    }
+
+    private void startSyncAccountInfo(BinanceWSAccountStreamClient binanceWSAccountStreamClient) {
+
+        executor.execute(()->{
+
+            try {
+                Boolean success = binanceWSAccountStreamClient.startAccountInfoStream().get();
+
+                if (success) {
+                    log.info("开启账户信息流成功， listenKey [{}], aK[{}]", binanceWSAccountStreamClient.getListenKey(), binanceWSAccountStreamClient.getAsKey().getApiKey());
+                } else {
+                    log.error("开启账户信息流失败， 重新开始获取, aK[{}]", binanceWSAccountStreamClient.getAsKey().getApiKey());
+                }
+            } catch (InterruptedException | ExecutionException e) {
+                log.error("开启账户信息流失败， 重新开始获取, aK[{}]", binanceWSAccountStreamClient.getAsKey().getApiKey());
+            }
+        });
+
+    }
+
+    private BinanceWSAccountStreamClient buildAccountInfoStream(BinanceApiConfig.BinanceTypedUrl envUrlSet, ASKey asKey, long userId) throws Exception {
+
+        // 1. 创建用于获取 listenKey 的客户端
+        BinanceWSApiClient requestClient = CEXApiFactory.binanceApiClient(envUrlSet.getWs_market_url(), "账户信息请求链接");
+
+        // 2, 创建用于获取 merge 客户端
+        BinanceAccountMergeClient accountMergeClient = new BinanceAccountMergeClient(requestClient, envUrlSet.getWs_account_info_stream_url());
+
+        // 3. 开始根据 merge 客户端，获取该账户的推送流链接
+        BinanceWSAccountStreamClient binanceWSAccountStreamClient = accountMergeClient.addAccountStream(asKey, accountEvent -> resolveAccountEvent(userId, accountEvent));
+
+        // 4. 开始账户信息推送流
+        binanceWSAccountStreamClient.startAccountInfoStream().get();
+
+        return binanceWSAccountStreamClient;
+
+    }
+
+
+    private void resolveAccountEvent(long userId, AccountEvent accountEvent) {
+
+    }
+}
+
+
+package com.helei.reaktimedatacenter.service.impl;
+
+import com.helei.dto.ASKey;
+import com.helei.dto.account.UserAccountInfo;
+import com.helei.dto.account.UserInfo;
+import com.helei.reaktimedatacenter.service.UserService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.List;
+
+
+@Slf4j
+@Service
+public class UserServiceImpl implements UserService {
+
+
+    @Override
+    public List<UserInfo> queryAll() {
+        List<UserInfo> list = new ArrayList<>();
+        //TODO 查数据库
+
+        UserInfo u_contract_test_net_account = UserInfo.builder()
+                .id(1)
+                .username("合约测试网账号")
+                .password("123456")
+                .accountInfos(List.of(
+                  UserAccountInfo
+                          .builder()
+                          .userId(1)
+                          .asKey(new ASKey("b252246c6c6e81b64b8ff52caf6b8f37471187b1b9086399e27f6911242cbc66", "a4ed1b1addad2a49d13e08644f0cc8fc02a5c14c3511d374eac4e37763cadf5f"))
+                          .subscribeSymbol(List.of("btcusdt", "ethusdt", "solusdt"))
+                          .build()
+                ))
+                .build();
+        UserInfo spot_test_net_account = UserInfo.builder()
+                .id(2)
+                .username("现货测试网账号")
+                .password("123456")
+                .accountInfos(List.of(
+                        UserAccountInfo
+                                .builder()
+                                .userId(1)
+                                .subscribeSymbol(List.of("btcusdt", "ethusdt", "solusdt"))
+                                .asKey(new ASKey("1JIhkPyK07xadG9x8hIwqitN95MgpypPzA4b6TLraTonRnJ8BBJQlaO2iL9tPH0Y", "t84TYFR1zieMGncbw3kYq4zAPLxIJHJeMdD8V0FMKxij9fApojV6bhbDpyyjNDWt"))
+                                .build()
+                ))
+                .build();
+
+        UserInfo binance_account = UserInfo.builder()
+                .id(3)
+                .username("正式网账号")
+                .password("123456")
+                .accountInfos(List.of(
+                        UserAccountInfo
+                                .builder()
+                                .userId(1)
+                                .subscribeSymbol(List.of("btcusdt", "ethusdt", "solusdt"))
+                                .asKey(new ASKey("TUFsFL4YrBsR4fnBqgewxiGfL3Su5L9plcjZuyRO3cq6M1yuwV3eiNX1LcMamYxz", "YsLzVacYo8eOGlZZ7RjznyWVjPHltIXzZJz2BrggCmCUDcW75FyFEv0uKyLBVAuU"))
+                                .build()
+                ))
+                .build();
+
+
+        list.add(u_contract_test_net_account);
+        list.add(spot_test_net_account);
+        list.add(binance_account);
+        return list;
+    }
+}
+
+
+package com.helei.reaktimedatacenter.service;
+
+public interface AccountRealtimeDataService {
+
+
+}
+
+
+
+
+
+package com.helei.reaktimedatacenter.service;
+
+import com.helei.dto.account.UserInfo;
+
+import java.util.List;
+
+public interface UserService {
+
+    /**
+     * 查询所有user
+     * @return UserInfo list
+     */
+    List<UserInfo> queryAll();
+}
+
+
+
+
+
+package com.helei.tradesignalcenter.conventor;
+
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.dto.account.AccountBalanceInfo;
+import com.helei.dto.AssetInfo;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class AccountInfoMapper {
+
+    public static AccountBalanceInfo mapJsonToAccountInfo(JSONObject jsonObject) {
+        if (jsonObject == null) {
+            return null;
+        }
+        JSONObject infoJSON = jsonObject.getJSONObject("result");
+
+        AccountBalanceInfo accountBalanceInfo = new AccountBalanceInfo();
+        accountBalanceInfo.setUId(infoJSON.getString("uid"));
+        accountBalanceInfo.setAccountType(infoJSON.getString("accountType"));
+
+        List<AssetInfo> balances = new ArrayList<>();
+
+        JSONArray bArr = infoJSON.getJSONArray("balances");
+        for (int i = 0; i < bArr.size(); i++) {
+            JSONObject jb = bArr.getJSONObject(i);
+            balances.add(new AssetInfo(jb.getString("asset"), jb.getDouble("free"), jb.getDouble("locked")));
+        }
+
+        accountBalanceInfo.setBalances(balances);
+        return accountBalanceInfo;
+    }
+
+}
+
+
+
+
+
+
