@@ -1,0 +1,110 @@
+import org.apache.flink.api.common.serialization.SimpleStringSchema;
+import org.apache.flink.api.common.state.ListState;
+import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.runtime.state.FunctionInitializationContext;
+import org.apache.flink.runtime.state.FunctionSnapshotContext;
+import org.apache.flink.streaming.api.CheckpointingMode;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.sink.TwoPhaseCommitSinkFunction;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.ProducerRecord;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.util.Properties;
+
+public class TwoPhaseCommitExample {
+
+    public static void main(String[] args) throws Exception {
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        env.enableCheckpointing(5000, CheckpointingMode.EXACTLY_ONCE);
+
+        // 示例数据流
+        DataStream<String> stream = ...;
+
+        // 添加两阶段提交的自定义 Sink
+        stream.addSink(new MyTwoPhaseCommitSink()).name("TwoPhaseCommitSink");
+
+        env.execute("Flink Two-Phase Commit Example");
+    }
+
+    // 自定义的两阶段提交 Sink
+    public static class MyTwoPhaseCommitSink extends TwoPhaseCommitSinkFunction<String, Connection, Void> {
+
+        private static final String DB_URL = "jdbc:mysql://localhost:3306/database";
+        private static final String USER = "username";
+        private static final String PASSWORD = "password";
+        private transient KafkaProducer<String, String> producer;
+
+        public MyTwoPhaseCommitSink() {
+            super(TypeInformation.of(Connection.class));
+        }
+
+        @Override
+        protected Connection beginTransaction() throws Exception {
+            // 开始事务，创建数据库连接
+            Connection conn = DriverManager.getConnection(DB_URL, USER, PASSWORD);
+            conn.setAutoCommit(false); // 禁用自动提交，确保事务性
+            return conn;
+        }
+
+        @Override
+        protected void invoke(Connection transaction, String value, Context context) throws Exception {
+            // 将数据写入数据库，未提交
+            PreparedStatement statement = transaction.prepareStatement("INSERT INTO target_table (data) VALUES (?)");
+            statement.setString(1, value);
+            statement.executeUpdate();
+            statement.close();
+        }
+
+        @Override
+        protected void preCommit(Connection transaction) throws Exception {
+            // 此处无需操作，等待提交阶段
+        }
+
+        @Override
+        protected void commit(Connection transaction) {
+            try {
+                transaction.commit(); // 提交数据库事务
+                transaction.close();  // 关闭连接
+            } catch (SQLException e) {
+                throw new RuntimeException("Failed to commit transaction", e);
+            }
+            // 将数据写入 Kafka
+            producer.send(new ProducerRecord<>("output_topic", "value"));
+        }
+
+        @Override
+        protected void abort(Connection transaction) {
+            try {
+                transaction.rollback(); // 回滚事务
+                transaction.close();  // 关闭连接
+            } catch (SQLException e) {
+                throw new RuntimeException("Failed to abort transaction", e);
+            }
+        }
+
+        @Override
+        public void open(Configuration parameters) throws Exception {
+            super.open(parameters);
+            // 初始化 Kafka 生产者
+            Properties props = new Properties();
+            props.put("bootstrap.servers", "localhost:9092");
+            props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+            props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+            producer = new KafkaProducer<>(props);
+        }
+
+        @Override
+        public void close() throws Exception {
+            super.close();
+            if (producer != null) {
+                producer.close();
+            }
+        }
+    }
+}
