@@ -1,119 +1,162 @@
+package com.helei.constants;
+
+
+/**
+ * 持仓方向
+ */
+public enum PositionSide {
+
+    BOTH,
+    LONG,
+    SHORT,
+    ;
+}
+
+
+package com.helei.constants;
+
+
+/**
+ * 交易方向
+ */
+public enum TradeSide {
+    BUY,
+    SALE
+    ;
+}
+
+
 package com.helei.dto.account;
 
+import com.helei.constants.order.OrderType;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.io.Serializable;
 
 /**
- * 账户实时数据
+ * 账户仓位设置
  */
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class AccountRTData {
+public class AccountPositionConfig implements Serializable {
 
+    /**
+     * 订单类型
+     */
+    private OrderType orderType = OrderType.LIMIT;
+
+    /**
+     * 风险百分比
+     */
+    private double riskPercent;
+
+    /**
+     * 杠杠倍数
+     */
+    private int leverage;
+
+
+    /**
+     * 止损金额
+     */
+    private int stopLoss;
+
+}
+
+package com.helei.dto.account;
+
+
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.TradeType;
+import com.helei.dto.ASKey;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.io.Serializable;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@Builder
+public class UserAccountInfo implements Serializable {
+
+    /**
+     * 账户id
+     */
+    private long id;
+
+    /**
+     * 用户id
+     */
     private long userId;
 
-    private long accountId;
+    /**
+     * 验证key
+     */
+    private ASKey asKey;
 
+    /**
+     * 是否可用
+     */
+    private final AtomicBoolean usable = new AtomicBoolean(false);
+
+    /**
+     * 运行环境，测试网还是主网
+     */
+    private RunEnv runEnv;
+
+    /**
+     * 交易类型
+     */
+    private TradeType tradeType;
+
+    /**
+     * 账户交易所类型
+     */
+    private CEXType cexType = CEXType.BINANCE;
+
+    /**
+     * 订阅的交易对
+     */
+    private List<String> subscribeSymbol;
+
+    /**
+     * 账户仓位设置
+     */
+    private AccountPositionConfig accountPositionConfig;
 
     /**
      * 账户资金信息
      */
-    private AccountBalanceInfo accountBalanceInfo;
+    private final AccountBalanceInfo accountBalanceInfo = new AccountBalanceInfo();
 
 
     /**
      * 账户仓位信息
      */
-    private AccountPositionInfo accountPositionInfo;
-}
-package com.helei.dto.kafka;
+    private final AccountPositionInfo accountPositionInfo = new AccountPositionInfo();
 
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-public class KafkaConfig {
-
-    private String bootstrap_servers;
-
-    private String group_id;
-
-    /**
-     * kafka写入实时k线时设置几个分区
-     */
-    private int kafka_kline_num_partitions;
-
-    /**
-     * kafka的副本个数
-     */
-    private short kafka_kline_replication_factor;
-
-}
-package com.helei.dto.trade;
-
-import com.helei.constants.TradeSide;
-import lombok.*;
-
-import java.math.BigDecimal;
-
-
-/**
- * 原始订单数据
- */
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-@EqualsAndHashCode
-@Builder
-public class TradeSignal {
-
-    /**
-     * 交易对
-     */
-    private String symbol;
-
-    /**
-     * 交易方向
-     */
-    private TradeSide tradeSide;
-
-    /**
-     * 目标价格
-     */
-    private BigDecimal targetPrice;
-
-    /**
-     * 进场价格
-     */
-    private BigDecimal enterPrice;
-
-    /**
-     * 止损价格
-     */
-    private BigDecimal stopPrice;
-
-    /**
-     * 信号创建时间戳
-     */
-    private long createTimestamp;
-
-    /**
-     * 信号创建的k线open时间
-     */
-    private long createKLineOpenTimestamp;
+    public void setId(long id) {
+        this.id = id;
+        this.accountBalanceInfo.setAccountId(id);
+        this.accountPositionInfo.setAccountId(id);
+    }
 }
 
 
-package com.helei.dto.Config;
+package com.helei.dto.config;
 
 
 import com.alibaba.fastjson.annotation.JSONField;
+import com.helei.constants.CEXType;
 import com.helei.constants.RunEnv;
 import com.helei.constants.TradeType;
 import com.helei.dto.base.KeyValue;
@@ -156,6 +199,8 @@ public class RunTypeConfig {
     public static class RunEnvTradeTypeConfig {
         private RunEnv env;
 
+        private CEXType cexType = CEXType.BINANCE;
+
         private List<TradeType> trade_type;
 
         @JSONField(serialize = false)
@@ -165,517 +210,772 @@ public class RunTypeConfig {
     }
 }
 
+package com.helei.dto.kafka;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+public class KafkaConfig {
+
+    private String bootstrap_servers;
+
+    private String group_id = "default_group";
+
+    /**
+     * kafka写入实时k线时设置几个分区
+     */
+    private int kafka_num_partitions;
+
+    /**
+     * kafka的副本个数
+     */
+    private short kafka_replication_factor;
+
+}
+
+
+package com.helei.dto.order;
+
+import com.helei.constants.*;
+import com.helei.constants.order.OrderStatus;
+import com.helei.constants.order.OrderType;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+
+@Data
+@AllArgsConstructor
+@EqualsAndHashCode
+public class BaseOrder {
+
+    /**
+     * 订单类型
+     */
+    private final OrderType orderType;
+
+    /**
+     * 交易对
+     */
+    private String symbol;
+
+    /**
+     * 交易方向
+     */
+    private TradeSide side;
+
+    /**
+     * apikey
+     */
+    private String apiKey;
+
+    /**
+     * 签名
+     */
+    private String signature;
+
+    private Long recvWindow;
+
+    private Long timestamp;
+
+
+    /**
+     * 持仓方向
+     */
+    private PositionSide positionSide;
+
+    /**
+     * 运行环境
+     */
+    private RunEnv runEnv;
+
+    /**
+     * 交易类型
+     */
+    private TradeType tradeType;
+
+    /**
+     * 交易所类型
+     */
+    private CEXType cexType = CEXType.BINANCE;
+
+    /**
+     * 用户id
+     */
+    private long userId;
+
+    /**
+     * 用户的账户id
+     */
+    private long accountId;
+
+    /**
+     * 订单状态
+     */
+    private OrderStatus orderStatus;
+
+
+    public BaseOrder(OrderType orderType) {
+        this.orderType = orderType;
+    }
+}
+
+package com.helei.dto.order;
+
+import com.helei.binanceapi.constants.TimeInForce;
+import com.helei.binanceapi.constants.order.OrderType;
+import lombok.*;
+
+import java.math.BigDecimal;
+
+/**
+ * 限价单
+ */
+@Getter
+@Setter
+@EqualsAndHashCode(callSuper = true)
+public class LimitOrder extends BaseOrder {
+
+    /**
+     * 有效成交方式
+     */
+    private TimeInForce timeInForce;
+
+    /**
+     * 价格
+     */
+    private BigDecimal price;
+
+    /**
+     * 量
+     */
+    private BigDecimal quantity;
+
+    public LimitOrder() {
+        super(OrderType.LIMIT);
+    }
+}
+
+
+package com.helei.dto.order;
+
+import com.helei.binanceapi.constants.order.OrderType;
+import lombok.*;
+
+import java.math.BigDecimal;
+
+/**
+ * 市价单
+ */
+@Getter
+@Setter
+@EqualsAndHashCode(callSuper = true)
+public class MarketOrder extends BaseOrder {
+
+
+
+    /**
+     * 量
+     */
+    private BigDecimal quantity;
+
+    /**
+     *
+     */
+    private BigDecimal quoteOrderQty;
+
+    public MarketOrder() {
+        super(OrderType.MARKET);
+    }
+}
+
+
+package com.helei.dto.order;
+
+import com.helei.binanceapi.constants.TimeInForce;
+import com.helei.binanceapi.constants.order.OrderType;
+import lombok.*;
+
+import java.math.BigDecimal;
+
+/**
+ * 限价止损单
+ */
+@Getter
+@Setter
+@EqualsAndHashCode(callSuper = true)
+public class StopLossLimitOrder extends BaseOrder {
+
+
+    /**
+     * 有效成交方式
+     */
+    private TimeInForce timeInForce;
+    /**
+     * 价格
+     */
+    private BigDecimal price;
+
+    /**
+     * 量
+     */
+    private BigDecimal quantity;
+
+
+    /**
+     * 止损
+     */
+    private BigDecimal stopPrice;
+
+    /**
+     * 移动止损
+     */
+    private Integer trailingDelta;
+
+    public StopLossLimitOrder() {
+        super(OrderType.STOP_LIMIT);
+    }
+}
+
+
+package com.helei.dto.order;
+
+import com.helei.binanceapi.constants.order.OrderType;
+import lombok.*;
+
+import java.math.BigDecimal;
+
+
+/**
+ * 止损单
+ */
+@Getter
+@Setter
+@EqualsAndHashCode(callSuper = true)
+public class StopLossOrder extends BaseOrder {
+
+    /**
+     * 量
+     */
+    private BigDecimal quantity;
+
+
+    /**
+     * 止损
+     */
+    private BigDecimal stopPrice;
+
+    /**
+     * 移动止损
+     */
+    private Integer trailingDelta;
+
+    public StopLossOrder() {
+        super(OrderType.STOP_MARKET);
+    }
+}
+
+
+
+
+package com.helei.dto.order;
+
+import com.helei.binanceapi.constants.TimeInForce;
+import com.helei.binanceapi.constants.order.OrderType;
+import lombok.*;
+
+import java.math.BigDecimal;
+
+
+/**
+ * 限价止盈单
+ */
+@Getter
+@Setter
+@EqualsAndHashCode(callSuper = true)
+public class TakeProfitLimitOrder extends BaseOrder {
+
+
+    /**
+     * 有效成交方式
+     */
+    private TimeInForce timeInForce;
+    /**
+     * 价格
+     */
+    private BigDecimal price;
+
+    /**
+     * 量
+     */
+    private BigDecimal quantity;
+
+
+    /**
+     * 止损
+     */
+    private BigDecimal stopPrice;
+
+    /**
+     * 移动止损
+     */
+    private Integer trailingDelta;
+
+    public TakeProfitLimitOrder() {
+        super(OrderType.TAKE_PROFIT_LIMIT);
+    }
+}
+
+
+
+package com.helei.dto.order;
+
+import com.helei.binanceapi.constants.order.OrderType;
+import lombok.*;
+
+import java.math.BigDecimal;
+
+/**
+ * 止盈单
+ */
+@Getter
+@Setter
+@EqualsAndHashCode(callSuper = true)
+public class TakeProfitOrder extends BaseOrder {
+
+
+    /**
+     * 量
+     */
+    private BigDecimal quantity;
+
+    /**
+     * 止损
+     */
+    private BigDecimal stopPrice;
+
+    /**
+     * 移动止损
+     */
+    private Integer trailingDelta;
+
+    public TakeProfitOrder() {
+        super(OrderType.TAKE_PROFIT_MARKET);
+    }
+}
+
+
+package com.helei.dto.order;
+
+import com.helei.binanceapi.constants.TimeInForce;
+import com.helei.binanceapi.constants.order.OrderRespType;
+
+import java.math.BigDecimal;
+
+@Deprecated
+public class TradeOrder {
+
+
+    /**
+     * 有效成交方式
+     */
+    private TimeInForce timeInForce;
+
+    /**
+     * 价格
+     */
+    private BigDecimal price;
+
+    /**
+     * 量
+     */
+    private BigDecimal quantity;
+
+    /**
+     *
+     */
+    private BigDecimal quoteOrderQty;
+
+    /**
+     * 客户自定义的唯一订单ID。如果未发送，则自动生成。
+     */
+    private String newClientOrderId;
+
+    /**
+     * 响应格式
+     */
+    private OrderRespType newOrderRespType;
+
+
+    /**
+     * 止损
+     */
+    private BigDecimal stopPrice;
+
+    /**
+     * 移动止损
+     */
+    private Integer trailingDelta;
+
+
+    private BigDecimal icebergQty;
+
+    /**
+     * 标识订单策略中订单的任意ID。
+     */
+    private Integer strategyId;
+
+    /**
+     * 标识订单策略的任意数值。
+     * 小于1000000的值是保留的，不能使用。
+     */
+    private Integer strategyType;
+
+
+}
+
+
+
 
 
 package com.helei.util;
 
-import com.helei.constants.RunEnv;
-import com.helei.constants.TradeType;
-
-
-public class RedisKeyUtil {
-
-    private static final String USER_ACCOUNT_PREFIX = "user";
-
-    public static String getUserAccountInfoKey(long userId, long accountId, RunEnv runEnv, TradeType tradeType) {
-
-        return USER_ACCOUNT_PREFIX + ":" + userId + ":" + accountId + ":" + runEnv + ":" + tradeType;
-    }
-
-    public static String getEnvKey(RunEnv runEnv, TradeType tradeType) {
-        return runEnv.getDeclaringClass() + ":" + tradeType.getDescription();
-    }
-
-    public static String getUserEnvKey(RunEnv runEnv, TradeType tradeType) {
-        return getEnvKey(runEnv, tradeType) + ":" + USER_ACCOUNT_PREFIX;
-    }
-
-    public static String getUserInfoPattern(RunEnv runEnv, TradeType tradeType) {
-        return getUserEnvKey(runEnv, tradeType) + ":id:*";
-    }
-
-
-    /**
-     * 获取用户账户实时数据的key
-     *
-     * @param runEnv    runEnv
-     * @param tradeType tradeType
-     * @return String
-     */
-    public static String getUserAccountEnvRTDataKey(RunEnv runEnv, TradeType tradeType) {
-        return getUserEnvKey(runEnv, tradeType) + ":realtime_account_data";
-    }
-}
-
-package com.helei.reaktimedatacenter.config;
-
-
-import com.helei.binanceapi.config.BinanceApiConfig;
+import com.helei.constants.CEXType;
 import com.helei.constants.KLineInterval;
 import com.helei.constants.RunEnv;
 import com.helei.constants.TradeType;
-import com.helei.dto.Config.RunTypeConfig;
-import com.helei.dto.kafka.KafkaConfig;
-import com.helei.dto.kafka.RedisConfig;
-import com.helei.reaktimedatacenter.dto.SymbolKLineInfo;
-import lombok.Data;
-import org.yaml.snakeyaml.Yaml;
 
-import java.io.InputStream;
-import java.util.*;
-import java.util.stream.Collectors;
+public class KafkaUtil {
 
-@Data
-public class RealtimeConfig {
-    private static final String CONFIG_FILE = "realtime-data-config.yaml";
+    public static final String TOPIC_KLINE_FORMAT = "topic.%s.%s.%s.%s";
 
-    public static final RealtimeConfig INSTANCE;
+    private static final String TOPIC_ORDER_FORMAT = "topic.%s.%s.order.%s";
 
-    private RunTypeConfig run_type;
-
-    private KafkaConfig kafka;
-
-    private RedisConfig redis;
-
-    private RealtimeEnvConfig normal;
-
-    private RealtimeEnvConfig test_net;
-
-    static {
-        Yaml yaml = new Yaml();
-        try (InputStream inputStream = BinanceApiConfig.class.getClassLoader().getResourceAsStream(CONFIG_FILE)) {
-            if (inputStream == null) {
-                throw new IllegalArgumentException("File not found: " + CONFIG_FILE);
-            }
-            Map<String, Object> yamlData = yaml.load(inputStream);
-            Map<String, Object> shinano = (Map<String, Object>) yamlData.get("shinano");
-            Map<String, Object> quantity = (Map<String, Object>) shinano.get("quantity");
-            Map<String, Object> realtime = (Map<String, Object>) quantity.get("realtime");
-
-            INSTANCE = yaml.loadAs(yaml.dump(realtime), RealtimeConfig.class);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to load YAML file: " + CONFIG_FILE, e);
-        }
+    /**
+     * 获取kafka里topic的名字
+     *
+     * @param cexType    cexType
+     * @param streamName streamName
+     * @param runEnv     runEnv
+     * @param type       type 合约或现货
+     * @return topic
+     */
+    public static String resolveKafkaTopic(CEXType cexType, String streamName, RunEnv runEnv, TradeType type) {
+        streamName = streamName.replace("@", "_");
+        return String.format(TOPIC_KLINE_FORMAT, cexType.getDescription(), streamName, runEnv.name().toLowerCase(), type.getDescription()).toLowerCase();
     }
 
     /**
-     * 根据env 和 tradeType。选取合适的实时k线数据设置
+     * 获取写入订单的topic
+     *
      * @param runEnv runEnv
-     * @param tradeType tradeType
-     * @return RealtimeKLineDataConfig 誓死k线数据设置
+     * @param type   tradeType
+     * @param symbol 交易对
+     * @return topic
      */
-    public RealtimeKLineDataConfig getEnvKLineDataConfig(RunEnv runEnv, TradeType tradeType) {
-        return switch (runEnv) {
-            case NORMAL -> normal.getRTKLineDataConfigByTradeType(tradeType);
-            case TEST_NET -> test_net.getRTKLineDataConfigByTradeType(tradeType);
-        };
+    public static String getOrderSymbolTopic(RunEnv runEnv, TradeType type, String symbol) {
+        return String.format(TOPIC_ORDER_FORMAT, runEnv.name(), type.name(), symbol);
     }
 
 
-    @Data
-    public static class RealtimeEnvConfig {
-
-
-        /**
-         * 现货设置
-         */
-        private RealtimeKLineDataConfig spot;
-
-        /**
-         * 合约设置
-         */
-        private RealtimeKLineDataConfig contract;
-
-
-        public RealtimeKLineDataConfig getRTKLineDataConfigByTradeType(TradeType tradeType) {
-            return switch (tradeType) {
-                case SPOT -> spot;
-                case CONTRACT -> contract;
-            };
-        }
-    }
-
-    @Data
-    public static class RealtimeKLineDataConfig {
-
-        private List<String> listen_kline;
-
-        /**
-         * 客户端监听k线最大的数量
-         */
-        private int client_listen_kline_max_count = 20;
-
-        /**
-         * 实时的k线种类
-         */
-        private List<SymbolKLineInfo> realtimeKLineList;
-
-
-        public void setListen_kline(List<String> listen_kline) {
-            realtimeKLineList = listen_kline.stream().map(s -> {
-                String[] split = s.split("@");
-                String symbol = split[0];
-                Set<KLineInterval> set = Arrays.stream(split[1].split(","))
-                        .map(KLineInterval.STATUS_MAP::get)
-                        .filter(Objects::nonNull)
-                        .collect(Collectors.toSet());
-                return new SymbolKLineInfo(symbol, set);
-            }).collect(Collectors.toList());
-
-            this.listen_kline = listen_kline;
-        }
-    }
-
-    public static void main(String[] args) {
-        System.out.println(
-                INSTANCE
-        );
+    public static String getKLineStreamName(String symbol, KLineInterval interval) {
+        return symbol + "_kline_" + interval.getDescribe();
     }
 }
 
 
-package com.helei.reaktimedatacenter.service.impl;
-
-import com.helei.reaktimedatacenter.service.RedisService;
-import org.redisson.api.RBucket;
-import org.redisson.api.RLock;
-import org.redisson.api.RedissonClient;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-
-import java.util.concurrent.TimeUnit;
-
-@Service
-public class RedisServiceImpl implements RedisService {
-
-    private static final String REDIS_LOCK_PREFIX = "REDIS_LOCK:";
 
 
-    @Autowired
-    private RedissonClient redissonClient;
+package com.helei.interfaces;
 
 
-    /**
-     * 写入key value值
-     * @param key key
-     * @param value value
-     */
-    public void saveKeyValue(String key, Object value) {
-        RBucket<Object> bucket = redissonClient.getBucket(key);
-        bucket.set(value);  // 写入 Redis
-    }
 
-    @Override
-    public void saveHashKeyValue(String key, String hashKey, String value) {
-        redissonClient.getMap(key).put(hashKey, value);
-    }
+public interface CompleteInvocation<T> {
 
+    void success(T t);
 
-    public void safeInvoke(
-            String key,
-            long releaseTime,
-            TimeUnit timeUnit,
-            Runnable accountUpdateTask
-    ) {
-        RLock lock = redissonClient.getLock(REDIS_LOCK_PREFIX + key);
+    void fail(T t, String errorMsg);
 
-        try {
-            lock.lock(releaseTime, timeUnit);
-            accountUpdateTask.run();
-        } finally {
-            lock.unlock();
-        }
-    }
-
+    void finish();
 }
 
 
-package com.helei.reaktimedatacenter.service.impl;
+
+
+
+
+package com.helei.binanceapi.supporter;
 
 import com.alibaba.fastjson.JSONObject;
-import com.helei.constants.RunEnv;
-import com.helei.constants.TradeType;
-import com.helei.dto.ASKey;
-import com.helei.dto.account.AccountRTData;
-import com.helei.dto.account.UserAccountInfo;
-import com.helei.dto.account.UserInfo;
-import com.helei.reaktimedatacenter.service.UserService;
-import com.helei.reaktimedatacenter.supporter.BatchWriteSupporter;
-import com.helei.util.RedisKeyUtil;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
+import com.helei.binanceapi.constants.TimeInForce;
+import com.helei.binanceapi.constants.order .*;
+        import com.helei.binanceapi.constants.strategy.StrategyOPCode;
+import com.helei.binanceapi.constants.strategy.StrategyStatus;
+import com.helei.binanceapi.constants.strategy.StrategyType;
+import com.helei.binanceapi.dto.accountevent .*;
+import com.helei.constants.MarginMode;
+import com.helei.constants.PositionSide;
+import com.helei.constants.TradeSide;
+import com.helei.constants.order.*;
 
 import java.util.ArrayList;
 import java.util.List;
 
-
-@Slf4j
-@Service
-public class UserServiceImpl implements UserService {
+public interface AccountEventConverter {
+    AccountEvent convertFromJsonObject(JSONObject jsonObject);
 
 
-    @Autowired
-    private BatchWriteSupporter batchWriteSupporter;
-
-
-    @Override
-    public List<UserInfo> queryAll() {
-        List<UserInfo> list = new ArrayList<>();
-        //TODO 查数据库
-
-        UserInfo u_contract_test_net_account = UserInfo.builder()
-                .id(1)
-                .username("合约测试网账号")
-                .password("123456")
-                .accountInfos(List.of(
-                        UserAccountInfo
-                                .builder()
-                                .id(1)
-                                .userId(1)
-                                .asKey(new ASKey("b252246c6c6e81b64b8ff52caf6b8f37471187b1b9086399e27f6911242cbc66", "a4ed1b1addad2a49d13e08644f0cc8fc02a5c14c3511d374eac4e37763cadf5f"))
-                                .subscribeSymbol(List.of("btcusdt", "ethusdt", "solusdt"))
-                                .runEnv(RunEnv.TEST_NET)
-                                .tradeType(TradeType.CONTRACT)
-                                .build()
-                ))
-                .build();
-        UserInfo spot_test_net_account = UserInfo.builder()
-                .id(2)
-                .username("现货测试网账号")
-                .password("123456")
-                .accountInfos(List.of(
-                        UserAccountInfo
-                                .builder()
-                                .id(2)
-                                .userId(1)
-                                .subscribeSymbol(List.of("btcusdt", "ethusdt", "solusdt"))
-                                .asKey(new ASKey("1JIhkPyK07xadG9x8hIwqitN95MgpypPzA4b6TLraTonRnJ8BBJQlaO2iL9tPH0Y", "t84TYFR1zieMGncbw3kYq4zAPLxIJHJeMdD8V0FMKxij9fApojV6bhbDpyyjNDWt"))
-                                .runEnv(RunEnv.TEST_NET)
-                                .tradeType(TradeType.CONTRACT)
-                                .build()
-                ))
-                .build();
-
-        UserInfo binance_account = UserInfo.builder()
-                .id(3)
-                .username("正式网账号")
-                .password("123456")
-                .accountInfos(List.of(
-                        UserAccountInfo
-                                .builder()
-                                .id(3)
-                                .userId(1)
-                                .subscribeSymbol(List.of("btcusdt", "ethusdt", "solusdt"))
-                                .asKey(new ASKey("TUFsFL4YrBsR4fnBqgewxiGfL3Su5L9plcjZuyRO3cq6M1yuwV3eiNX1LcMamYxz", "YsLzVacYo8eOGlZZ7RjznyWVjPHltIXzZJz2BrggCmCUDcW75FyFEv0uKyLBVAuU"))
-                                .runEnv(RunEnv.TEST_NET)
-                                .tradeType(TradeType.CONTRACT)
-                                .build()
-                ))
-                .build();
-
-
-        list.add(u_contract_test_net_account);
-        list.add(spot_test_net_account);
-        list.add(binance_account);
-        return list;
-    }
-
-
-    /**
-     * 更新用户账户信息
-     *
-     * @param userAccountInfo userAccountInfo
-     */
-    @Override
-    public void updateUserAccountInfo(UserAccountInfo userAccountInfo) {
-//        String key = RedisKeyUtil.getUserAccountInfoKey(
-//                userAccountInfo.getUserId(),
-//                userAccountInfo.getId(),
-//                userAccountInfo.getRunEnv(),
-//                userAccountInfo.getTradeType()
-//        );
-
-        long accountId = userAccountInfo.getId();
-        long userId = userAccountInfo.getUserId();
-
-        String key = RedisKeyUtil.getUserAccountEnvRTDataKey(userAccountInfo.getRunEnv(), userAccountInfo.getTradeType());
-        String hashKey = String.valueOf(accountId);
-
-        //只发实时的部分数据
-        String value = JSONObject.toJSONString(new AccountRTData(userId, accountId, userAccountInfo.getAccountBalanceInfo(), userAccountInfo.getAccountPositionInfo()));
-
-        log.info("更新账户信息，key[{}], value[{}]", key, value);
-//        batchWriteSupporter.writeToRedis(key, value);
-        batchWriteSupporter.writeToRedisHash(key, hashKey, value);
-    }
-}
-
-package com.helei.reaktimedatacenter.service;
-
-public interface RedisService {
-
-
-    void saveKeyValue(String key, Object value);
-
-    void saveHashKeyValue(String key, String hashKey, String value);
-}
-
-package com.helei.reaktimedatacenter.supporter;
-
-
-import com.helei.dto.base.KeyValue;
-import com.helei.reaktimedatacenter.manager.ExecutorServiceManager;
-import com.helei.reaktimedatacenter.service.RedisService;
-import lombok.extern.slf4j.Slf4j;
-import org.redisson.api.RBucket;
-import org.redisson.api.RedissonClient;
-import org.springframework.beans.factory.InitializingBean;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
-
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-@Slf4j
-@Component
-public class BatchWriteSupporter implements InitializingBean {
-
-
-    /**
-     * redis 批量写入的阀值
-     */
-    private static final int REDIS_BATCH_SIZE = 5;
-
-    /**
-     * redis 批量写入的间隔
-     */
-    private static final int REDIS_BATCH_INTERVAL = 1000;
-
-
-    /**
-     * 是否在运行
-     */
-    private volatile boolean isRunning = true;
-
-
-    /**
-     * 缓存redis key - < UpdateCount,value>
-     */
-    private final ConcurrentHashMap<String, KeyValue<Integer, String>> redisKVMap = new ConcurrentHashMap<>();
-
-    @Autowired
-    private RedissonClient redissonClient;
-
-    @Autowired
-    private ExecutorServiceManager executorServiceManager;
-
-
-    /**
-     * 写入redis
-     *
-     * @param key   key
-     * @param value value
-     */
-    public void writeToRedis(String key, String value) {
-        AtomicBoolean isWrite = new AtomicBoolean(false);
-
-        redisKVMap.compute(key, (k, v) -> {
-            if (v == null) {
-                v = new KeyValue<>(0, "");
+    enum Converter implements AccountEventConverter {
+        LISTEN_KEY_EXPIRED {
+            @Override
+            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
+                return new ListenKeyExpireEvent(jsonObject.getLong("E"));
             }
-            v.setKey(v.getKey() + 1);
-            v.setValue(value);
+        },
+        ACCOUNT_UPDATE {
+            @Override
+            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
+                BalancePositionUpdateEvent event = new BalancePositionUpdateEvent(jsonObject.getLong("E"));
+                event.setMatchMakingTime(jsonObject.getLong("T"));
 
-            if (v.getKey() >= REDIS_BATCH_SIZE) isWrite.set(true);
-            return v;
-        });
+                JSONObject a = jsonObject.getJSONObject("a");
+                event.setReason(BalancePositionUpdateEvent.BPUpdateReason.valueOf(a.getString("m")));
 
-        if (isWrite.get()) {
-            batchWriteRedis(key);
-        }
-    }
+                List<BalancePositionUpdateEvent.BalanceChangeInfo> bList = new ArrayList<>();
+                for (int i = 0; i < a.getJSONArray("B").size(); i++) {
+                    JSONObject jb = a.getJSONArray("B").getJSONObject(i);
+                    BalancePositionUpdateEvent.BalanceChangeInfo changeInfo = new BalancePositionUpdateEvent.BalanceChangeInfo();
+                    changeInfo.setAsset(jb.getString("a"));
+                    changeInfo.setWalletBalance(jb.getDouble("wb"));
+                    changeInfo.setBailRemoveWalletBalance(jb.getDouble("cw"));
+                    changeInfo.setWalletBalanceChange(jb.getDouble("bc"));
+                    bList.add(changeInfo);
+                }
+                event.setBalanceChangeInfos(bList);
 
+                List<BalancePositionUpdateEvent.PositionChangeInfo> pList = new ArrayList<>();
+                for (int i = 0; i < a.getJSONArray("P").size(); i++) {
+                    JSONObject jb = a.getJSONArray("P").getJSONObject(i);
+                    BalancePositionUpdateEvent.PositionChangeInfo changeInfo = new BalancePositionUpdateEvent.PositionChangeInfo();
+                    changeInfo.setSymbol(jb.getString("s"));
+                    changeInfo.setPosition(jb.getDouble("pa"));
+                    changeInfo.setEnterPosition(jb.getDouble("ep"));
+                    changeInfo.setBalanceEqualPrice(jb.getDouble("bep"));
+                    changeInfo.setCountProfitOrLoss(jb.getDouble("cr"));
+                    changeInfo.setUnrealizedProfitOrLoss(jb.getDouble("up"));
+                    changeInfo.setMarginMode(MarginMode.valueOf(jb.getString("mt").toUpperCase()));
+                    changeInfo.setBail(jb.getDouble("iw"));
+                    changeInfo.setPositionSide(PositionSide.STATUS_MAP.get(jb.getString("ps")));
+                    pList.add(changeInfo);
+                }
+                event.setPositionChangeInfos(pList);
+                return event;
+            }
+        },
 
-    /**
-     * 写入redis
-     *
-     * @param key redisKVMap 的key，也是写入redis的key
-     */
-    private void batchWriteRedis(String key) {
-        KeyValue<Integer, String> remove = redisKVMap.remove(key);
-        if (remove != null) {
-            RBucket<Object> bucket = redissonClient.getBucket(key);
-            bucket.set(remove.getValue());  // 写入 Redis
-        }
-    }
+        MARGIN_CALL {
+            @Override
+            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
+                BailNeedEvent event = new BailNeedEvent(jsonObject.getLong("E"));
+                event.setBailRemoveWalletBalance(jsonObject.getDouble("cw"));
 
-    private void batchWriteTask() {
-        try {
-            while (isRunning) {
-                //1.处理redis的
-                for (Map.Entry<String, KeyValue<Integer, String>> entry : redisKVMap.entrySet()) {
-                    batchWriteRedis(entry.getKey());
+                JSONObject p = jsonObject.getJSONObject("p");
+
+                BailNeedEvent.PositionNeedInfo positionNeedInfo = new BailNeedEvent.PositionNeedInfo();
+                positionNeedInfo.setSymbol(p.getString("s"));
+                positionNeedInfo.setPositionSide(PositionSide.STATUS_MAP.get(p.getString("ps")));
+                positionNeedInfo.setPosition(p.getDouble("pa"));
+                positionNeedInfo.setMarginMode(MarginMode.valueOf(p.getString("mt").toUpperCase()));
+                positionNeedInfo.setBail(p.getDouble("iw"));
+                positionNeedInfo.setMarkPrice(p.getDouble("mp"));
+                positionNeedInfo.setUnrealizedProfitOrLoss(p.getDouble("up"));
+                positionNeedInfo.setNeedBail(p.getDouble("mm"));
+
+                return event;
+            }
+        },
+
+        ORDER_TRADE_UPDATE {
+            @Override
+            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
+                OrderTradeUpdateEvent event = new OrderTradeUpdateEvent(jsonObject.getLong("E"));
+                event.setMatchMakingTime(jsonObject.getLong("T"));
+
+                JSONObject o = jsonObject.getJSONObject("o");
+
+                OrderTradeUpdateEvent.OrderTradeUpdateDetails details = new OrderTradeUpdateEvent.OrderTradeUpdateDetails();
+                details.setSymbol(o.getString("s"));
+                details.setClientOrderId(o.getString("c"));
+                details.setOrderSide(TradeSide.STATUS_MAP.get(o.getString("S")));
+                details.setOrderType(OrderType.valueOf(o.getString("o").toUpperCase()));
+                details.setTimeInForce(TimeInForce.STATUS_MAP.get(o.getString("f")));
+                details.setOriginalQuantity(o.getDouble("q"));
+                details.setOriginalPrice(o.getDouble("p"));
+                details.setAveragePrice(o.getDouble("ap"));
+                details.setStopPrice(o.getString("sp"));
+                details.setExecutionType(OrderExcuteType.STATUS_MAP.get(o.getString("x")));
+                details.setOrderStatus(OrderStatus.valueOf(o.getString("X").toUpperCase()));
+                details.setOrderId(o.getLong("i"));
+                details.setLastFilledQuantity(o.getDouble("l"));
+                details.setCumulativeFilledQuantity(o.getDouble("z"));
+                details.setLastFilledPrice(o.getDouble("L"));
+                details.setCommissionAsset(o.getString("N"));
+                details.setCommissionAmount(o.getDouble("n"));
+                details.setTradeTime(o.getLong("T"));
+                details.setTradeId(o.getLong("t"));
+                details.setBuyerNetValue(o.getDouble("b"));
+                details.setSellerNetValue(o.getDouble("a"));
+                details.setMaker(o.getBoolean("m"));
+                details.setReduceOnly(o.getBoolean("R"));
+                details.setWorkingType(WorkingType.STATUS_MAP.get(o.getString("wt")));
+                details.setOriginalOrderType(OrderType.valueOf(o.getString("ot").toUpperCase()));
+                details.setPositionSide(PositionSide.STATUS_MAP.get(o.getString("ps")));
+                details.setClosePosition(o.getBoolean("cp"));
+                details.setActivationPrice(o.getDouble("AP"));
+                details.setCallbackRate(o.getDouble("cr"));
+                details.setPriceProtect(o.getBoolean("pP"));
+                details.setRealizedProfit(o.getDouble("rp"));
+                details.setSelfTradePreventionMode(SelfTradePreventionMode.STATUS_MAP.get(o.getString("V")));
+                details.setOpponentPriceMode(OpponentPriceMode.STATUS_MAP.get(o.getString("pm")));
+                details.setGtdCancelTime(o.getLong("gtd"));
+
+                event.setOrderTradeUpdateDetails(details);
+                return event;
+            }
+        },
+
+        TRADE_LITE {
+            @Override
+            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
+                OrderTradeUpdateLiteEvent event = new OrderTradeUpdateLiteEvent(jsonObject.getLong("E"));
+                event.setTradeTime(jsonObject.getLong("T"));
+                event.setSymbol(jsonObject.getString("s"));
+                event.setOriginalQuantity(jsonObject.getDouble("q"));
+                event.setOriginalPrice(jsonObject.getDouble("p"));
+                event.setIsMaker(jsonObject.getBoolean("m"));
+                event.setClientOrderId(jsonObject.getString("c"));
+                event.setOrderSide(TradeSide.STATUS_MAP.get(jsonObject.getString("S")));
+                event.setLastTradePrice(jsonObject.getDouble("L"));
+                event.setLastTradeQuantity(jsonObject.getDouble("l"));
+                event.setTradeId(jsonObject.getLong("t"));
+                event.setOrderId(jsonObject.getLong("i"));
+                return event;
+            }
+        },
+
+        ACCOUNT_CONFIG_UPDATE {
+            @Override
+            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
+                AccountConfigUpdateEvent event = new AccountConfigUpdateEvent(jsonObject.getLong("E"));
+                event.setMatchMakingTime(jsonObject.getLong("T"));
+
+                JSONObject ac = jsonObject.getJSONObject("ac");
+                if (ac != null) {
+                    AccountConfigUpdateEvent.AccountLeverConfigChangeInfo leverConfigChangeInfo = new AccountConfigUpdateEvent.AccountLeverConfigChangeInfo();
+                    leverConfigChangeInfo.setSymbol(ac.getString("s"));
+                    leverConfigChangeInfo.setLever(ac.getInteger("l"));
+                    event.setLeverChangeInfo(leverConfigChangeInfo);
                 }
 
-                //睡眠一会
-                TimeUnit.MILLISECONDS.sleep(REDIS_BATCH_INTERVAL);
+                JSONObject ai = jsonObject.getJSONObject("ai");
+                if (ai != null) {
+                    AccountConfigUpdateEvent.AccountInfoChangeInfo accountInfoChangeInfo = new AccountConfigUpdateEvent.AccountInfoChangeInfo();
+                    accountInfoChangeInfo.setUnitBailState(ai.getBoolean("j"));
+                    event.setInfoChangeInfo(accountInfoChangeInfo);
+                }
+
+                return event;
             }
-        } catch (Exception e) {
-            log.error("运行批量写入任务失败", e);
+        },
+
+        STRATEGY_UPDATE {
+            @Override
+            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
+                StrategyUpdateEvent event = new StrategyUpdateEvent(jsonObject.getLong("E"));
+                event.setMatchMakingTime(jsonObject.getLong("T"));
+
+                StrategyUpdateEvent.StrategyUpdateInfo updateInfo = new StrategyUpdateEvent.StrategyUpdateInfo();
+                JSONObject su = jsonObject.getJSONObject("su");
+                updateInfo.setStrategyId(su.getLong("si"));
+                updateInfo.setStrategyType(StrategyType.STATUS_MAP.get(su.getString("st")));
+                updateInfo.setStrategyStatus(StrategyStatus.STATUS_MAP.get(su.getString("ss")));
+                updateInfo.setSymbol(su.getString("s"));
+                updateInfo.setUpdateTime(su.getLong("ut"));
+                updateInfo.setStrategyOPCode(StrategyOPCode.STATUS_MAP.get(su.getInteger("c")));
+                event.setStrategyUpdateInfo(updateInfo);
+                return event;
+            }
+        },
+
+        GRID_UPDATE {
+            @Override
+            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
+                GridUpdateEvent event = new GridUpdateEvent(jsonObject.getLong("E"));
+                event.setMatchMakingTime(jsonObject.getLong("T"));
+
+                JSONObject gu = jsonObject.getJSONObject("gu");
+                GridUpdateEvent.GridUpdateInfo updateInfo = new GridUpdateEvent.GridUpdateInfo();
+                updateInfo.setStrategyId(gu.getLong("si"));
+                updateInfo.setStrategyType(StrategyType.STATUS_MAP.get(gu.getString("st")));
+                updateInfo.setStrategyStatus(StrategyStatus.STATUS_MAP.get(gu.getString("ss")));
+                updateInfo.setSymbol(gu.getString("s"));
+                updateInfo.setRealizedPnl(gu.getDouble("r"));
+                updateInfo.setUnpairedAverage(gu.getDouble("up"));
+                updateInfo.setUnpairedQuantity(gu.getDouble("uq"));
+                updateInfo.setUnpairedFee(gu.getDouble("uf"));
+                updateInfo.setMatchedPnl(gu.getDouble("mp"));
+                updateInfo.setUpdateTime(gu.getLong("ut"));
+
+                event.setGridUpdateInfo(updateInfo);
+                return event;
+            }
+        },
+
+        CONDITIONAL_ORDER_TRIGGER_REJECT {
+            @Override
+            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
+                ConditionalOrderTriggerRejectEvent event = new ConditionalOrderTriggerRejectEvent(jsonObject.getLong("E"));
+                event.setMatchMakingTime(jsonObject.getLong("T"));
+
+
+                JSONObject or = jsonObject.getJSONObject("or");
+                ConditionalOrderTriggerRejectEvent.OrderRejectInfo orderRejectInfo = new ConditionalOrderTriggerRejectEvent.OrderRejectInfo();
+
+                orderRejectInfo.setSymbol(or.getString("s"));
+                orderRejectInfo.setOrderId(or.getLong("o"));
+                orderRejectInfo.setRejectReason(or.getString("r"));
+                event.setOrderRejectInfo(orderRejectInfo);
+                return event;
+            }
         }
     }
-
-
-    /**
-     * 关闭
-     */
-    public void shutdown() {
-        isRunning = false;
-    }
-
-
-    @Override
-    public void afterPropertiesSet() throws Exception {
-        executorServiceManager.getSyncTaskExecutor().execute(this::batchWriteTask);
-    }
-
-
-    /**
-     * 写入RedisHash结构
-     * @param key key
-     * @param hashKey hash 的key
-     * @param value 值
-     */
-    public void writeToRedisHash(String key, String hashKey, String value) {
-        redissonClient.getMap(key).putAsync(hashKey, value);
-    }
 }
+
 
 shinano:
   quantity:
     realtime:
       run_type:
         configs:
-          - env: NORMAL
-            trade_type:
-              - SPOT
-              - CONTRACT
+#          - env: NORMAL
+#            trade_type:
+#              - SPOT
+#              - CONTRACT
           - env: TEST_NET
             trade_type:
               - SPOT
-              - CONTRACT
-
+#              - CONTRACT
 
       kafka:
-        bootstrap_servers: 192.168.1.2:9092 # Kafka服务器地址
-        kafka_kline_num_partitions: 1
-        kafka_kline_replication_factor: 1
+        bootstrap_servers: 192.168.1.3:9092 # Kafka服务器地址
+        kafka_num_partitions: 1
+        kafka_replication_factor: 1
       redis:
         # 如果需要密码，格式为 redis://:password@localhost:6379
-        url: redis://192.168.1.2:6379
+        url: redis://192.168.1.3:6379
 
       # 测试网配置
       test_net:
@@ -713,278 +1013,208 @@ shinano:
 
 
 
+
 package com.helei.tradeapplication.config;
 
+import com.baomidou.mybatisplus.core.handlers.MetaObjectHandler;
+import org.apache.ibatis.reflection.MetaObject;
+import org.springframework.stereotype.Component;
 
-import org.apache.kafka.clients.admin.AdminClient;
-import org.redisson.Redisson;
-import org.redisson.api.RedissonClient;
-import org.redisson.config.Config;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
+import java.time.LocalDateTime;
 
-import java.util.HashMap;
-import java.util.Map;
+@Component
+public class DateConfig implements MetaObjectHandler {
 
-@Configuration
-public class SpringConfig {
-
-
-    private final TradeAppConfig tradeAppConfig = TradeAppConfig.INSTANCE;
-
-    @Bean(name = "kafkaAdminClient")
-    public AdminClient kafkaAdminClient() {
-
-        Map<String, Object> configs = new HashMap<>();
-        configs.put("bootstrap.servers", tradeAppConfig.getKafka().getBootstrap_servers());  // 确保这里是 bootstrap.servers
-        return AdminClient.create(configs);
+    /**
+     * 使用mp做添加操作时候，这个方法执行
+     */
+    @Override
+    public void insertFill(MetaObject metaObject) {
+        //设置属性值
+        this.setFieldValByName("createdDatetime", LocalDateTime.now(), metaObject);
+        this.setFieldValByName("updatedDatetime", LocalDateTime.now(), metaObject);
     }
 
-    @Bean
-    public RedissonClient redissonClient() {
-        Config config = new Config();
-        config.useSingleServer().setAddress(tradeAppConfig.getRedis().getUrl());
-        return Redisson.create(config);
+    /**
+     * 使用mp做修改操作时候，这个方法执行
+     */
+    @Override
+    public void updateFill(MetaObject metaObject) {
+        this.setFieldValByName("updatedDatetime", LocalDateTime.now(), metaObject);
     }
 }
 
 
-package com.helei.tradeapplication.config;
+package com.helei.tradeapplication.manager;
 
-import com.alibaba.fastjson.JSON;
-import com.helei.binanceapi.config.BinanceApiConfig;
-import com.helei.constants.RunEnv;
-import com.helei.constants.TradeType;
-import com.helei.dto.Config.RunTypeConfig;
-import com.helei.dto.kafka.KafkaConfig;
-import com.helei.dto.kafka.RedisConfig;
-import lombok.AllArgsConstructor;
+
+import com.helei.util.NamedThreadFactory;
 import lombok.Data;
-import lombok.NoArgsConstructor;
-import org.yaml.snakeyaml.Yaml;
+import org.springframework.stereotype.Component;
 
-import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @Data
-@AllArgsConstructor
-@NoArgsConstructor
-public class TradeAppConfig {
-    private static final String CONFIG_FILE = "trade-app-config.yaml";
+@Component
+public class ExecutorServiceManager {
 
-    public static final TradeAppConfig INSTANCE;
-
-    private RunTypeConfig run_type;
-
-    private RedisConfig redis;
-
-    private KafkaConfig kafka;
-
-    private TradeAppSignalConfig signal;
+    private final ExecutorService tradeSignalResolveExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("kafka交易信号处理线程池"));
 
 
-    static {
-        Yaml yaml = new Yaml();
-        try (InputStream inputStream = BinanceApiConfig.class.getClassLoader().getResourceAsStream(CONFIG_FILE)) {
-            if (inputStream == null) {
-                throw new IllegalArgumentException("File not found: " + CONFIG_FILE);
-            }
-            Map<String, Object> yamlData = yaml.load(inputStream);
-            Map<String, Object> shinano = (Map<String, Object>) yamlData.get("shinano");
-            Map<String, Object> quantity = (Map<String, Object>) shinano.get("quantity");
-            Map<String, Object> trade_app = (Map<String, Object>) quantity.get("trade_app");
-
-            INSTANCE = yaml.loadAs(yaml.dump(trade_app), TradeAppConfig.class);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to load YAML file: " + CONFIG_FILE, e);
-        }
-    }
+    private final ExecutorService queryExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("查询用线程池"));
 
 
-    /**
-     * 获取信号topics，通过回调的方式，不直接返回topic列表
-     * @param env 运行环境
-     * @param tradeType 交易类型
-     * @param topicResolve 回调函数， 第一个参数为前缀， 第二个参数为信号名列表
-     */
-    public void getSignalTopics(RunEnv env, TradeType tradeType, BiConsumer<String, List<String>> topicResolve) {
-        StringBuilder prefix = new StringBuilder(env.name());
-        prefix.append(".").append(tradeType.name()).append(".");
+    private final ExecutorService tradeExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("交易用线程池"));
 
-        List<TradeSignalSymbolConfig> scList = switch (env) {
-            case TEST_NET -> signal.test_net.getTradeSignalSymbolConfigs(tradeType) ;
-            case NORMAL -> signal.normal.getTradeSignalSymbolConfigs(tradeType);
+
+    private final ExecutorService orderExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("订单用线程池"));
+}
+
+
+package com.helei.tradeapplication.service.impl;
+
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.helei.dto.order.BaseOrder;
+import com.helei.dto.order.LimitOrder;
+import com.helei.tradeapplication.entity.BinanceContractOrder;
+import com.helei.tradeapplication.mapper.BinanceContractOrderMapper;
+import com.helei.tradeapplication.service.IBinanceContractOrderService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+/**
+ * <p>
+ * 币安合约交易订单表 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2024-11-05
+ */
+@Slf4j
+@Service
+public class BinanceContractOrderServiceImpl extends ServiceImpl<BinanceContractOrderMapper, BinanceContractOrder> implements IBinanceContractOrderService {
+
+
+    @Override
+    public void saveOrder(BaseOrder order) {
+        BinanceContractOrder saveOrder = switch (order.getOrderType()) {
+            case LIMIT -> convertFromLimitOrder(order);
+            case MARKET -> null;
+            case STOP_MARKET -> null;
+            case STOP_LIMIT -> null;
+            case TAKE_PROFIT_MARKET -> null;
+            case TAKE_PROFIT_LIMIT -> null;
+            case TRAILING_STIO_MARKET -> null;
         };
 
-        if (scList == null) {
-            topicResolve.accept(prefix.toString(), Collections.emptyList());
+        if (saveOrder == null) {
+            log.warn("原始订单[{}]转化为为数据库订单类型后结果为null", order);
             return;
         }
 
-        for (TradeSignalSymbolConfig signalSymbolConfig : scList) {
-            String symbol = signalSymbolConfig.getSymbol();
-            topicResolve.accept(prefix + symbol + ".", signalSymbolConfig.signal_names);
-        }
-    }
-
-    @Data
-    @AllArgsConstructor
-    @NoArgsConstructor
-    public static class TradeAppSignalConfig {
-        /**
-         * 主网环境信号配置
-         */
-        private TradeSignalEnvConfig normal;
-
-        /**
-         * 测试环境信号配置
-         */
-        private TradeSignalEnvConfig test_net;
-    }
-
-    @Data
-    @AllArgsConstructor
-    @NoArgsConstructor
-    public static class TradeSignalEnvConfig {
-
-        /**
-         * 现货类型信号配置
-         */
-        private List<TradeSignalSymbolConfig> spot;
-
-        /**
-         * u本位合约类型信号设置
-         */
-        private List<TradeSignalSymbolConfig> contract;
-
-        public List<TradeSignalSymbolConfig> getTradeSignalSymbolConfigs(TradeType tradeType) {
-            return switch (tradeType) {
-                case SPOT -> spot;
-                case CONTRACT -> contract;
-            };
-        }
+        save(saveOrder);
     }
 
 
-    @Data
-    @AllArgsConstructor
-    @NoArgsConstructor
-    public static class TradeSignalSymbolConfig {
-
-        /**
-         * 交易对名称
-         */
-        private String symbol;
-
-        /**
-         * 信号名list
-         */
-        private List<String> signal_names;
-    }
-
-
-    public static void main(String[] args) {
-        System.out.println(JSON.toJSONString(INSTANCE));
+    /**
+     * 将限价单转成插入数据库的订单类型
+     *
+     * @param order 限价单
+     * @return 数据库订单类型
+     */
+    public static BinanceContractOrder convertFromLimitOrder(BaseOrder order) {
+        LimitOrder limitOrder = (LimitOrder) order;
+        return BinanceContractOrder
+                .builder()
+                .userId(limitOrder.getUserId())
+                .accountId(limitOrder.getAccountId())
+                .symbol(limitOrder.getSymbol())
+                .side(limitOrder.getSide().name())
+                .positionSide(limitOrder.getPositionSide().name())
+                .type(limitOrder.getOrderType().name())
+                .quantity(limitOrder.getQuantity())
+                .price(limitOrder.getPrice())
+                .status(limitOrder.getOrderStatus().name())
+                .build();
     }
 }
 
 
+
+
 package com.helei.tradeapplication.service.impl;
 
-import com.helei.constants.RunEnv;
-import com.helei.constants.TradeType;
-import com.helei.dto.base.KeyValue;
 import com.helei.tradeapplication.config.TradeAppConfig;
-import com.helei.tradeapplication.listener.KafkaTradeSignalListener;
-import com.helei.tradeapplication.manager.ExecutorServiceManager;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.common.serialization.StringDeserializer;
-import org.springframework.beans.factory.InitializingBean;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.NewTopic;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
-import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
-import org.springframework.kafka.listener.ConcurrentMessageListenerContainer;
-import org.springframework.kafka.listener.MessageListener;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Service;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
+import java.util.Collections;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 @Slf4j
 @Service
-public class KafkaConsumerService implements InitializingBean {
+public class KafkaProducerService {
+
 
     private final TradeAppConfig tradeAppConfig = TradeAppConfig.INSTANCE;
 
     @Autowired
-    private ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory;
+    private KafkaTemplate<String, String> kafkaTemplate;
 
     @Autowired
-    private ExecutorServiceManager executorServiceManager;
+    @Qualifier("kafkaAdminClient")
+    private AdminClient adminClient;
 
-    @Autowired
-    private KafkaTradeSignalService tradeSignalService;
 
-    /**
-     * 开始交易信号消费
-     *
-     * @param env       运行环境
-     * @param tradeType 交易类型
-     */
-    public void startTradeSignalConsumer(RunEnv env, TradeType tradeType) {
-        String groupId = tradeAppConfig.getKafka().getGroup_id();
-
-        tradeAppConfig.getSignalTopics(env, tradeType, (prefix, signalNames) -> {
-            if (signalNames.isEmpty()) {
-                log.warn("没有配置env[{}]-tradeType[{}]类型的交易信号topic", env, tradeType);
-                return;
-            }
-            log.info("注册监听topic [{}*] 交易信号 ", prefix);
-            List<String> topics = signalNames.stream().map(name -> signalNames + name).toList();
-            startConsumer(topics, groupId, new KafkaTradeSignalListener(env, tradeType, tradeSignalService, executorServiceManager.getTradeSignalResolveExecutor()));
-        });
+    public CompletableFuture<SendResult<String, String>> sendMessage(String topic, String message) {
+        log.debug("Sent message=[{}] to topic=[{}]", message, topic);
+        checkAndCreateTopic(topic, tradeAppConfig.getKafka().getKafka_num_partitions(), tradeAppConfig.getKafka().getKafka_replication_factor());
+        return kafkaTemplate.send(topic, message);
     }
 
 
-    /**
-     * 开始kafak消费
-     *
-     * @param topics          topics
-     * @param groupId         groupId
-     * @param messageListener messageListener
-     */
-    public void startConsumer(List<String> topics, String groupId, MessageListener<String, String> messageListener) {
-        Map<String, Object> props = new HashMap<>();
-        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, tradeAppConfig.getKafka().getBootstrap_servers());
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
-        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-
-        DefaultKafkaConsumerFactory<String, String> consumerFactory = new DefaultKafkaConsumerFactory<>(props);
-        kafkaListenerContainerFactory.setConsumerFactory(consumerFactory);
-
-        ConcurrentMessageListenerContainer<String, String> container = kafkaListenerContainerFactory.createContainer(topics.toArray(new String[0]));
-
-        container.setupMessageListener(messageListener);
-        container.start();
-    }
-
-    @Override
-    public void afterPropertiesSet() throws Exception {
-        for (KeyValue<RunEnv, TradeType> keyValue : tradeAppConfig.getRun_type().getRunTypeList()) {
-            startTradeSignalConsumer(keyValue.getKey(), keyValue.getValue());
+    public boolean topicExists(String topicName) {
+        try {
+            Set<String> topics = adminClient.listTopics().names().get();
+            return topics.contains(topicName);
+        } catch (InterruptedException | ExecutionException e) {
+           log.info("check topic exists failed", e);
+            return false;
         }
     }
-}
 
+    public void createTopic(String topicName, int numPartitions, short replicationFactor) {
+        NewTopic newTopic = new NewTopic(topicName, numPartitions, replicationFactor);
+        try {
+            adminClient.createTopics(Collections.singleton(newTopic)).all().get();
+            log.info("Topic created: {}", topicName);
+        } catch (InterruptedException | ExecutionException e) {
+            log.info("Failed to create topic", e);
+        }
+    }
+
+    public void checkAndCreateTopic(String topicName, int numPartitions, short replicationFactor) {
+        if (!topicExists(topicName)) {
+            createTopic(topicName, numPartitions, replicationFactor);
+        } else {
+            log.debug("Topic already exists: {}", topicName);
+        }
+    }
+
+    public void close() {
+        adminClient.close();
+    }
+
+}
 
 
 
@@ -992,16 +1222,14 @@ public class KafkaConsumerService implements InitializingBean {
 package com.helei.tradeapplication.service.impl;
 
 
-import com.helei.binanceapi.dto.order.BaseOrder;
-import com.helei.binanceapi.dto.order.LimitOrder;
+import com.helei.dto.order.BaseOrder;
 import com.helei.constants.RunEnv;
 import com.helei.constants.TradeType;
-import com.helei.dto.account.AccountRTData;
-import com.helei.dto.account.PositionInfo;
 import com.helei.dto.account.UserAccountInfo;
-import com.helei.dto.trade.BalanceInfo;
 import com.helei.dto.trade.TradeSignal;
+import com.helei.interfaces.CompleteInvocation;
 import com.helei.tradeapplication.manager.ExecutorServiceManager;
+import com.helei.tradeapplication.service.OrderService;
 import com.helei.tradeapplication.service.TradeSignalService;
 import com.helei.tradeapplication.service.UserAccountInfoService;
 import lombok.extern.slf4j.Slf4j;
@@ -1011,6 +1239,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 
@@ -1023,6 +1252,10 @@ public class KafkaTradeSignalService implements TradeSignalService {
 
     @Autowired
     private UserAccountInfoService userAccountInfoService;
+
+    @Autowired
+    private OrderService orderService;
+
 
     public KafkaTradeSignalService(ExecutorServiceManager executorServiceManager) {
         this.executor = executorServiceManager.getTradeExecutor();
@@ -1052,7 +1285,8 @@ public class KafkaTradeSignalService implements TradeSignalService {
 
 
     /**
-     * 构建订单，符合条件的提交到交易
+     * 构建订单，符合条件的提交到交易.
+     * <p>并不会真正把订单提交到交易所，而是写入数据库后，再写入kafka的topic里</p>
      *
      * @param runEnv       runEnv
      * @param tradeType    tradeType
@@ -1065,19 +1299,54 @@ public class KafkaTradeSignalService implements TradeSignalService {
         List<CompletableFuture<BaseOrder>> futures = new ArrayList<>();
 
         for (UserAccountInfo accountInfo : accountInfos) {
+
+            //Step 1 过滤掉账户设置不接受此信号的
             if (filterAccount(signal, accountInfo)) {
                 log.warn("accountId[{}]不能执行信号 [{}]", accountInfo.getId(), signal);
             }
 
             CompletableFuture<BaseOrder> future = userAccountInfoService
+                    //Step 2 查询实时的账户数据
                     .queryAccountRTInfo(runEnv, tradeType, accountInfo.getId())
+                    //Step 3 生产订单
                     .thenApplyAsync(accountRTData -> {
+                        final BaseOrder[] baseOrder = {null};
+
                         try {
-                            return makeOrder(accountInfo, accountRTData, signal);
+                            CountDownLatch latch = new CountDownLatch(1);
+
+                            orderService.makeOrder(accountInfo, accountRTData, signal, new CompleteInvocation<>() {
+                                @Override
+                                public void success(BaseOrder order) {
+                                    baseOrder[0] = order;
+                                    log.info("创建订单[{}]成功", order);
+                                }
+
+                                @Override
+                                public void fail(BaseOrder order, String errorMsg) {
+                                    baseOrder[0] = order;
+                                    log.info("创建订单失败[{}],错误原因[{}]", order, errorMsg);
+                                }
+
+                                @Override
+                                public void finish() {
+                                    latch.countDown();
+                                }
+                            });
+
+                            //等待订单创建完成
+                            latch.await();
+
                         } catch (Exception e) {
-                            log.error("为accountId[{}]创建订单时出错, signal[{}]", accountInfo.getId(), signal);
-                            return null;
+                            log.error("为accountId[{}]创建订单时出错, signal[{}]", accountInfo.getId(), signal, e);
                         }
+                        return baseOrder[0];
+                    })
+                    .exceptionallyAsync(throwable -> {
+                        if (throwable != null) {
+                            log.error("创建订单时发生错误", throwable);
+                        }
+                        return null;
                     });
 
             futures.add(future);
@@ -1100,23 +1369,6 @@ public class KafkaTradeSignalService implements TradeSignalService {
 
 
     /**
-     * 生成订单
-     *
-     * @param accountInfo   账户信息
-     * @param accountRTData 账户实时数据
-     * @param signal        信号
-     * @return 交易的订单
-     */
-    private BaseOrder makeOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, TradeSignal signal) {
-        String symbol = signal.getSymbol().toLowerCase();
-        BalanceInfo balanceInfo = accountRTData.getAccountBalanceInfo().getBalances().get(symbol);
-        PositionInfo positionInfo = accountRTData.getAccountPositionInfo().getPositions().get(symbol);
-        //TODO
-
-        return new LimitOrder();
-    }
-
-    /**
      * 根据账户设置过滤
      *
      * @param signal  信号
@@ -1131,431 +1383,1022 @@ public class KafkaTradeSignalService implements TradeSignalService {
 
 package com.helei.tradeapplication.service.impl;
 
-import com.helei.constants.RunEnv;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.constants.order.OrderEvent;
+import com.helei.constants.order.OrderType;
+import com.helei.dto.order.BaseOrder;
+import com.helei.dto.order.LimitOrder;
+import com.helei.constants.CEXType;
 import com.helei.constants.TradeType;
 import com.helei.dto.account.AccountRTData;
+import com.helei.dto.account.PositionInfo;
 import com.helei.dto.account.UserAccountInfo;
-import com.helei.tradeapplication.cache.UserInfoCache;
+import com.helei.dto.trade.BalanceInfo;
+import com.helei.dto.trade.TradeSignal;
+import com.helei.interfaces.CompleteInvocation;
 import com.helei.tradeapplication.manager.ExecutorServiceManager;
-import com.helei.tradeapplication.service.UserAccountInfoService;
+import com.helei.tradeapplication.service.IBinanceContractOrderService;
+import com.helei.tradeapplication.service.OrderEventProcessService;
+import com.helei.util.KafkaUtil;
+import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ExecutionException;
 
-@Component
-public class UserAccountInfoServiceImpl implements UserAccountInfoService {
 
-    private final ExecutorService executor;
+@Slf4j
+@Service
+public class OrderServiceImpl extends OrderEventProcessService {
+
 
     @Autowired
-    private UserInfoCache userInfoCache;
+    private KafkaProducerService kafkaProducerService;
 
-    public UserAccountInfoServiceImpl(ExecutorServiceManager executorServiceManager) {
-        this.executor = executorServiceManager.getQueryExecutor();
+
+    @Autowired
+    private IBinanceContractOrderService binanceContractOrderService;
+
+
+    @Autowired
+    public OrderServiceImpl(ExecutorServiceManager executorServiceManager) {
+        super(executorServiceManager.getOrderExecutor());
+        super.startProcessEvents();
     }
 
 
-    public CompletableFuture<List<UserAccountInfo>> queryEnvAccountInfo(RunEnv env, TradeType tradeType) {
+    /**
+     * 生成订单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param signal        信号
+     */
+    @Override
+    public void makeOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, TradeSignal signal, CompleteInvocation<BaseOrder> invocation) {
+        String symbol = signal.getSymbol().toLowerCase();
+
+        OrderType orderType = accountInfo.getAccountPositionConfig().getOrderType();
+
+        BaseOrder order = switch (orderType) {
+            case LIMIT -> buildLimitOrder(accountInfo, accountRTData, symbol);
+            case MARKET -> buildMarketOrder(accountInfo, accountRTData, symbol);
+            case STOP_MARKET -> buildStopMarketOrder(accountInfo, accountRTData, symbol);
+            case STOP_LIMIT -> buildStopLimitOrder(accountInfo, accountRTData, symbol);
+            case TAKE_PROFIT_MARKET -> buildTakeProfitMarketOrder(accountInfo, accountRTData, symbol);
+            case TAKE_PROFIT_LIMIT -> buildTakeProfitLimitOrder(accountInfo, accountRTData, symbol);
+            case TRAILING_STIO_MARKET -> buildTrailingSTIDMarketOrder(accountInfo, accountRTData, symbol);
+        };
+
+
+        log.info("订单[{}]创建成功", order);
+        // 提交订单创建事件
+        super.submitOrderEvent(order, OrderEvent.CREATED_ORDER, invocation);
+    }
+
+
+    @Override
+    public BaseOrder writeOrder2Kafka(BaseOrder order) throws ExecutionException, InterruptedException {
+        String topic = KafkaUtil.getOrderSymbolTopic(order.getRunEnv(), order.getTradeType(), order.getSymbol());
+
+        kafkaProducerService.sendMessage(topic, JSONObject.toJSONString(order)).get();
+
+        log.debug("订单order[{}]写入kafka成功", order);
+
+        return order;
+    }
+
+
+    @Override
+    public BaseOrder writeOrder2DB(BaseOrder order) {
+        CEXType cexType = order.getCexType();
+        TradeType tradeType = order.getTradeType();
+
+        if (CEXType.BINANCE.equals(cexType) && TradeType.CONTRACT.equals(tradeType)) {
+            binanceContractOrderService.saveOrder(order);
+        }
+
+        return order;
+    }
+
+
+    /**
+     * 构建限价单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param symbol        交易对
+     * @return 限价单
+     */
+    private static @NotNull LimitOrder buildLimitOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
+        BalanceInfo balanceInfo = accountRTData.getAccountBalanceInfo().getBalances().get(symbol);
+        PositionInfo positionInfo = accountRTData.getAccountPositionInfo().getPositions().get(symbol);
+
+        LimitOrder limitOrder = new LimitOrder();
+        limitOrder.setRunEnv(accountInfo.getRunEnv());
+        limitOrder.setTradeType(accountInfo.getTradeType());
+        limitOrder.setCexType(accountInfo.getCexType());
+
+        limitOrder.setSymbol(symbol);
+        limitOrder.setUserId(accountInfo.getUserId());
+        limitOrder.setAccountId(accountRTData.getAccountId());
+
+        //TODO 完善逻辑
+
+        return limitOrder;
+    }
+
+
+    /**
+     * 构建市价单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param symbol        交易对
+     * @return 限价单
+     */
+    private BaseOrder buildMarketOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
         return null;
     }
 
-    @Override
-    public CompletableFuture<AccountRTData> queryAccountRTInfo(RunEnv env, TradeType tradeType, long accountId) {
-        return CompletableFuture.supplyAsync(()->userInfoCache.queryAccountRTData(env, tradeType, accountId), executor);
+    /**
+     * 构建市价止损单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param symbol        交易对
+     * @return 限价单
+     */
+    private BaseOrder buildStopMarketOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
+        return null;
+    }
+
+
+    /**
+     * 构建限价止损单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param symbol        交易对
+     * @return 限价单
+     */
+    private BaseOrder buildStopLimitOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
+        return null;
+    }
+
+    /**
+     * 构建市价止盈单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param symbol        交易对
+     * @return 限价单
+     */
+    private BaseOrder buildTakeProfitMarketOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
+        return null;
+    }
+
+    /**
+     * 构建限价止盈单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param symbol        交易对
+     * @return 限价单
+     */
+    private BaseOrder buildTakeProfitLimitOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
+        return null;
+    }
+
+    /**
+     * buildTrailingSTIDMarketOrder
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param symbol        交易对
+     * @return 限价单
+     */
+    private BaseOrder buildTrailingSTIDMarketOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
+        return null;
     }
 
 }
 
 
-package com.helei.tradeapplication.service;
-
-import com.helei.constants.RunEnv;
-import com.helei.constants.TradeType;
-import com.helei.dto.trade.TradeSignal;
-
-public interface TradeSignalService {
-
-
-    /**
-     * 处理交易信号
-     *
-     * @param runEnv    运行环境
-     * @param tradeType 交易类型
-     * @param signal    信号
-     * @return 是否执行成功
-     */
-    boolean resolveTradeSignal(RunEnv runEnv, TradeType tradeType, TradeSignal signal);
-}
-
 
 package com.helei.tradeapplication.service;
 
-import com.helei.constants.RunEnv;
-import com.helei.constants.TradeType;
-import com.helei.dto.account.AccountRTData;
-import com.helei.dto.account.UserAccountInfo;
 
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
+import com.baomidou.mybatisplus.extension.service.IService;
+import com.helei.dto.order.BaseOrder;
+import com.helei.tradeapplication.entity.BinanceContractOrder;
 
-public interface UserAccountInfoService {
-
-
-    /**
-     * 查询指定环境下的所有账户信息
-     * @param env env
-     * @param tradeType 交易类型
-     * @return 账户信息列表
-     */
-    CompletableFuture<List<UserAccountInfo>> queryEnvAccountInfo(RunEnv env, TradeType tradeType);
+/**
+ * <p>
+ * 币安合约交易订单表 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2024-11-05
+ */
+public interface IBinanceContractOrderService extends IService<BinanceContractOrder> {
 
 
     /**
-     * 查询指定环境下指定账户id的账户信息
-     * @param env 运行环境
-     * @param tradeType 交易类型
-     * @param accountId 账户id
-     * @return 账户信息
+     * 保存订单
+     * @param order 订单
      */
-    CompletableFuture<AccountRTData> queryAccountRTInfo(RunEnv env, TradeType tradeType, long accountId);
+    void saveOrder(BaseOrder order);
+
 }
 
-package com.helei.tradeapplication.cache;
 
 
-import com.alibaba.fastjson.JSONObject;
-import com.helei.constants.RunEnv;
-import com.helei.constants.TradeType;
-import com.helei.dto.account.AccountRTData;
-import com.helei.dto.account.UserAccountInfo;
-import com.helei.dto.account.UserInfo;
-import com.helei.dto.base.KeyValue;
-import com.helei.tradeapplication.config.TradeAppConfig;
-import com.helei.tradeapplication.manager.ExecutorServiceManager;
-import com.helei.util.RedisKeyUtil;
+
+
+package com.helei.tradeapplication.service;
+
+import com.helei.constants.order.OrderEvent;
+import com.helei.constants.order.OrderStatus;
+import com.helei.dto.order.BaseOrder;
+import com.helei.interfaces.CompleteInvocation;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.redisson.api.RBucket;
-import org.redisson.api.RKeys;
-import org.redisson.api.RMap;
-import org.redisson.api.RedissonClient;
-import org.springframework.beans.factory.InitializingBean;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiConsumer;
 
 
 @Slf4j
-@Component
-public class UserInfoCache implements InitializingBean {
+public abstract class OrderEventProcessService implements OrderService {
 
-    private final TradeAppConfig tradeAppConfig = TradeAppConfig.INSTANCE;
 
+    /**
+     * 写入db的重试次数
+     */
+    private static final int WRITE_DB_RETRY_TIMES = 3;
+
+    /**
+     * 写入kafka的重试次数
+     */
+    private static final int WRITE_KAFKA_RETRY_TIMES = 3;
+
+
+    /**
+     * 阻塞队列， 用于存放订单和当前订单的事件
+     */
+    private final BlockingQueue<OrderProcessTask> eventQueue = new LinkedBlockingQueue<>();
+
+
+    /**
+     * 存放订单回调的map
+     */
+    private final ConcurrentMap<BaseOrder, CompleteInvocation<BaseOrder>> invocationMap = new ConcurrentHashMap<>();
+
+
+    /**
+     * 记录重试次数的map
+     */
+    private final ConcurrentMap<BaseOrder, Integer> retryMap = new ConcurrentHashMap<>();
+
+
+    /**
+     * 执行的线程池
+     */
     private final ExecutorService executor;
 
 
-    /**
-     * 用户信息缓存， 放基础的数据，不会放实时的仓位和资金信息
-     */
-    private final ConcurrentMap<String, UserInfo> userInfoCache = new ConcurrentHashMap<>();
-
-    /**
-     * 账户信息缓存, account:UserAccountInfo
-     */
-    private final ConcurrentMap<RunEnv, ConcurrentMap<TradeType, ConcurrentMap<Long, UserAccountInfo>>> accountInfoCache = new ConcurrentHashMap<>();
-
-
-    @Autowired
-    private RedissonClient redissonClient;
-
-    public UserInfoCache(ExecutorServiceManager executorServiceManager) {
-        this.executor = executorServiceManager.getQueryExecutor();
-    }
-
-
-    /**
-     * 获取账户的实时数据，包含资金和仓位信息
-     *
-     * @param env       运行环境
-     * @param tradeType 交易类型
-     * @param accountId 账户id
-     * @return 实时数据
-     */
-    public AccountRTData queryAccountRTData(RunEnv env, TradeType tradeType, long accountId) {
-        String accountRTDataKey = RedisKeyUtil.getUserAccountEnvRTDataKey(env, tradeType);
-
-        RMap<String, String> rtMap = redissonClient.getMap(accountRTDataKey);
-
-        return JSONObject.parseObject(rtMap.get(String.valueOf(accountId)), AccountRTData.class);
-    }
-
-
-    /**
-     * 从redis查指定环境的所有账户信息
-     *
-     * @param env       运行环境
-     * @param tradeType 交易类型
-     */
-    public int queryAllUserInfo(RunEnv env, TradeType tradeType, BiConsumer<String, UserInfo> consumer) {
-        String accountPattern = RedisKeyUtil.getUserInfoPattern(env, tradeType);
-        RKeys keys = redissonClient.getKeys();
-
-        AtomicInteger total = new AtomicInteger();
-        keys.getKeysStreamByPattern(accountPattern).forEach(key -> {
-            RBucket<String> bucket = redissonClient.getBucket(key);
-            UserInfo userInfo = JSONObject.parseObject(bucket.get(), UserInfo.class);
-
-            consumer.accept(key, userInfo);
-            total.getAndIncrement();
-        });
-        return total.get();
-    }
-
-
-    public void updateUserInfo() throws ExecutionException, InterruptedException {
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-
-        /*
-         * 获取账户信息，不包括实时的资金信息和仓位信息
-         */
-        for (KeyValue<RunEnv, TradeType> keyValue : tradeAppConfig.getRun_type().getRunTypeList()) {
-            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                RunEnv env = keyValue.getKey();
-                accountInfoCache.putIfAbsent(env, new ConcurrentHashMap<>());
-                TradeType type = keyValue.getValue();
-                accountInfoCache.get(env).put(type, new ConcurrentHashMap<>());
-
-                log.info("开始初始化环境env[{}]-tradeType[{}]的账户信息", env, type);
-
-                int total = queryAllUserInfo(env, type, (k, v) -> {
-                    for (UserAccountInfo accountInfo : v.getAccountInfos()) {
-
-                        // 更新 accountInfoCache
-                        accountInfoCache.get(env).get(type).compute(accountInfo.getId(), (k1,v1)->{
-                            if (v1 == null) {
-                                v1 = accountInfo;
-                            }
-                            return v1;
-                        });
-                    }
-                    userInfoCache.put(k, v);
-                });
-
-                log.info("环境env[{}]-tradeType[{}]的账户信息初始化完毕, 共[{}]个账户", env, type, total);
-            }, executor);
-
-            futures.add(future);
-        }
-
-        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
-                .whenCompleteAsync((unused, throwable) -> {
-                    if (throwable != null) {
-                        log.error("更新用户信息时发生错误", throwable);
-                        System.exit(-1);
-                    }
-                }).get();
-    }
-
-
-    @Override
-    public void afterPropertiesSet() throws Exception {
-        updateUserInfo();
-    }
-
-}
-
-
-package com.helei.tradeapplication.listener;
-
-import cn.hutool.core.util.StrUtil;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.jetbrains.annotations.NotNull;
-import org.springframework.kafka.listener.MessageListener;
-import org.springframework.kafka.support.Acknowledgment;
-
-import java.util.concurrent.ExecutorService;
-
-
-@Slf4j
-public abstract class KafkaTopicListener<R> implements MessageListener<String, String> {
-
-    private final ExecutorService executor;
-
-    protected KafkaTopicListener(ExecutorService executor) {
+    public OrderEventProcessService(ExecutorService executor) {
         this.executor = executor;
     }
 
-    @Override
-    public void onMessage(@NotNull ConsumerRecord<String, String> record) {
-        executor.execute(()->{
-            String topic = record.topic();
-            String value = record.value();
 
-            if (StrUtil.isBlank(value)) {
-                log.warn("receive null kafka trade signal, topic[{}] key [{}]", topic, record.key());
-                return;
-            }
 
-            try {
-                convertJsonToTarget(value);
-            } catch (Exception e) {
-                log.error("处理kafka topic[{}] 消息[{}]时出错", topic, value, e);
-            }
+    /**
+     * 提交订单事件
+     *
+     * @param order              订单
+     * @param event              订单事件
+     * @param completeInvocation 完成的回调函数
+     */
+    public void submitOrderEvent(BaseOrder order, OrderEvent event, CompleteInvocation<BaseOrder> completeInvocation) {
+        invocationMap.compute(order, (k, v) -> {
+            submitOrderEvent(order, event);
+            return completeInvocation;
         });
     }
 
-    @Override
-    public void onMessage(@NotNull ConsumerRecord<String, String> record, Acknowledgment acknowledgment) {
-        executor.execute(()->{
-            String topic = record.topic();
-            String value = record.value();
-
-            if (StrUtil.isBlank(value)) {
-                log.warn("receive null kafka trade signal, topic[{}] key [{}]", topic, record.key());
-                return;
-            }
-
-            try {
-                R r = convertJsonToTarget(value);
-
-                if(invoke(topic, r)){
-                    acknowledgment.acknowledge();
-                }
-            } catch (Exception e) {
-                log.error("处理kafka topic[{}] 消息[{}]时出错", topic, value, e);
-            }
-        });
-    }
-
-
-    public abstract R convertJsonToTarget(String json);
-
-
-    public abstract boolean invoke(String topic, R message);
-}
-
-package com.helei.tradeapplication.listener;
-
-import com.alibaba.fastjson.JSONObject;
-import com.helei.constants.RunEnv;
-import com.helei.constants.TradeType;
-import com.helei.dto.trade.TradeSignal;
-import com.helei.tradeapplication.service.TradeSignalService;
-import com.helei.tradeapplication.service.impl.KafkaTradeSignalService;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.concurrent.ExecutorService;
-
-
-/**
- * kafka交易信号监听器
- */
-@Slf4j
-public class KafkaTradeSignalListener extends KafkaTopicListener<TradeSignal> {
-
     /**
-     * 运行环境
+     * 提交订单事件
+     *
+     * @param order 订单
+     * @param event 订单事件
      */
-    private final RunEnv runEnv;
-
-    /**
-     * 交易类型
-     */
-    private final TradeType tradeType;
-
-
-    private final TradeSignalService tradeSignalService;
-
-    public KafkaTradeSignalListener(
-            RunEnv env,
-            TradeType tradeType,
-            TradeSignalService tradeSignalService,
-            ExecutorService executor
-    ) {
-        super(executor);
-
-        this.runEnv = env;
-        this.tradeType = tradeType;
-        this.tradeSignalService = tradeSignalService;
-    }
-
-    @Override
-    public TradeSignal convertJsonToTarget(String json) {
-        return JSONObject.parseObject(json, TradeSignal.class);
-    }
-
-    @Override
-    public boolean invoke(String topic, TradeSignal signal) {
-        log.info("topic[{}]收到信号,runEnv[{}]-tradeType[{}]-signal[{}]", topic, runEnv, tradeType, signal);
-
+    public void submitOrderEvent(BaseOrder order, OrderEvent event) {
         try {
-            return tradeSignalService.resolveTradeSignal(runEnv, tradeType, signal);
-        } catch (Exception e) {
-            log.error("处理topic[{}}信号发生错误", topic, e);
-            return false;
+            eventQueue.put(new OrderProcessTask(order, event));
+        } catch (InterruptedException e) {
+            log.error("提交订单[{}]事件[{}]失败", order, event, e);
+            throw new RuntimeException("提交订单事件失败", e);
         }
     }
 
+    /**
+     * 事件处理
+     *
+     * @param order 订单
+     * @param event 事件
+     */
+    public void processOrderEvent(BaseOrder order, OrderEvent event) {
+        log.debug("开始处理订单[{}]的事件[{}]", order, event);
+
+        OrderEvent next = switch (event) {
+            case CREATED_ORDER -> createdOrderProcess(order);
+
+            case SEND_TO_DB -> sendToDBProcess(order);
+            case SEND_TO_KAFKA -> sendToKafkaProcess(order);
+
+            case SEND_TO_DB_RETRY -> sendToDBRetryProcess(order);
+            case SEND_TO_KAFKA_RETRY -> sendToKafkaRetryProcess(order);
+
+            case SEND_TO_DB_FINAL_ERROR -> errorProcess(order, OrderEvent.SEND_TO_DB_FINAL_ERROR);
+            case SEND_TO_KAFKA_FINAL_ERROR -> errorProcess(order, OrderEvent.SEND_TO_KAFKA_FINAL_ERROR);
+            case UN_SUPPORT_EVENT_ERROR -> errorProcess(order, OrderEvent.UN_SUPPORT_EVENT_ERROR);
+
+            case COMPLETE -> successProcess(order);
+
+            case CANCEL -> cancelProcess(order);
+        };
+
+        if (next != null) {
+            submitOrderEvent(order, next);
+        }
+
+        log.debug("订单[{}]的事件[{}]处理完毕", order, event);
+    }
+
+
+    /**
+     * 取消订单
+     *
+     * @param order order
+     * @return 下一个事件
+     */
+    private OrderEvent cancelProcess(BaseOrder order) {
+        //TODO 取消订单逻辑，未写入kafka的标记就好，写入kafka的还需要向另外的kafka里写上取消的消息，订单提交服务收到后进行取消
+        return null;
+    }
+
+
+    /**
+     * 执行成功的事件处理
+     *
+     * @param order order
+     * @return 下一个事件
+     */
+    private OrderEvent successProcess(BaseOrder order) {
+
+        CompleteInvocation<BaseOrder> invocation = invocationMap.remove(order);
+
+        if (invocation != null) {
+            invocation.success(order);
+            invocation.finish();
+        }
+
+        return null;
+    }
+
+
+    /**
+     * 错误事件处理
+     *
+     * @param order order
+     * @param event 时间
+     * @return 下一个事件
+     */
+    private OrderEvent errorProcess(BaseOrder order, OrderEvent event) {
+
+        CompleteInvocation<BaseOrder> invocation = invocationMap.remove(order);
+
+        if (invocation != null) {
+            invocation.fail(order, event.name());
+            invocation.finish();
+        }
+
+        return null;
+    }
+
+
+    /**
+     * 发送到kafka错误重试事件处理
+     *
+     * @param order order
+     * @return 下一个事件
+     */
+    private OrderEvent sendToKafkaRetryProcess(BaseOrder order) {
+        if (OrderStatus.WRITE_IN_KAFKA.equals(order.getOrderStatus())) {
+            Integer times = retryMap.remove(order);
+            times = times == null ? 0 : times;
+
+            //超过重试次数
+            if (times > WRITE_KAFKA_RETRY_TIMES) {
+                return OrderEvent.SEND_TO_KAFKA_FINAL_ERROR;
+            }
+
+
+            try {
+                BaseOrder result = writeOrder2Kafka(order);
+
+                if (result == null) return OrderEvent.CANCEL;
+
+                return OrderEvent.COMPLETE;
+            } catch (Exception e) {
+                log.error("写入Order[{}]到kafka发生错误,重试次数[{}]", order, times, e);
+                retryMap.put(order, times + 1);
+                return OrderEvent.SEND_TO_KAFKA_RETRY;
+            }
+        }
+
+        return OrderEvent.UN_SUPPORT_EVENT_ERROR;
+    }
+
+
+    /**
+     * 发送到kafka事件处理
+     *
+     * @param order order
+     * @return 下一个事件
+     */
+    private OrderEvent sendToKafkaProcess(BaseOrder order) {
+        if (OrderStatus.WRITE_IN_DB.equals(order.getOrderStatus())) {
+            // 发送kafka
+            try {
+                order.setOrderStatus(OrderStatus.WRITE_IN_KAFKA);
+
+                BaseOrder result = writeOrder2Kafka(order);
+
+                if (result == null) return OrderEvent.CANCEL;
+            } catch (Exception e) {
+                log.error("写入Order[{}]到kafka发生错误", order, e);
+                return OrderEvent.SEND_TO_KAFKA_RETRY;
+            }
+            return OrderEvent.COMPLETE;
+        }
+        return OrderEvent.UN_SUPPORT_EVENT_ERROR;
+    }
+
+
+    /**
+     * 发送到DB错误重试事件处理
+     *
+     * @param order order
+     * @return 下一个事件
+     */
+    private OrderEvent sendToDBRetryProcess(BaseOrder order) {
+        if (OrderStatus.WRITE_IN_DB.equals(order.getOrderStatus())) {
+            Integer times = retryMap.remove(order);
+            times = times == null ? 0 : times;
+
+            //超过重试次数
+            if (times > WRITE_DB_RETRY_TIMES) {
+                return OrderEvent.SEND_TO_DB_FINAL_ERROR;
+            }
+
+            try {
+                BaseOrder result = writeOrder2DB(order);
+
+                if (result == null) return OrderEvent.CANCEL;
+
+                return OrderEvent.SEND_TO_KAFKA;
+            } catch (Exception e) {
+                log.error("写入Order[{}]到数据库发生错误, 重试次数[{}]", order, times, e);
+                retryMap.put(order, times + 1);
+                return OrderEvent.SEND_TO_DB_RETRY;
+            }
+        }
+
+        return OrderEvent.UN_SUPPORT_EVENT_ERROR;
+    }
+
+
+    /**
+     * 发送到DB事件处理
+     *
+     * @param order order
+     * @return 下一个事件
+     */
+    private OrderEvent sendToDBProcess(BaseOrder order) {
+        if (OrderStatus.CREATED.equals(order.getOrderStatus())) {
+            // 写数据库
+            try {
+                order.setOrderStatus(OrderStatus.WRITE_IN_DB);
+
+                BaseOrder result = writeOrder2DB(order);
+
+                if (result == null) return OrderEvent.CANCEL;
+            } catch (Exception e) {
+                log.error("写入Order[{}]到数据库发生错误", order, e);
+                return OrderEvent.SEND_TO_DB_RETRY;
+            }
+            return OrderEvent.SEND_TO_KAFKA;
+        }
+        return OrderEvent.UN_SUPPORT_EVENT_ERROR;
+    }
+
+    /**
+     * 创建订单事件处理
+     *
+     * @param order order
+     * @return 下一个事件
+     */
+    private OrderEvent createdOrderProcess(BaseOrder order) {
+        //订单创建事件
+        order.setOrderStatus(OrderStatus.CREATED);
+        return OrderEvent.SEND_TO_DB;
+    }
+
+
+    /**
+     * 开始处理事件
+     */
+    public void startProcessEvents() {
+        while (!eventQueue.isEmpty()) {
+            try {
+                OrderProcessTask task = eventQueue.take();
+
+                executor.execute(() -> processOrderEvent(task.getOrder(), task.getOrderEvent()));
+            } catch (InterruptedException e) {
+                log.error("处理事件时发生错误", e);
+            }
+        }
+    }
+
+
+    /**
+     * 订单处理任务，包含订单信息和订单事件
+     */
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    public static class OrderProcessTask {
+
+        /**
+         * 订单信息
+         */
+        private BaseOrder order;
+
+        /**
+         * 订单事件
+         */
+        private OrderEvent orderEvent;
+    }
+
+
+}
+
+
+package com.helei.tradeapplication.service;
+
+import com.helei.dto.order.BaseOrder;
+import com.helei.dto.account.AccountRTData;
+import com.helei.dto.account.UserAccountInfo;
+import com.helei.dto.trade.TradeSignal;
+import com.helei.interfaces.CompleteInvocation;
+
+import java.util.concurrent.ExecutionException;
+
+public interface OrderService {
+
+
+    /**
+     * 生成订单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param signal        信号
+     * @return 交易的订单
+     */
+    void makeOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, TradeSignal signal, CompleteInvocation<BaseOrder> invocation);
+
+
+    /**
+     * 将订单写到kafka
+     *
+     * @param order 订单数据
+     * @return 订单数据
+     */
+    BaseOrder writeOrder2Kafka(BaseOrder order) throws ExecutionException, InterruptedException;
+
+
+    /**
+     * 将订单写入数据库
+     *
+     * @param order order
+     * @return 订单数据
+     */
+    BaseOrder writeOrder2DB(BaseOrder order);
+}
+
+package com.helei.tradeapplication.controller;
+
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * <p>
+ * 币安合约交易订单表 前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2024-11-05
+ */
+@RestController
+@RequestMapping("/tradeApp/binanceContractOrder")
+public class BinanceContractOrderController {
+
 }
 
 
 
+package com.helei.tradeapplication.entity;
 
-package com.helei.tradeapplication.manager;
+import com.baomidou.mybatisplus.annotation.*;
 
+import java.io.Serial;
+import java.io.Serializable;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
-import com.helei.util.NamedThreadFactory;
-import lombok.Data;
-import org.springframework.stereotype.Component;
+import lombok.*;
 
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
+/**
+ * <p>
+ * 币安合约交易订单表
+ * </p>
+ *
+ * @author com.helei
+ * @since 2024-11-05
+ */
 @Data
-@Component
-public class ExecutorServiceManager {
+@AllArgsConstructor
+@NoArgsConstructor
+@Builder
+@TableName("t_binance_contract_order")
+public class BinanceContractOrder implements Serializable {
 
-    private final ExecutorService tradeSignalResolveExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("kafka交易信号处理线程池"));
+    @Serial
+    private static final long serialVersionUID = 1231231419839753841L;
 
+    /**
+     * 订单编号, 自定义订单ID
+     */
+    @TableId(value = "order_id", type = IdType.AUTO)
+    private Long orderId;
 
-    private final ExecutorService queryExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("查询用线程池"));
+    /**
+     * 用户id
+     */
+    @TableField("user_id")
+    private Long userId;
 
+    /**
+     * 用户的账户id
+     */
+    @TableField("account_id")
+    private Long accountId;
 
-    private final ExecutorService tradeExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("交易用线程池"));
+    /**
+     * 交易对，例如 BTCUSDT
+     */
+    @TableField("symbol")
+    private String symbol;
+
+    /**
+     * 交易方向
+     */
+    @TableField("side")
+    private String side;
+
+    /**
+     * 持仓方向，默认BOTH
+     */
+    @TableField("position_side")
+    private String positionSide;
+
+    /**
+     * 订单类型
+     */
+    @TableField("type")
+    private String type;
+
+    /**
+     * 是否仅减少持仓，仅适用于双向持仓模式
+     */
+    @TableField("reduce_only")
+    private Boolean reduceOnly;
+
+    /**
+     * 交易数量
+     */
+    @TableField("quantity")
+    private BigDecimal quantity;
+
+    /**
+     * 订单价格，仅限限价单
+     */
+    @TableField("price")
+    private BigDecimal price;
+
+    /**
+     * 用户
+     */
+    @Deprecated
+    @TableField("client_order_id")
+    private String clientOrderId;
+
+    /**
+     * 触发价，仅限触发单
+     */
+    @TableField("stop_price")
+    private BigDecimal stopPrice;
+
+    /**
+     * 是否为全平仓单，仅适用于触发单
+     */
+    @TableField("close_position")
+    private Boolean closePosition;
+
+    /**
+     * 追踪止损激活价格，仅TRAILING_STOP_MARKET 需要此参数, 默认为下单当前市场价格(支持不同workingType)
+     */
+    @TableField("activation_price")
+    private BigDecimal activationPrice;
+
+    /**
+     * 追踪止损回调比例，可取值范围[0.1, 10],其中 1代表1% ,仅TRAILING_STOP_MARKET 需要此参数
+     */
+    @TableField("callback_rate")
+    private BigDecimal callbackRate;
+
+    /**
+     * 订单有效期类型
+     */
+    @TableField("time_in_force")
+    private String timeInForce;
+
+    /**
+     * 触发价格类型
+     */
+    @TableField("working_type")
+    private String workingType;
+
+    /**
+     * 价格保护开关
+     */
+    @TableField("price_protect")
+    private Boolean priceProtect;
+
+    /**
+     * 响应类型
+     */
+    @TableField("order_resp_type")
+    private String orderRespType;
+
+    /**
+     * 不能与price同时传
+     */
+    @TableField("price_match")
+    private String priceMatch;
+
+    /**
+     * 防自成交模式， 默认NONE
+     */
+    @TableField("self_trade_prevention_mode")
+    private String selfTradePreventionMode;
+
+    /**
+     * TIF为GTD时订单的自动取消时间， 当timeInforce为GTD时必传；传入的时间戳仅保留秒级精度，毫秒级部分会被自动忽略，时间戳需大于当前时间+600s且小于253402300799000
+     */
+    @TableField("good_till_date")
+    private Long goodTillDate;
+
+    /**
+     * 请求时间戳
+     */
+    @TableField("timestamp")
+    private Long timestamp;
+
+    /**
+     * 订单状态
+     */
+    @TableField("status")
+    private String status;
+
+    /**
+     * 订单创建时间
+     */
+    @TableField(value = "created_datetime", fill = FieldFill.INSERT)
+    private LocalDateTime createdDatetime;
+
+    /**
+     * 订单更新时间
+     */
+    @TableField(value = "updated_datetime", fill = FieldFill.INSERT_UPDATE)
+    private LocalDateTime updatedDatetime;
 }
 
 
+
+
+
+
+package com.helei.tradeapplication;
+ 
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.generator.FastAutoGenerator;
+import com.baomidou.mybatisplus.generator.config.rules.NamingStrategy;
+import com.baomidou.mybatisplus.generator.engine.FreemarkerTemplateEngine;
+ 
+public class Generator {
+    public static void main(String[] args) {
+    FastAutoGenerator
+            //数据库配置
+            .create("jdbc:mysql://127.0.0.1:3306/shinanoquanti?useSSL=false&allowPublicKeyRetrieval=true&autoReconnect=true&failOverReadOnly=false&maxReconnects=10"
+                    , "root"
+                    , "123456")
+            //全局配置
+            .globalConfig(builder -> {
+                //设置作者
+                builder.author("com.helei")
+                        //开启swagger模式，这里就不开了
+//                        .enableSwagger()
+                        //设置最终的代码输出路径，这边是输出到D盘目录下
+                        .outputDir("D:\\workspace\\ideaworkspace\\ShinanoQuanti-main");
+            })
+            //包设置，也就是设置代码生成后的包名
+            .packageConfig(builder -> {
+                //设置父包名
+                builder.parent("com.example.mp")
+                        //设置模块名
+                        .moduleName("mpdemo");
+            })
+            //设置生成策略
+            .strategyConfig(builder -> {
+                //设置要生成代码的表名，可以设置多个，这里设置一个
+                builder.addInclude("t_binance_contract_order")
+                        //设置要过滤的表前缀，在生成实体类的时候可以自动去除
+                        .addTablePrefix("t_")
+                        //设置要过滤的字段前缀
+                        .addFieldPrefix("t_")
+ 
+                        /**
+                         * entityBuilder()
+                         * Entity策略配置
+                         */
+ 
+                        .entityBuilder()
+                        //开启Lombok
+                        .enableLombok()
+                        //开启生成实体时生成字段注解
+                        .enableTableFieldAnnotation()
+                        //默认下划线转驼峰命名:NamingStrategy.underline_to_camel
+                        //数据库表映射到实体的命名策略
+                        .naming(NamingStrategy.underline_to_camel)
+                        //数据库表字段映射到实体的命名策略
+                        .columnNaming(NamingStrategy.underline_to_camel)
+                        //配置id生成策略,这里采用自增策略
+                        .idType(IdType.INPUT)
+                        //逻辑删除属性名（实体类）
+                        .logicDeletePropertyName("deleted")
+                        //乐观锁属性名(实体)
+                        .versionPropertyName("version")
+                        //开启覆盖已有文件策略
+                        .enableFileOverride()
+ 
+                        /**
+                         * controllerBuilder()
+                         * Controller生成策略
+                         */
+ 
+                        .controllerBuilder()
+                        //开启Rest风格
+                        .enableRestStyle()
+                        //开启覆盖已有文件
+                        .enableFileOverride()
+ 
+                        /**
+                         * serviceBuilder()
+                         * Service生成策略
+                         */
+ 
+                        .serviceBuilder()
+                        //开启覆盖已有文件
+                        .enableFileOverride()
+ 
+                        /**
+                         * mapperBuilder()
+                         * Mapper生成策略
+                         */
+ 
+                        .mapperBuilder()
+                        //启用 BaseResultMap 生成
+                        .enableBaseResultMap()
+                        //开启覆盖已有文件
+                        .enableFileOverride();
+            })
+            //设置引擎模板Freemarker，默认的是Velocity引擎模板
+            .templateEngine(new FreemarkerTemplateEngine())
+            .execute();
+    }
+}
+
+
+
+package com.helei.tradeapplication.mapper;
+
+
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.helei.tradeapplication.entity.BinanceContractOrder;
+
+/**
+ * <p>
+ * 币安合约交易订单表 Mapper 接口
+ * </p>
+ *
+ * @author com.helei
+ * @since 2024-11-05
+ */
+public interface BinanceContractOrderMapper extends BaseMapper<BinanceContractOrder> {
+
+}
+
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.mp.mpdemo.mapper.BinanceContractOrderMapper">
+
+    <!-- 通用查询映射结果 -->
+    <resultMap id="BaseResultMap" type="com.example.mp.mpdemo.entity.BinanceContractOrder">
+        <id column="order_id" property="orderId" />
+        <result column="user_id" property="userId" />
+        <result column="account_id" property="accountId" />
+        <result column="symbol" property="symbol" />
+        <result column="side" property="side" />
+        <result column="position_side" property="positionSide" />
+        <result column="type" property="type" />
+        <result column="reduce_only" property="reduceOnly" />
+        <result column="quantity" property="quantity" />
+        <result column="price" property="price" />
+        <result column="client_order_id" property="clientOrderId" />
+        <result column="stop_price" property="stopPrice" />
+        <result column="close_position" property="closePosition" />
+        <result column="activation_price" property="activationPrice" />
+        <result column="callback_rate" property="callbackRate" />
+        <result column="time_in_force" property="timeInForce" />
+        <result column="working_type" property="workingType" />
+        <result column="price_protect" property="priceProtect" />
+        <result column="order_resp_type" property="orderRespType" />
+        <result column="price_match" property="priceMatch" />
+        <result column="self_trade_prevention_mode" property="selfTradePreventionMode" />
+        <result column="good_till_date" property="goodTillDate" />
+        <result column="timestamp" property="timestamp" />
+        <result column="status" property="status" />
+        <result column="created_datetime" property="createdDatetime" />
+        <result column="updated_datetime" property="updatedDatetime" />
+    </resultMap>
+
+</mapper>
 
 
 
 spring:
-#  datasource:
-#    url: jdbc:mysql://localhost:3306/shinano_quanti?useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC
-#    username: helei
-#    password: 962464helei
-#    driver-class-name: com.mysql.cj.jdbc.Driver
-#  mybatis-plus:
-#    configuration:
-#      log-impl: org.apache.ibatis.logging.stdout.StdOutImpl  # 输出 SQL 日志
+    datasource:
+#      url: jdbc:mysql://192.168.1.3:3306/shinanoquanti?useSSL=false&allowPublicKeyRetrieval=true&autoReconnect=true&failOverReadOnly=false&maxReconnects=10
+      url: jdbc:mysql://127.0.0.1:3306/shinanoquanti?useSSL=false&allowPublicKeyRetrieval=true&autoReconnect=true&failOverReadOnly=false&maxReconnects=10
+      username: root
+      password: 123456
+      driver-class-name: com.mysql.cj.jdbc.Driver
+      type: com.alibaba.druid.pool.DruidDataSource
 
-  kafka:
+      druid:
+        initial-size: 5
+        max-active: 20
+        min-idle: 5
+        max-wait: 60000
+        time-between-eviction-runs-millis: 60000
+        min-evictable-idle-time-millis: 300000
+        validation-query: SELECT 1
+        test-while-idle: true
+        test-on-borrow: false
+        test-on-return: false
 
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    mybatis-plus:
+      configuration:
+        log-impl: org.apache.ibatis.logging.stdout.StdOutImpl  # 输出 SQL 日志
 
-  data:
-    redis:
-      # 如果需要密码，格式为 redis://:password@localhost:6379
-      url: redis://192.168.1.2:6379
 
 
 shinano:
@@ -1566,19 +2409,18 @@ shinano:
           - env: NORMAL
             trade_type:
               - SPOT
-              - CONTRACT
-          - env: TEST_NET
-            trade_type:
-              - SPOT
-              - CONTRACT
-
 
       kafka:
-        bootstrap_servers: 127.0.0.1:9092 # Kafka服务器地址
+#        bootstrap_servers: 127.0.0.1:9092 # Kafka服务器地址
+        bootstrap_servers: 192.168.1.3:9092 # Kafka服务器地址
         group_id: trade_app_test_group
+        kafka_num_partitions: 1
+        kafka_replication_factor: 1
+
       redis:
         # 如果需要密码，格式为 redis://:password@localhost:6379
-        url: redis://127.0.0.1:6379
+#        url: redis://127.0.0.1:6379
+        url: redis://192.168.1.3:6379
 
       # 信号设置
       signal:
@@ -1609,279 +2451,59 @@ shinano:
                 - test3
         test_net: {}
 
-
-
-
-package com.helei.tradesignalcenter.stream.d_decision;
-
-
-import com.helei.dto.trade.IndicatorMap;
-import com.helei.dto.trade.IndicatorSignal;
-import com.helei.dto.trade.TradeSignal;
-import com.helei.tradesignalcenter.stream.d_decision.config.PSTBollDecisionConfig_v1;
-import lombok.extern.slf4j.Slf4j;
-
-import java.math.BigDecimal;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
-
-/**
- * 根据PST和Boll指标决策下单
- */
-@Deprecated
-@Slf4j
-public class PSTBollDecisionMaker extends AbstractDecisionMaker<TradeSignal> {
-
-    private final PSTBollDecisionConfig_v1 config;
-
-    public PSTBollDecisionMaker(PSTBollDecisionConfig_v1 config) {
-        super(config.getName());
-        this.config = config;
-    }
-
-    @Override
-    protected TradeSignal decisionAndBuilderOrder(String symbol, List<IndicatorSignal> windowSignal, IndicatorMap indicatorMap) {
-        String pstKey = config.getPstConfig().getIndicatorName();
-        String bollKey = config.getBollConfig().getIndicatorName();
-
-        Map<String, List<IndicatorSignal>> signalMap = windowSignal.stream().collect(Collectors.groupingBy(IndicatorSignal::getName));
-
-        List<IndicatorSignal> pstSignals = signalMap.get(pstKey);
-        List<IndicatorSignal> bollSignals = signalMap.get(bollKey);
-
-        if (pstSignals == null || bollSignals == null || pstSignals.isEmpty() || bollSignals.isEmpty()) {
-            log.warn("pst和boll信号不满足共振， 不生成订单");
-            return null;
-        }
-
-        IndicatorSignal newPstSignal = pstSignals.getLast();
-        IndicatorSignal newBollSignal = bollSignals.getLast();
-
-        //TODO 仅仅测试用
-        return buildMarketOrder(newBollSignal);
-    }
-
-    private static TradeSignal buildMarketOrder(IndicatorSignal newBollSignal) {
-        return TradeSignal
-                .builder()
-                .symbol(newBollSignal.getKLine().getSymbol())
-                .tradeSide(newBollSignal.getTradeSide())
-                .targetPrice(BigDecimal.valueOf(newBollSignal.getTargetPrice()))
-                .stopPrice(BigDecimal.valueOf(newBollSignal.getStopPrice()))
-                .build();
-    }
-}
-
-
-
-package com.helei.tradesignalcenter.stream.e_trade_signal;
-
-import com.helei.dto.kafka.TradeSignalTopic;
-import com.helei.tradesignalcenter.config.TradeSignalConfig;
-import com.helei.dto.trade.TradeSignal;
-import com.helei.util.Serializer;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.flink.api.common.serialization.SerializationSchema;
-import org.apache.flink.api.connector.sink2.Sink;
-import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
-import org.apache.flink.connector.kafka.sink.KafkaSink;
-import org.apache.kafka.clients.producer.ProducerConfig;
-
-import java.util.Properties;
-
-
-@Slf4j
-public class KafkaTradeSignalCommitter extends AbstractTradeSignalCommitter<TradeSignal> {
-
-
-    @Override
-    public Sink<TradeSignal> getCommitSink() {
-        TradeSignalConfig.KafkaServerConfig kafkaServerConfig = tradeSignalConfig.getRealtime().getKafka().getOutput();
-        String bootstrap = kafkaServerConfig.getBootstrapServer();
-        TradeSignalTopic topic = tradeSignalConfig.getSinkTopic();
-
-        log.info("创建 原始订单 Kafka Sink [{}] - topic [{}]", bootstrap, topic);
-
-        Properties props = new Properties();
-        props.setProperty(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, kafkaServerConfig.getTransaction_timeout_ms());
-
-        return KafkaSink.<TradeSignal>builder()
-                .setBootstrapServers(bootstrap)
-                .setRecordSerializer(
-                        KafkaRecordSerializationSchema
-                                .builder()
-                                .setTopic(topic.toString())
-                                .setValueSerializationSchema(new KafkaOriginOrderSchema())
-                                .build()
-                )
-//                .setDeliveryGuarantee(DeliveryGuarantee.EXACTLY_ONCE)
-                .setKafkaProducerConfig(props)
-                .build();
-    }
-
-
-    static class KafkaOriginOrderSchema implements SerializationSchema<TradeSignal> {
-        @Override
-        public byte[] serialize(TradeSignal tradeSignal) {
-            return Serializer.Algorithm.Protostuff.serialize(tradeSignal);
-        }
-    }
-}
-
-
-
-package com.helei.tradesignalcenter.support;
-
-
-import com.helei.constants.KLineInterval;
-import com.helei.constants.TradeSide;
-import com.helei.dto.trade.IndicatorMap;
-import com.helei.dto.indicator.config.MACDConfig;
-import com.helei.tradesignalcenter.config.FlinkConfig;
-import com.helei.tradesignalcenter.stream.*;
-import com.helei.tradesignalcenter.stream.a_klinesource.RandomKLineSource;
-import com.helei.dto.trade.TradeSignal;
-import com.helei.dto.trade.KLine;
-import com.helei.dto.trade.IndicatorSignal;
-import com.helei.tradesignalcenter.stream.b_indicator.calculater.MACDCalculator;
-import com.helei.tradesignalcenter.stream.b_indicator.calculater.PSTCalculator;
-import com.helei.tradesignalcenter.stream.c_indicator_signal.IndicatorSignalService;
-import com.helei.tradesignalcenter.stream.c_indicator_signal.IndicatorSignalStreamProcessor;
-import com.helei.tradesignalcenter.stream.c_indicator_signal.maker.PSTSignalMaker;
-import com.helei.tradesignalcenter.stream.d_decision.AbstractDecisionMaker;
-import com.helei.tradesignalcenter.stream.b_indicator.calculater.BollCalculator;
-import com.helei.dto.indicator.config.BollConfig;
-import com.helei.dto.indicator.config.PSTConfig;
-import com.helei.tradesignalcenter.stream.c_indicator_signal.maker.AbstractSignalMaker;
-import com.helei.tradesignalcenter.stream.c_indicator_signal.maker.BollSignalMaker;
-import com.helei.tradesignalcenter.stream.e_trade_signal.KafkaTradeSignalCommitter;
-import org.apache.flink.api.common.functions.OpenContext;
-import org.apache.flink.streaming.api.TimerService;
-import org.apache.flink.streaming.api.datastream.DataStreamSource;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.Serial;
-import java.math.BigDecimal;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
-
-public class RandomKLineSourceTest {
-    private static final Logger log = LoggerFactory.getLogger(RandomKLineSourceTest.class);
-    private static String btcusdt = "btcusdt";
-
-    private static String ethusdt = "ethusdt";
-
-    private static StreamExecutionEnvironment env;
-
-    private static StreamExecutionEnvironment env2;
-
-
-    private static RandomKLineSource randomKLineSource;
-
-
-    @BeforeAll
-    public static void before() {
-        try {
-            env = FlinkConfig.streamExecutionEnvironment();
-            randomKLineSource = new RandomKLineSource(btcusdt, Set.of(KLineInterval.m_15),
-                    LocalDateTime.of(2020, 10, 29, 15, 38), 2000.0, 19000.0);
-
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    @Test
-    public void testRandomKLineSource() throws Exception {
-        DataStreamSource<KLine> streamSource = env.addSource(randomKLineSource);
-
-        streamSource.print();
-
-        env.execute();
-        TimeUnit.MINUTES.sleep(1000);
-    }
-
-    @Test
-    public void testAutoTradeV2() throws Exception {
-        PSTConfig pstConfig = new PSTConfig(60, 3, 3);
-        BollConfig bollConfig = new BollConfig(15);
-
-
-        IndicatorSignalService indicatorSignalService = buildTradeSignalService(pstConfig, bollConfig);
-        AbstractDecisionMaker<TradeSignal> abstractDecisionMaker = new AbstractDecisionMaker<>("测试用决策生成器") {
-            @Serial
-            private final static long serialVersionUID = 122142132145213L;
-
-            @Override
-            protected TradeSignal decisionAndBuilderOrder(String symbol, List<IndicatorSignal> windowSignal, IndicatorMap indicatorMap) {
-//                log.info("收到信号【{}】\n{}", symbol, windowSignal);
-                return TradeSignal
-                        .builder()
-                        .symbol(symbol)
-                        .tradeSide(TradeSide.BUY)
-                        .targetPrice(BigDecimal.valueOf(windowSignal.getFirst().getTargetPrice()))
-                        .stopPrice(BigDecimal.valueOf(windowSignal.getFirst().getStopPrice()))
-                        .build();
-            }
-        };
-
-        KafkaTradeSignalCommitter kafkaOriginOrderCommitter = new KafkaTradeSignalCommitter();
-
-
-        TradeSignalBuildTask<TradeSignal> tradeSignalBuildTask = new TradeSignalBuildTask<TradeSignal>(
-                indicatorSignalService,
-                abstractDecisionMaker,
-                kafkaOriginOrderCommitter);
-
-        tradeSignalBuildTask.execute("test");
-    }
-
-    private IndicatorSignalService buildTradeSignalService(PSTConfig pstConfig, BollConfig bollConfig) {
-        return IndicatorSignalService
-                .builder(env)
-                .addIndicatorSignalProcessor(
-                        IndicatorSignalStreamProcessor
-                                .builder()
-                                .setWindowLengthRationOfKLine(1.0 / 60)
-                                .addKLineSource(randomKLineSource)
-                                .addIndicator(new PSTCalculator(pstConfig))
-                                .addIndicator(new MACDCalculator(new MACDConfig(12, 26, 9)))
-                                .addIndicator(new BollCalculator(bollConfig))
-
-                                .addSignalMaker(new BollSignalMaker(bollConfig))
-                                .addSignalMaker(new PSTSignalMaker(pstConfig))
-                                .addSignalMaker(new AbstractSignalMaker(true) {
-
-                                    @Override
-                                    public void onOpen(OpenContext openContext) throws Exception {
-
-                                    }
-
-                                    @Override
-                                    protected IndicatorSignal resolveHistoryKLine(KLine kLine, TimerService timerService) throws Exception {
-//                        System.out.println(Instant.ofEpochMilli(kLine.getOpenTime()) + " - " + kLine.getIndicators());
-                                        return IndicatorSignal.builder().description("这是一条测试信号1h").name("测试信号1h")
-                                                .kLine(kLine).tradeSide(TradeSide.BUY).targetPrice(1111111111.0).stopPrice(1231231.0).build();
-                                    }
-
-                                    @Override
-                                    protected IndicatorSignal resolveRealTimeKLine(KLine kLine, TimerService timerService) throws Exception {
-                                        return null;
-                                    }
-                                })
-                                .build()
-                )
-                .build();
-    }
-
-}
-
-
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-generator</artifactId>
+        </dependency>
+        <!--velocity模板引擎-->
+        <dependency>
+            <groupId>org.apache.velocity</groupId>
+            <artifactId>velocity-engine-core</artifactId>
+            <version>2.3</version>
+        </dependency>
+
+        <!--freemarker模板引擎-->
+        <dependency>
+            <groupId>org.freemarker</groupId>
+            <artifactId>freemarker</artifactId>
+        </dependency>
+
+
+CREATE TABLE t_order_binance_contract
+(
+    order_id                   BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '订单编号',
+    user_id                    BIGINT         NOT NULL COMMENT '用户id',
+    account_id                 BIGINT         NOT NULL COMMENT '用户的账户id',
+
+    symbol                     VARCHAR(20)    NOT NULL COMMENT '交易对，例如 BTCUSDT',
+    side                       ENUM('BUY', 'SELL') NOT NULL COMMENT '交易方向',
+    position_side              ENUM('BOTH', 'LONG', 'SHORT') DEFAULT 'BOTH' COMMENT '持仓方向，默认BOTH',
+    type                       ENUM('LIMIT', 'MARKET', 'STOP', 'STOP_MARKET', 'TAKE_PROFIT', 'TAKE_PROFIT_MARKET', 'TRAILING_STOP_MARKET') NOT NULL COMMENT '订单类型',
+
+    reduce_only                BOOLEAN        DEFAULT FALSE COMMENT '是否仅减少持仓，仅适用于双向持仓模式',
+    quantity                   DECIMAL(18, 8) NOT NULL COMMENT '交易数量',
+    price                      DECIMAL(18, 8) DEFAULT NULL COMMENT '订单价格，仅限限价单',
+    client_order_id            VARCHAR(36)    DEFAULT NULL COMMENT '用户自定义订单ID',
+    stop_price                 DECIMAL(18, 8) DEFAULT NULL COMMENT '触发价，仅限触发单',
+    close_position             BOOLEAN        DEFAULT FALSE COMMENT '是否为全平仓单，仅适用于触发单',
+    activation_price           DECIMAL(18, 8) DEFAULT NULL COMMENT '追踪止损激活价格，仅TRAILING_STOP_MARKET 需要此参数, 默认为下单当前市场价格(支持不同workingType)',
+    callback_rate              DECIMAL(18, 8) DEFAULT NULL COMMENT '追踪止损回调比例，可取值范围[0.1, 10],其中 1代表1% ,仅TRAILING_STOP_MARKET 需要此参数',
+
+    time_in_force              ENUM('GTC', 'IOC', 'FOK') DEFAULT 'GTC' COMMENT '订单有效期类型',
+    working_type               ENUM('MARK_PRICE', 'CONTRACT_PRICE') DEFAULT 'CONTRACT_PRICE' COMMENT '触发价格类型',
+    price_protect              BOOLEAN        DEFAULT FALSE COMMENT '价格保护开关',
+
+    order_resp_type            ENUM('ACK', 'RESULT') DEFAULT 'ACK' COMMENT "响应类型",
+    price_match                ENUM('OPPONENT', 'OPPONENT_5', 'OPPONENT_10', 'OPPONENT_20', 'QUEUE', 'QUEUE_5', 'QUEUE_10', 'QUEUE_20', 'NONE') DEFAULT 'NONE' COMMENT '不能与price同时传',
+
+    self_trade_prevention_mode ENUM('NONE' , 'EXPIRE_TAKER', 'EXPIRE_MAKER', 'EXPIRE_BOTH') DEFAULT 'NONE' COMMENT '防自成交模式， 默认NONE',
+    good_till_date             BIGINT         DEFAULT NULL COMMENT 'TIF为GTD时订单的自动取消时间， 当timeInforce为GTD时必传；传入的时间戳仅保留秒级精度，毫秒级部分会被自动忽略，时间戳需大于当前时间+600s且小于253402300799000',
+
+    timestamp                  BIGINT         NOT NULL COMMENT '请求时间戳',
+
+    status                     ENUM('NEW', 'PARTIALLY_FILLED', 'FILLED', 'CANCELED', 'REJECTED', 'EXPIRED', 'EXPIRED_IN_MATCH', 'CREATED', 'WRITE_IN_DB', 'WRITE_IN_KAFKA', 'SEND_TO_CEX') DEFAULT 'NEW' COMMENT '订单状态',
+
+    created_datetime           TIMESTAMP      DEFAULT CURRENT_TIMESTAMP COMMENT '订单创建时间',
+    updated_datetime           TIMESTAMP      DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '订单更新时间'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='币安合约交易订单表';
 
