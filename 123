@@ -1,2668 +1,1330 @@
-package com.helei.constants;
 
-import lombok.Getter;
+package com.helei.tradeapplication.service.impl;
 
-import java.util.HashMap;
-import java.util.Map;
+
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.account.UserAccountInfo;
+import com.helei.tradeapplication.dto.GroupOrder;
+import com.helei.dto.trade.TradeSignal;
+import com.helei.interfaces.CompleteInvocation;
+import com.helei.tradeapplication.manager.ExecutorServiceManager;
+import com.helei.tradeapplication.service.OrderService;
+import com.helei.tradeapplication.service.TradeSignalService;
+import com.helei.tradeapplication.service.UserAccountInfoService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+
 
 /**
- * 持仓方向
+ * 处理交易信号
  */
-@Getter
-public enum PositionSide {
+@Slf4j
+@Service
+public class KafkaTradeSignalService implements TradeSignalService {
 
-    BOTH("BOTH"),
-    LONG("LONG"),
-    SHORT("SHORT"),
-    ;
+    private final ExecutorService executor;
 
-    public static final Map<String, PositionSide> STATUS_MAP = new HashMap<>();
+    @Autowired
+    private UserAccountInfoService userAccountInfoService;
 
-    static {
-        for (PositionSide status : PositionSide.values()) {
-            STATUS_MAP.put(status.getDescription(), status);
+    @Autowired
+    private OrderService orderService;
+
+
+    public KafkaTradeSignalService(ExecutorServiceManager executorServiceManager) {
+        this.executor = executorServiceManager.getTradeExecutor();
+    }
+
+
+    /**
+     * 处理交易信号
+     *
+     * @param runEnv    运行环境
+     * @param tradeType 交易类型
+     * @param signal    信号
+     * @return true 无论处理结果如何都忽略到改信号
+     */
+    public boolean resolveTradeSignal(RunEnv runEnv, TradeType tradeType, TradeSignal signal) {
+
+        try {
+            userAccountInfoService
+                    // 1 查询环境下的账户
+                    .queryEnvAccountInfo(runEnv, tradeType)
+                    // 2 生成订单并交易
+                    .thenApplyAsync(accounts -> makeOrdersAndSend2Trade(runEnv, tradeType, signal, accounts), executor);
+        } catch (Exception e) {
+            log.error("处理信号[{}]时发生错误", signal, e);
+        }
+
+        return true;
+    }
+
+
+    /**
+     * 构建订单，符合条件的提交到交易.
+     * <p>并不会真正把订单提交到交易所，而是写入数据库后，再写入kafka的topic里</p>
+     *
+     * @param runEnv       runEnv
+     * @param tradeType    tradeType
+     * @param signal       signal
+     * @param accountInfos accountInfos
+     * @return List<BaseOrder>
+     */
+    private List<GroupOrder> makeOrdersAndSend2Trade(RunEnv runEnv, TradeType tradeType, TradeSignal signal, List<UserAccountInfo> accountInfos) {
+
+        List<CompletableFuture<GroupOrder>> futures = new ArrayList<>();
+
+        for (UserAccountInfo accountInfo : accountInfos) {
+
+            //Step 1 过滤掉账户设置不接受此信号的
+            if (filterAccount(signal, accountInfo)) {
+                log.warn("accountId[{}]不能执行信号 [{}]", accountInfo.getId(), signal);
+            }
+
+            CompletableFuture<GroupOrder> future = userAccountInfoService
+                    //Step 2 查询实时的账户数据
+                    .queryAccountRTInfo(runEnv, tradeType, accountInfo.getId())
+                    //Step 3 生产订单
+                    .thenApplyAsync(accountRTData -> {
+                        final GroupOrder[] groupOrder = {null};
+
+                        try {
+                            CountDownLatch latch = new CountDownLatch(1);
+
+                            orderService.makeOrder(accountInfo, accountRTData, signal, new CompleteInvocation<>() {
+                                @Override
+                                public void success(GroupOrder order) {
+                                    groupOrder[0] = order;
+                                    log.info("创建订单[{}]成功", order);
+                                }
+
+                                @Override
+                                public void fail(GroupOrder order, String errorMsg) {
+                                    groupOrder[0] = order;
+                                    log.info("创建订单失败[{}],错误原因[{}]", order, errorMsg);
+                                }
+
+                                @Override
+                                public void finish() {
+                                    latch.countDown();
+                                }
+                            });
+
+                            //等待订单创建完成
+                            latch.await();
+
+                        } catch (Exception e) {
+                            log.error("为accountId[{}]创建订单时出错, signal[{}]", accountInfo.getId(), signal, e);
+                        }
+                        return groupOrder[0];
+                    })
+                    .exceptionallyAsync(throwable -> {
+                        if (throwable != null) {
+                            log.error("创建订单时发生错误", throwable);
+                        }
+                        return null;
+                    });
+
+            futures.add(future);
+        }
+
+
+        //等待执行完成
+        List<GroupOrder> groupOrders = new ArrayList<>();
+        for (CompletableFuture<GroupOrder> future : futures) {
+            try {
+                GroupOrder order = future.get();
+                groupOrders.add(order);
+            } catch (ExecutionException | InterruptedException e) {
+                log.error("获取订单结果处理订单结果出错", e);
+                throw new RuntimeException(e);
+            }
+        }
+        return groupOrders;
+    }
+
+
+    /**
+     * 根据账户设置过滤
+     *
+     * @param signal  信号
+     * @param account 账户
+     * @return List<UserAccountInfo>
+     */
+    private boolean filterAccount(TradeSignal signal, UserAccountInfo account) {
+        return !account.getUsable().get() || !account.getSubscribeSymbol().contains(signal.getSymbol());
+    }
+}
+
+
+
+
+
+package com.helei.tradeapplication.service.impl;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.constants.CEXType;
+import com.helei.constants.order.GroupOrderStatus;
+import com.helei.constants.order.OrderEvent;
+import com.helei.constants.order.OrderStatus;
+import com.helei.constants.order.OrderType;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.account.AccountPositionConfig;
+import com.helei.dto.order.BaseOrder;
+import com.helei.dto.order.CEXTradeOrder;
+import com.helei.dto.order.CEXTradeOrderWrap;
+import com.helei.tradeapplication.dto.GroupOrder;
+import com.helei.dto.account.AccountRTData;
+import com.helei.dto.account.UserAccountInfo;
+import com.helei.dto.trade.TradeSignal;
+import com.helei.interfaces.CompleteInvocation;
+import com.helei.tradeapplication.manager.ExecutorServiceManager;
+import com.helei.tradeapplication.service.IBinanceContractOrderService;
+import com.helei.tradeapplication.service.OrderEventProcessService;
+import com.helei.tradeapplication.supporter.TradeOrderBuildSupporter;
+import com.helei.util.KafkaUtil;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+import java.util.concurrent.ExecutionException;
+
+
+@Slf4j
+@Service
+public class OrderServiceImpl extends OrderEventProcessService {
+
+
+    @Autowired
+    private KafkaProducerService kafkaProducerService;
+
+
+    @Autowired
+    private IBinanceContractOrderService binanceContractOrderService;
+
+
+    @Autowired
+    private TradeOrderBuildSupporter tradeOrderBuildSupporter;
+
+
+    @Autowired
+    public OrderServiceImpl(ExecutorServiceManager executorServiceManager) {
+        super(executorServiceManager.getOrderExecutor());
+        super.startProcessEvents();
+    }
+
+
+    /**
+     * 生成订单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param signal        信号
+     */
+    @Override
+    public void makeOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, TradeSignal signal, CompleteInvocation<GroupOrder> invocation) {
+
+        AccountPositionConfig accountPositionConfig = accountInfo.getAccountPositionConfig();
+        OrderType orderType = accountPositionConfig.getOrderType();
+
+        GroupOrder groupOrder = new GroupOrder();
+
+        //Step 1 创建主单
+        CEXTradeOrderWrap orderWrapper = switch (orderType) {
+            case LIMIT -> tradeOrderBuildSupporter.buildLimitOrder(accountInfo, accountRTData, signal);
+            case MARKET -> tradeOrderBuildSupporter.buildMarketOrder(accountInfo, accountRTData, signal);
+            default -> null;
+        };
+
+
+        long userId = accountInfo.getId();
+        long accountId = accountRTData.getAccountId();
+
+        if (orderWrapper == null) {
+            log.warn("userId[{}]-accountId[{}]创建主订单结果为null, signalId[{}]", userId, accountId, signal.getId());
+            return;
+        }
+
+        //获取订单
+        CEXTradeOrder order = orderWrapper.getFullFieldOrder();
+
+        // 资金不足
+        if (order.getQuantity().doubleValue() <= 0) {
+            order.setStatus(OrderStatus.BALANCE_INSUFFICIENT);
+        }
+        groupOrder.setMainOrder(order);
+
+
+        // 满足资金不足的标记，给group order也打上，不继续创建止盈止损单了
+        if (OrderStatus.BALANCE_INSUFFICIENT.equals(order.getStatus())) {
+            log.warn("userId[{}]-account[{}] 资金不足，将不会提交订单[{}]到交易所, signalId[{}]", userId, accountId, order.getOrderId(), signal.getId());
+            groupOrder.setGroupOrderStatus(GroupOrderStatus.BALANCE_INSUFFICIENT);
+
+            super.submitOrderEvent(groupOrder, OrderEvent.BALANCE_INSUFFICIENT, invocation);
+            return;
+        }
+
+        //Step 2 根据策略创建止损、止盈单
+
+
+        log.info("订单[{}]创建成功", order);
+        //Step 3 提交订单创建事件
+        super.submitOrderEvent(groupOrder, OrderEvent.CREATED_ORDER, invocation);
+    }
+
+
+    @Override
+    public GroupOrder writeOrder2Kafka(GroupOrder order) throws ExecutionException, InterruptedException {
+        //Step 1 从主单中取出环境信息，生成topic
+        BaseOrder mainOrder = order.getMainOrder();
+
+        String topic = KafkaUtil.getOrderSymbolTopic(mainOrder.getRunEnv(), mainOrder.getTradeType(), mainOrder.getSymbol());
+
+        //Step 2 获取交易所订单列表发送
+        List<CEXTradeOrder> cexTradeOrders = order.getCexTradeOrders();
+
+        kafkaProducerService.sendMessage(topic, JSONObject.toJSONString(cexTradeOrders)).get();
+
+        log.debug("订单order[{}]写入kafka成功", order);
+
+        return order;
+    }
+
+
+    @Override
+    public GroupOrder writeOrder2DB(GroupOrder order) {
+
+        BaseOrder mainOrder = order.getMainOrder();
+        CEXType cexType = mainOrder.getCexType();
+        TradeType tradeType = mainOrder.getTradeType();
+
+
+        if (CEXType.BINANCE.equals(cexType) && TradeType.CONTRACT.equals(tradeType)) {
+            List<CEXTradeOrder> cexTradeOrders = binanceContractOrderService.saveGroupOrder(order);
+            order.setCexTradeOrders(cexTradeOrders);
+            return order;
+        }
+
+        return null;
+    }
+
+
+}
+
+
+
+
+
+package com.helei.tradeapplication.service.impl;
+
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.account.AccountRTData;
+import com.helei.dto.account.UserAccountInfo;
+import com.helei.tradeapplication.cache.UserInfoCache;
+import com.helei.tradeapplication.manager.ExecutorServiceManager;
+import com.helei.tradeapplication.service.UserAccountInfoService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+
+@Component
+public class UserAccountInfoServiceImpl implements UserAccountInfoService {
+
+    private final ExecutorService executor;
+
+    @Autowired
+    private UserInfoCache userInfoCache;
+
+    public UserAccountInfoServiceImpl(ExecutorServiceManager executorServiceManager) {
+        this.executor = executorServiceManager.getQueryExecutor();
+    }
+
+    @Override
+    public CompletableFuture<List<UserAccountInfo>> queryEnvAccountInfo(RunEnv env, TradeType tradeType) {
+
+
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<AccountRTData> queryAccountRTInfo(RunEnv env, TradeType tradeType, long accountId) {
+        return CompletableFuture.supplyAsync(()->userInfoCache.queryAccountRTData(env, tradeType, accountId), executor);
+    }
+
+}
+
+
+package com.helei.tradeapplication.service;
+
+
+import com.baomidou.mybatisplus.extension.service.IService;
+import com.helei.tradeapplication.dto.GroupOrder;
+import com.helei.dto.order.CEXTradeOrder;
+
+import java.util.List;
+
+/**
+ * <p>
+ * 币安合约交易订单表 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2024-11-05
+ */
+public interface IBinanceContractOrderService extends IService<CEXTradeOrder> {
+
+
+    /**
+     * 保存订单
+     * @param order 订单
+     */
+    List<CEXTradeOrder> saveGroupOrder(GroupOrder order);
+
+}
+
+
+
+package com.helei.tradeapplication.service;
+
+import com.helei.constants.order.OrderEvent;
+import com.helei.constants.order.GroupOrderStatus;
+import com.helei.tradeapplication.dto.GroupOrder;
+import com.helei.interfaces.CompleteInvocation;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.*;
+
+
+@Slf4j
+public abstract class OrderEventProcessService implements OrderService {
+
+
+    /**
+     * 写入db的重试次数
+     */
+    private static final int WRITE_DB_RETRY_TIMES = 3;
+
+    /**
+     * 写入kafka的重试次数
+     */
+    private static final int WRITE_KAFKA_RETRY_TIMES = 3;
+
+
+    /**
+     * 阻塞队列， 用于存放订单和当前订单的事件
+     */
+    private final BlockingQueue<OrderProcessTask> eventQueue = new LinkedBlockingQueue<>();
+
+
+    /**
+     * 存放订单回调的map
+     */
+    private final ConcurrentMap<GroupOrder, CompleteInvocation<GroupOrder>> invocationMap = new ConcurrentHashMap<>();
+
+
+    /**
+     * 记录重试次数的map
+     */
+    private final ConcurrentMap<GroupOrder, Integer> retryMap = new ConcurrentHashMap<>();
+
+
+    /**
+     * 执行的线程池
+     */
+    private final ExecutorService executor;
+
+
+    public OrderEventProcessService(ExecutorService executor) {
+        this.executor = executor;
+    }
+
+
+    /**
+     * 提交订单事件
+     *
+     * @param order              订单
+     * @param event              订单事件
+     * @param completeInvocation 完成的回调函数
+     */
+    public void submitOrderEvent(GroupOrder order, OrderEvent event, CompleteInvocation<GroupOrder> completeInvocation) {
+        invocationMap.compute(order, (k, v) -> {
+            submitOrderEvent(order, event);
+            return completeInvocation;
+        });
+    }
+
+    /**
+     * 提交订单事件
+     *
+     * @param order 订单
+     * @param event 订单事件
+     */
+    public void submitOrderEvent(GroupOrder order, OrderEvent event) {
+        try {
+            eventQueue.put(new OrderProcessTask(order, event));
+        } catch (InterruptedException e) {
+            log.error("提交订单[{}]事件[{}]失败", order, event, e);
+            throw new RuntimeException("提交订单事件失败", e);
         }
     }
 
-    private final String description;
+    /**
+     * 事件处理
+     *
+     * @param order 订单
+     * @param event 事件
+     */
+    public void processOrderEvent(GroupOrder order, OrderEvent event) {
+        log.debug("开始处理订单[{}]的事件[{}]", order, event);
 
-    PositionSide(String description) {
-        this.description = description;
+        OrderEvent next = switch (event) {
+            case CREATED_ORDER -> createdOrderProcess(order);
+
+            case SEND_TO_DB -> sendToDBProcess(order);
+            case SEND_TO_KAFKA -> sendToKafkaProcess(order);
+
+            case SEND_TO_DB_RETRY -> sendToDBRetryProcess(order);
+            case SEND_TO_KAFKA_RETRY -> sendToKafkaRetryProcess(order);
+
+            case SEND_TO_DB_FINAL_ERROR -> errorProcess(order, OrderEvent.SEND_TO_DB_FINAL_ERROR);
+            case SEND_TO_KAFKA_FINAL_ERROR -> errorProcess(order, OrderEvent.SEND_TO_KAFKA_FINAL_ERROR);
+            case UN_SUPPORT_EVENT_ERROR -> errorProcess(order, OrderEvent.UN_SUPPORT_EVENT_ERROR);
+
+            case BALANCE_INSUFFICIENT -> balanceInsufficientProcess(order);
+
+            case COMPLETE -> successProcess(order);
+            case ERROR -> errorProcess(order, OrderEvent.ERROR);
+            case CANCEL -> cancelProcess(order);
+        };
+
+        if (next != null) {
+            submitOrderEvent(order, next);
+        }
+
+        log.debug("订单[{}]的事件[{}]处理完毕", order, event);
     }
+
+
+    /**
+     * 资金不足的订单处理
+     *
+     * @param order groupOrder
+     * @return 下一个事件
+     */
+    private OrderEvent balanceInsufficientProcess(GroupOrder order) {
+        if (GroupOrderStatus.BALANCE_INSUFFICIENT.equals(order.getGroupOrderStatus())) {
+            try {
+                //写入数据库
+                writeOrder2DB(order);
+            } catch (Exception e) {
+                //重试
+                return OrderEvent.SEND_TO_DB_RETRY;
+            }
+            //错误事件
+            errorProcess(order, OrderEvent.BALANCE_INSUFFICIENT);
+        }
+        return OrderEvent.UN_SUPPORT_EVENT_ERROR;
+    }
+
+
+    /**
+     * 取消订单
+     *
+     * @param order order
+     * @return 下一个事件
+     */
+    private OrderEvent cancelProcess(GroupOrder order) {
+        //TODO 取消订单逻辑，未写入kafka的标记就好，写入kafka的还需要向另外的kafka里写上取消的消息，订单提交服务收到后进行取消
+        return null;
+    }
+
+
+    /**
+     * 执行成功的事件处理
+     *
+     * @param order order
+     * @return 下一个事件
+     */
+    private OrderEvent successProcess(GroupOrder order) {
+
+        CompleteInvocation<GroupOrder> invocation = invocationMap.remove(order);
+
+        if (invocation != null) {
+            invocation.success(order);
+            invocation.finish();
+        }
+
+        return null;
+    }
+
+
+    /**
+     * 错误事件处理
+     *
+     * @param order order
+     * @param event 时间
+     * @return 下一个事件
+     */
+    private OrderEvent errorProcess(GroupOrder order, OrderEvent event) {
+
+        CompleteInvocation<GroupOrder> invocation = invocationMap.remove(order);
+
+        if (invocation != null) {
+            invocation.fail(order, event.name());
+            invocation.finish();
+        }
+
+        return null;
+    }
+
+
+    /**
+     * 发送到kafka错误重试事件处理
+     *
+     * @param order order
+     * @return 下一个事件
+     */
+    private OrderEvent sendToKafkaRetryProcess(GroupOrder order) {
+        if (GroupOrderStatus.WRITE_IN_KAFKA.equals(order.getGroupOrderStatus())) {
+            Integer times = retryMap.remove(order);
+            times = times == null ? 0 : times;
+
+            //超过重试次数
+            if (times > WRITE_KAFKA_RETRY_TIMES) {
+                return OrderEvent.SEND_TO_KAFKA_FINAL_ERROR;
+            }
+
+
+            try {
+                GroupOrder result = writeOrder2Kafka(order);
+
+                if (result == null) return OrderEvent.CANCEL;
+
+                return OrderEvent.COMPLETE;
+            } catch (Exception e) {
+                log.error("写入Order[{}]到kafka发生错误,重试次数[{}]", order, times, e);
+                retryMap.put(order, times + 1);
+                return OrderEvent.SEND_TO_KAFKA_RETRY;
+            }
+        }
+
+        return OrderEvent.UN_SUPPORT_EVENT_ERROR;
+    }
+
+
+    /**
+     * 发送到kafka事件处理
+     *
+     * @param order order
+     * @return 下一个事件
+     */
+    private OrderEvent sendToKafkaProcess(GroupOrder order) {
+        if (GroupOrderStatus.WRITE_IN_DB.equals(order.getGroupOrderStatus())) {
+            // 发送kafka
+            try {
+                order.setGroupOrderStatus(GroupOrderStatus.WRITE_IN_KAFKA);
+
+                GroupOrder result = writeOrder2Kafka(order);
+
+                if (result == null) return OrderEvent.CANCEL;
+            } catch (Exception e) {
+                log.error("写入Order[{}]到kafka发生错误", order, e);
+                return OrderEvent.SEND_TO_KAFKA_RETRY;
+            }
+            return OrderEvent.COMPLETE;
+        }
+        return OrderEvent.UN_SUPPORT_EVENT_ERROR;
+    }
+
+
+    /**
+     * 发送到DB错误重试事件处理
+     *
+     * @param order order
+     * @return 下一个事件
+     */
+    private OrderEvent sendToDBRetryProcess(GroupOrder order) {
+        GroupOrderStatus groupOrderStatus = order.getGroupOrderStatus();
+        if (GroupOrderStatus.WRITE_IN_DB.equals(groupOrderStatus) || GroupOrderStatus.BALANCE_INSUFFICIENT.equals(groupOrderStatus)) {
+            Integer times = retryMap.remove(order);
+            times = times == null ? 0 : times;
+
+            //超过重试次数
+            if (times > WRITE_DB_RETRY_TIMES) {
+                return OrderEvent.SEND_TO_DB_FINAL_ERROR;
+            }
+
+            try {
+                GroupOrder result = writeOrder2DB(order);
+
+                if (result == null) return OrderEvent.CANCEL;
+
+                //资金不足，只写入数据库记录
+                if (GroupOrderStatus.BALANCE_INSUFFICIENT.equals(groupOrderStatus)) return OrderEvent.ERROR;
+
+                return OrderEvent.SEND_TO_KAFKA;
+            } catch (Exception e) {
+                log.error("写入Order[{}]到数据库发生错误, 重试次数[{}]", order, times, e);
+                retryMap.put(order, times + 1);
+                return OrderEvent.SEND_TO_DB_RETRY;
+            }
+        }
+
+        return OrderEvent.UN_SUPPORT_EVENT_ERROR;
+    }
+
+
+    /**
+     * 发送到DB事件处理
+     *
+     * @param order order
+     * @return 下一个事件
+     */
+    private OrderEvent sendToDBProcess(GroupOrder order) {
+        if (GroupOrderStatus.CREATED.equals(order.getGroupOrderStatus())) {
+            // 写数据库
+            try {
+                order.setGroupOrderStatus(GroupOrderStatus.WRITE_IN_DB);
+
+                GroupOrder result = writeOrder2DB(order);
+
+                if (result == null) return OrderEvent.CANCEL;
+            } catch (Exception e) {
+                log.error("写入Order[{}]到数据库发生错误", order, e);
+                return OrderEvent.SEND_TO_DB_RETRY;
+            }
+            return OrderEvent.SEND_TO_KAFKA;
+        }
+        return OrderEvent.UN_SUPPORT_EVENT_ERROR;
+    }
+
+    /**
+     * 创建订单事件处理
+     *
+     * @param order order
+     * @return 下一个事件
+     */
+    private OrderEvent createdOrderProcess(GroupOrder order) {
+        //订单创建事件
+        order.setGroupOrderStatus(GroupOrderStatus.CREATED);
+        return OrderEvent.SEND_TO_DB;
+    }
+
+
+    /**
+     * 开始处理事件
+     */
+    public void startProcessEvents() {
+        while (!eventQueue.isEmpty()) {
+            try {
+                OrderProcessTask task = eventQueue.take();
+
+                executor.execute(() -> processOrderEvent(task.getOrder(), task.getOrderEvent()));
+            } catch (InterruptedException e) {
+                log.error("处理事件时发生错误", e);
+            }
+        }
+    }
+
+
+    /**
+     * 订单处理任务，包含订单信息和订单事件
+     */
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    public static class OrderProcessTask {
+
+        /**
+         * 订单信息
+         */
+        private GroupOrder order;
+
+        /**
+         * 订单事件
+         */
+        private OrderEvent orderEvent;
+    }
+
+
 }
 
 
-package com.helei.dto.account;
+package com.helei.tradeapplication.service;
 
-import com.helei.dto.AssetInfo;
-import lombok.*;
+import com.helei.dto.account.AccountRTData;
+import com.helei.dto.account.UserAccountInfo;
+import com.helei.tradeapplication.dto.GroupOrder;
+import com.helei.dto.trade.TradeSignal;
+import com.helei.interfaces.CompleteInvocation;
 
-import java.util.List;
+import java.util.concurrent.ExecutionException;
 
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-@EqualsAndHashCode
-@ToString
-public class AccountBalanceInfo {
+public interface OrderService {
 
-    /**
-     * 账户id
-     */
-    private long accountId;
 
     /**
-     * 更新时间
+     * 生成订单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param signal        信号
+     * @param invocation    生成订单结果的回调
      */
-    private Long updateTime;
+    void makeOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, TradeSignal signal, CompleteInvocation<GroupOrder> invocation);
+
 
     /**
-     * 资金信息
+     * 将订单写到kafka
+     *
+     * @param order 订单数据
+     * @return 订单数据
      */
-    private List<AssetInfo> balances;
+    GroupOrder writeOrder2Kafka(GroupOrder order) throws ExecutionException, InterruptedException;
 
+
+    /**
+     * 将订单写入数据库
+     *
+     * @param order order
+     * @return 订单数据
+     */
+    GroupOrder writeOrder2DB(GroupOrder order);
 }
-package com.helei.dto.account;
 
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+
+package com.helei.tradeapplication.supporter;
+
+import com.helei.constants.order.OrderType;
+import com.helei.constants.order.TimeInForce;
+import com.helei.dto.account.AccountPositionConfig;
+import com.helei.dto.account.AccountRTData;
+import com.helei.dto.account.PositionInfo;
+import com.helei.dto.account.UserAccountInfo;
+import com.helei.dto.order.BaseOrder;
+import com.helei.dto.order.CEXTradeOrder;
+import com.helei.dto.order.type.*;
+import com.helei.dto.trade.BalanceInfo;
+import com.helei.dto.trade.TradeSignal;
+import com.helei.snowflack.BRStyle;
+import com.helei.snowflack.SnowFlakeFactory;
+import com.helei.util.OrderQuantityCalUtil;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.math.BigDecimal;
+
 
 /**
- * 账户仓位设置
+ * 构建用于交易的订单，自带id
  */
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-public class AccountPositionConfig {
+@Component
+public class TradeOrderBuildSupporter {
+
+    @Autowired
+    private SnowFlakeFactory snowFlakeFactory;
 
     /**
-     * 风险百分比
+     * 构建限价单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param signal        信号
+     * @return 限价单
      */
-    private double riskPercent;
+    public LimitOrder buildLimitOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, TradeSignal signal) {
+        // Step 1 参数检验
+        BigDecimal enterPrice = signal.getEnterPrice();
+        if (enterPrice == null) return null;
+
+        AccountPositionConfig positionConfig = accountInfo.getAccountPositionConfig();
+
+        // Step 2 创建订单
+        String symbol = signal.getSymbol();
+
+
+        // Step 2.1 基础订单信息
+        BaseOrder baseOrder = BaseOrder.builder()
+                .orderId(nextId(OrderType.LIMIT))
+                .runEnv(accountInfo.getRunEnv())
+                .tradeType(accountInfo.getTradeType())
+                .cexType(accountInfo.getCexType())
+                .symbol(symbol)
+                .side(signal.getTradeSide())
+                .positionSide(positionConfig.getPositionSide())
+                .userId(accountInfo.getUserId())
+                .accountId(accountRTData.getAccountId())
+                .build();
+        LimitOrder limitOrder = new LimitOrder(baseOrder);
+
+        // Step 2.2 订单价格、数量等 LimitOrder 信息
+        BalanceInfo balanceInfo = accountRTData.getAccountBalanceInfo().getBalances().get(symbol);
+        PositionInfo positionInfo = accountRTData.getAccountPositionInfo().getPositions().get(symbol);
+
+
+        double quantity = OrderQuantityCalUtil.riskPercentBasedQuantityCalculate(
+                balanceInfo.getFree(),
+                positionConfig.getRiskPercent(),
+                enterPrice.doubleValue(),
+                positionInfo.getEnterPosition(),
+                positionInfo.getPosition(),
+                signal.getStopPrice().doubleValue()
+        );
+
+        limitOrder.setTimeInForce(TimeInForce.GTC);
+        limitOrder.setPrice(enterPrice);
+        limitOrder.setQuantity(BigDecimal.valueOf(quantity));
+
+        return limitOrder;
+    }
+
 
     /**
-     * 杠杠倍数
+     * 构建市价单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param signal        信号
+     * @return 限价单
      */
-    private int leverage;
+    public MarketOrder buildMarketOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, TradeSignal signal) {
+        return null;
+    }
+
+    /**
+     * 构建市价止损单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param symbol        交易对
+     * @return 限价单
+     */
+    public StopLossMarketOrder buildStopMarketOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
+        return null;
+    }
 
 
     /**
-     * 止损金额
+     * 构建限价止损单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param symbol        交易对
+     * @return 限价单
      */
-    private int stopLoss;
+    public StopLossLimitOrder buildStopLimitOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
+        return null;
+    }
 
-}
+    /**
+     * 构建市价止盈单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param symbol        交易对
+     * @return 限价单
+     */
+    public TakeProfitMarketOrder buildTakeProfitMarketOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
+        return null;
+    }
 
+    /**
+     * 构建限价止盈单
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param symbol        交易对
+     * @return 限价单
+     */
+    public TakeProfitLimitOrder buildTakeProfitLimitOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
+        return null;
+    }
 
-package com.helei.dto.account;
-
-
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import java.util.List;
-
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-public class AccountPositionInfo {
+    /**
+     * buildTrailingSTIDMarketOrder
+     *
+     * @param accountInfo   账户信息
+     * @param accountRTData 账户实时数据
+     * @param symbol        交易对
+     * @return 限价单
+     */
+    public CEXTradeOrder buildTrailingSTIDMarketOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
+        return null;
+    }
 
 
     /**
-     * 账户id
+     * 获取下一id
+     * @param orderType 订单类型
+     * @return 订单id
      */
-    private long accountId;
-
-    /**
-     * 更新时间
-     */
-    private long updateTime;
-
-    /**
-     * 仓位信息
-     */
-    private List<PositionInfo> positions;
-
-
-
-    public void updatePositionInfos(List<PositionInfo> positionInfos) {
-
+    private String nextId(OrderType orderType) {
+        return snowFlakeFactory.nextId(BRStyle.TRADE_SIGNAL, orderType.name());
     }
 }
 
-package com.helei.dto.account;
+
+shinano:
+  quantity:
+    trade_app:
+      run_type: # 运行环境配置
+        configs:
+          - env: NORMAL
+            trade_type:
+              - SPOT
+        snow_flow: # 雪花算法配置
+          datacenter_id: 0 # 数据中心id
+          machine_id: 1 # 机器id
+
+      kafka:
+        bootstrap_servers: 127.0.0.1:9092 # Kafka服务器地址
+#        bootstrap_servers: 192.168.1.3:9092 # Kafka服务器地址
+        group_id: trade_app_test_group
+        kafka_num_partitions: 1
+        kafka_replication_factor: 1
+
+      redis:
+        # 如果需要密码，格式为 redis://:password@localhost:6379
+        #        url: redis://127.0.0.1:6379
+        url: redis://192.168.1.3:6379
+
+      signal: # 信号设置
+        normal: # 运行环境
+          spot: # 交易类型
+            - symbol: btcusdt # 交易对名称
+              signal_names: # 信号名list
+                - test1
+                - test2
+                - test3
+            - symbol: ethusdt
+              signal_names:
+                - test1
+                - test2
+                - test3
+          contract:
+            - symbol: btcusdt
+              signal_names:
+                - test1
+                - test2
+                - test3
+            - symbol: ethusdt
+              signal_names:
+                - test1
+                - test2
+                - test3
+        test_net: { }
 
 
-import com.helei.constants.PositionSide;
-import lombok.AllArgsConstructor;
+package com.helei.tradesignalprocess.config;
+
+import com.helei.constants.trade.TradeType;
+import com.helei.constants.RunEnv;
+import com.helei.dto.config.RunTypeConfig;
+import com.helei.dto.kafka.TradeSignalTopic;
 import lombok.Data;
-import lombok.NoArgsConstructor;
+import org.yaml.snakeyaml.Yaml;
 
+import java.io.InputStream;
 import java.io.Serializable;
+import java.util.Map;
 
 @Data
-@AllArgsConstructor
-@NoArgsConstructor
-public class PositionInfo implements Serializable {
+public class TradeSignalConfig implements Serializable {
+    private static final String CONFIG_FILE = "trade-signal-config.yaml";
 
+    public static final TradeSignalConfig TRADE_SIGNAL_CONFIG;
 
     /**
-     * 交易对
+     * 信号名
+     */
+    private String name;
+
+    /**
+     * 信号交易对
      */
     private String symbol;
 
     /**
-     * 仓位
+     * 运行环境设置
      */
-    private Double position;
+    private RunTypeConfig run_type;
 
     /**
-     * 入仓价格
+     * 历史k线加载批大小
      */
-    private Double enterPosition;
+    private int historyKLineBatchSize;
 
     /**
-     * 盈亏平衡价
+     * 批加载并发度
      */
-    private Double balanceEqualPrice;
+    private int batchLoadConcurrent;
 
     /**
-     * 总盈亏
+     * 实时数据配置
      */
-    private Double countProfitOrLoss;
+    private RealtimeConfig realtime;
+
+    static {
+        Yaml yaml = new Yaml();
+        try (InputStream inputStream = TradeSignalConfig.class.getClassLoader().getResourceAsStream(CONFIG_FILE)) {
+            if (inputStream == null) {
+                throw new IllegalArgumentException("File not found: " + CONFIG_FILE);
+            }
+            Map<String, Object> yamlData = yaml.load(inputStream);
+            Map<String, Object> shinano = (Map<String, Object>) yamlData.get("shinano");
+            Map<String, Object> quantity = (Map<String, Object>) shinano.get("quantity");
+            Map<String, Object> trade_signal_maker = (Map<String, Object>) quantity.get("trade_signal_maker");
+
+
+            TRADE_SIGNAL_CONFIG = yaml.loadAs(yaml.dump(trade_signal_maker), TradeSignalConfig.class);
+
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to load YAML file: " + CONFIG_FILE, e);
+        }
+    }
+
+    private TradeSignalConfig() {}
 
     /**
-     * 未实现盈亏
+     * 获取最终交易信号写入到kafka到topic
+     * @return topic
      */
-    private Double unrealizedProfitOrLoss;
+    public TradeSignalTopic getSinkTopic() {
+        return new TradeSignalTopic(getRun_env(), getTrade_type(), symbol, name);
+    }
 
-    /**
-     * 保证金模式
-     * TODO 切换枚举
-     */
-    private String  model;
+    public TradeType getTrade_type() {
+        return run_type.getConfigs().getFirst().getTrade_type().getFirst();
+    }
 
-    /**
-     * 保证金
-     */
-    private Double bail;
+    public RunEnv getRun_env() {
+        return run_type.getConfigs().getFirst().getEnv();
+    }
 
-    /**
-     * 持仓方向
-     */
-    private PositionSide positionSide;
 
+    @Data
+    public static class RealtimeConfig  implements Serializable  {
+
+        private RealtimeKafkaConfig kafka;
+
+        private RealtimeFlinkConfig flink;
+
+    }
+
+
+    @Data
+    public static class RealtimeKafkaConfig  implements Serializable  {
+
+        /**
+         * 输入的配置
+         */
+        private KafkaServerConfig input;
+
+        /**
+         * 输出的配置
+         */
+        private KafkaServerConfig output;
+
+    }
+
+    @Data
+    public static class KafkaServerConfig  implements Serializable  {
+        /**
+         * kafka集群连接地址
+         */
+        private String bootstrapServer;
+
+        /**
+         * 消费者组名
+         */
+        private String groupId;
+
+        /**
+         * 事务超时时间，需要比kafka broker 中设置的小
+         */
+        private String transaction_timeout_ms;
+    }
+
+    @Data
+    public static class RealtimeFlinkConfig  implements Serializable  {
+
+        /**
+         * flink job manager host
+         */
+        private String jobManagerHost;
+        /**
+         * flink job manager port
+         */
+        private Integer jobManagerPort;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(TRADE_SIGNAL_CONFIG);
+    }
 
 }
 
 
-package com.helei.dto.account;
-
-
-import com.helei.constants.RunEnv;
-import com.helei.constants.TradeType;
-import com.helei.dto.ASKey;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-@Builder
-public class UserAccountInfo {
-
-    /**
-     * 账户id
-     */
-    private long id;
-
-    /**
-     * 用户id
-     */
-    private long userId;
-
-    /**
-     * 验证key
-     */
-    private ASKey asKey;
-
-    /**
-     * 是否可用
-     */
-    private final AtomicBoolean usable = new AtomicBoolean(false);
-
-    /**
-     * 运行环境，测试网还是主网
-     */
-    private RunEnv runEnv;
-
-    /**
-     * 交易类型
-     */
-    private TradeType tradeType;
-
-    /**
-     * 订阅的交易对
-     */
-    private List<String> subscribeSymbol;
-
-    /**
-     * 账户仓位设置
-     */
-    private AccountPositionConfig accountPositionConfig;
-
-    /**
-     * 账户资金信息
-     */
-    private AccountBalanceInfo accountBalanceInfo;
-
-
-    /**
-     * 账户仓位信息
-     */
-    private AccountPositionInfo accountPositionInfo;
-
-
-}
-
-
-package com.helei.dto;
-
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-public class KeyValue<K, V> {
-
-    private K key;
-
-    private V value;
-}
 
 
 
-package com.helei.netty.base;
 
 
-import com.alibaba.fastjson.JSON;
-import com.helei.netty.NettyConstants;
-import com.helei.netty.handler.RequestResponseHandler;
-import io.netty.bootstrap.Bootstrap;
-import io.netty.channel.*;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.nio.NioSocketChannel;
-import io.netty.handler.codec.http.DefaultHttpHeaders;
-import io.netty.handler.codec.http.HttpClientCodec;
-import io.netty.handler.codec.http.HttpObjectAggregator;
-import io.netty.handler.codec.http.websocketx.*;
-import io.netty.handler.proxy.Socks5ProxyHandler;
-import io.netty.handler.ssl.SslContext;
-import io.netty.handler.ssl.SslContextBuilder;
-import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
-import io.netty.handler.stream.ChunkedWriteHandler;
-import io.netty.handler.timeout.IdleStateHandler;
+
+package com.helei.tradesignalprocess.stream.d_decision;
+
+import com.helei.dto.config.SnowFlowConfig;
+import com.helei.dto.trade.IndicatorMap;
+import com.helei.dto.trade.IndicatorSignal;
+import com.helei.dto.trade.SignalGroupKey;
+import com.helei.snowflack.BRStyle;
+import com.helei.snowflack.SnowFlakeFactory;
+import com.helei.tradesignalprocess.config.TradeSignalConfig;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.flink.api.common.state.MapState;
+import org.apache.flink.api.common.state.MapStateDescriptor;
+import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
+import org.apache.flink.api.common.typeinfo.TypeHint;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.java.tuple.Tuple2;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
+import org.apache.flink.util.Collector;
 
-import javax.net.ssl.SSLException;
-import java.net.InetSocketAddress;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
+import java.util.List;
 
-/**
- * Websocket客户端
- *
- * @param <P> 请求体的类型
- * @param <T> 返回值的类型
- */
+
 @Slf4j
-public abstract class AbstractWebsocketClient<P, T> {
+@Getter
+@Setter
+public abstract class AbstractDecisionMaker<T> extends KeyedProcessFunction<String, Tuple2<SignalGroupKey, List<IndicatorSignal>>, T> {
 
-    private static final int MAX_FRAME_SIZE = 10 * 1024 * 1024;  // 10 MB or set to your desired size
+    private transient SnowFlakeFactory snowFlakeFactory;
 
-    /**
-     * websocket的url字符串
-     */
-    protected String url;
-
-    /**
-     * netty pipeline 最后一个执行的handler
-     */
-    protected final AbstractWebSocketClientHandler<P, T> handler;
+    private final String name;
 
     /**
-     * 执行回调的线程池
+     * 存放历史信号
      */
-    protected final ExecutorService callbackInvoker;
+    private MapState<String, Tuple2<SignalGroupKey, List<IndicatorSignal>>> historySignalMapState;
 
-    /**
-     * 代理
-     */
-    @Setter
-    protected InetSocketAddress proxy = null;
-
-    /**
-     * 重链接次数
-     */
-    private final AtomicInteger reconnectTimes = new AtomicInteger(0);
-
-    /**
-     * 当前是否在允许
-     */
-    @Getter
-    private final AtomicBoolean isRunning = new AtomicBoolean(false);
-
-    @Setter
-    @Getter
-    private String name;
-
-    private Bootstrap bootstrap;
-
-    private EventLoopGroup eventLoopGroup;
-
-    private URI uri;
-
-    private String host;
-
-    private int port;
-
-    private boolean useSSL;
-
-    private Channel channel;
-
-    private final RequestResponseHandler<T> requestResponseHandler;
-
-    public AbstractWebsocketClient(
-            String url,
-            AbstractWebSocketClientHandler<P, T> handler
-    ) {
-        this.url = url;
-        this.handler = handler;
-        this.handler.websocketClient = this;
-
-        this.callbackInvoker = Executors.newVirtualThreadPerTaskExecutor();
-
-        requestResponseHandler = new RequestResponseHandler<>();
+    protected AbstractDecisionMaker(String name) {
+        this.name = name;
     }
 
-    private void init() throws SSLException, URISyntaxException {
+    @Override
+    public void open(Configuration parameters) throws Exception {
+        historySignalMapState = getRuntimeContext().getMapState(new MapStateDescriptor<>("historySignalMapState", BasicTypeInfo.STRING_TYPE_INFO, TypeInformation.of(new TypeHint<>() {
+        })));
+        SnowFlowConfig snowFlow = TradeSignalConfig.TRADE_SIGNAL_CONFIG.getRun_type().getSnow_flow();
+        snowFlakeFactory = new SnowFlakeFactory(snowFlow);
+    }
 
-        resolveParamFromUrl();
+    @Override
+    public void processElement(Tuple2<SignalGroupKey, List<IndicatorSignal>> kLineListTuple2, KeyedProcessFunction<String, Tuple2<SignalGroupKey, List<IndicatorSignal>>, T>.Context context, Collector<T> collector) throws Exception {
 
-        WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(
-                uri, WebSocketVersion.V13, null, true, new DefaultHttpHeaders()
-        );
-        handler.init(handshaker);
+        SignalGroupKey key = kLineListTuple2.getField(0);
+        String symbol = key.getSymbol();
+        List<IndicatorSignal> signals = kLineListTuple2.getField(1);
 
-        final SslContext sslCtx;
-        if (useSSL) {
-            sslCtx = SslContextBuilder.forClient()
-                    .trustManager(InsecureTrustManagerFactory.INSTANCE).build();
+        if (signals.isEmpty()) {
+            log.debug("[{}] - symbol[{}]时间窗口内没有信号", symbol, name);
         } else {
-            sslCtx = null;
-        }
+            log.debug("[{}] - symbol[{}]当前时间窗口，产生[{}]个信号", name, signals, signals.size());
+            T out = decisionAndBuilderOrder(symbol, signals, null);
 
-        bootstrap = new Bootstrap();
+            //更新历史信号
+            historySignalMapState.put(key.getStreamKey(), kLineListTuple2);
 
-        eventLoopGroup = new NioEventLoopGroup();
-        bootstrap.group(eventLoopGroup)
-                .channel(NioSocketChannel.class)
-                .remoteAddress(host, port)
-                .option(ChannelOption.TCP_NODELAY, true)
-                .option(ChannelOption.SO_KEEPALIVE, true)
-                .handler(new ChannelInitializer<NioSocketChannel>() {
-                    @Override
-                    protected void initChannel(NioSocketChannel ch) {
-                        ChannelPipeline p = ch.pipeline();
-                        if (proxy != null) {
-                            p.addLast(new Socks5ProxyHandler(proxy));
-                        }
-
-                        if (sslCtx != null) {
-                            p.addLast(sslCtx.newHandler(ch.alloc(), uri.getHost(), port));
-                        }
-
-                        p.addLast("http-chunked", new ChunkedWriteHandler()); // 支持大数据流
-
-
-                        p.addLast(new HttpClientCodec());
-                        p.addLast(new HttpObjectAggregator(81920));
-                        p.addLast(new IdleStateHandler(0, 0, 10, TimeUnit.SECONDS));
-                        p.addLast(new ChunkedWriteHandler());
-
-                        p.addLast(new WebSocketFrameAggregator(MAX_FRAME_SIZE));  // 设置聚合器的最大帧大小
-
-
-                        p.addLast(handler);
-                    }
-                });
-    }
-
-    /**
-     * 链接服务端
-     * @throws SSLException Exception
-     */
-    public CompletableFuture<Void> connect() throws SSLException, URISyntaxException {
-        if (isRunning.get()) {
-            log.warn("WS客户端[{}}已链接", url);
-            return CompletableFuture.runAsync(()->{});
-        }
-
-        log.info("开始初始化WS客户端");
-        init();
-        log.info("初始化WS客户端完成，开始链接服务器 [{}]", url);
-
-        return reconnect();
-    }
-
-
-    /**
-     * 重链接
-     * @return  CompletableFuture<Void>
-     */
-    public CompletableFuture<Void> reconnect() {
-        return CompletableFuture.runAsync(() -> {
-            AtomicBoolean isSuccess = new AtomicBoolean(false);
-            while (reconnectTimes.incrementAndGet() <= NettyConstants.RECONNECT_LIMIT) {
-                eventLoopGroup.schedule(() -> {
-                    reconnectTimes.decrementAndGet();
-                }, 60, TimeUnit.SECONDS);
-
-                log.info("start connect client [{}], url[{}], current times [{}]", name, url, reconnectTimes.get());
-                CountDownLatch latch = new CountDownLatch(1);
-
-
-                eventLoopGroup.schedule(() -> {
-                    try {
-                        channel = bootstrap.connect().sync().channel();
-                        // 8. 等待 WebSocket 握手完成
-                        handler.handshakeFuture().sync();
-
-                        channel.attr(NettyConstants.CLIENT_NAME).set(name);
-
-                        isSuccess.set(true);
-                    } catch (Exception e) {
-                        log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(), e);
-                    }
-                    latch.countDown();
-                }, NettyConstants.RECONNECT_DELAY_SECONDS, TimeUnit.SECONDS);
-
-                try {
-                    latch.await();
-                } catch (InterruptedException e) {
-                    log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(), e);
-                }
-
-                if (isSuccess.get()) {
-
-                    log.info("connect client [{}], url[{}] success, current times [{}]", name, url, reconnectTimes.get());
-                    isRunning.set(true);
-                    break;
-                }
+            if (out != null) {
+                log.info("[{}] - symbol[{}]窗口内信号满足决策下单条件，下单[{}}", name, symbol, out);
+                collector.collect(out);
             }
-            if (!isSuccess.get()) {
-                isRunning.set(false);
-                log.error("reconnect times out of limit [{}], close websocket client", NettyConstants.RECONNECT_LIMIT);
-                close();
-            }
-        }, callbackInvoker);
+        }
     }
+
+    protected abstract T decisionAndBuilderOrder(String symbol, List<IndicatorSignal> windowSignal, IndicatorMap indicatorMap);
 
 
     /**
-     * 关闭WebSocketClient
-     */
-    public void close() {
-        log.info("start close websocket client [{}]", name);
-        if (channel != null) {
-            channel.close();
-        }
-        if (eventLoopGroup != null) {
-            eventLoopGroup.shutdownGracefully();
-        }
-
-        reconnectTimes.set(0);
-        isRunning.set(false);
-        log.info("web socket client [{}] closed", name);
-    }
-
-
-    /**
-     * 从request获取id
+     * 下一个信号id，采用雪花算法
      *
-     * @param request request
      * @return id
      */
-    public abstract String getIdFromRequest(P request);
+    protected String nextSignalId() {
+        return snowFlakeFactory.nextId(BRStyle.TRADE_SIGNAL);
+    }
 
     /**
-     * 发送请求, 注册响应监听
+     * 取历史信号
      *
-     * @param request  请求体
-     * @param callback 请求结果的回调
+     * @param kLineStreamKey kLine的key，symbol + interval
+     * @return 历史信号
+     * @throws Exception 异常
      */
-    public void sendRequest(P request, Consumer<T> callback) {
-        sendRequest(request, callback, callbackInvoker);
-    }
-
-    /**
-     * 发送请求, 注册响应监听
-     *
-     * @param request         请求体
-     * @param callback        请求结果的回调
-     * @param executorService 执行回调的线程池，传入为空则会尝试使用本类的线程池以及netty线程池
-     */
-    public void sendRequest(P request, Consumer<T> callback, ExecutorService executorService) {
-        boolean flag = requestResponseHandler.registryRequest(getIdFromRequest(request), response -> {
-            if (executorService == null) {
-                //此类线程处理
-                callbackInvoker.submit(() -> {
-                    callback.accept(response);
-                });
-            } else { //参数线程池处理
-                executorService.submit(() -> {
-                    callback.accept(response);
-                });
-            }
-
-        });
-
-        if (flag) {
-            log.debug("send request [{}]", request);
-            channel.writeAndFlush(new TextWebSocketFrame(JSON.toJSONString(request)));
-        } else {
-            throw new IllegalArgumentException("request id registered");
-        }
-    }
-
-    /**
-     * 发送请求, 注册响应监听
-     *
-     * @param request 请求体
-     */
-    public CompletableFuture<T> sendRequest(P request) {
-        return CompletableFuture.supplyAsync(() -> {
-            if (request == null) {
-                log.error("request is null");
-                return null;
-            }
-
-            CountDownLatch latch = new CountDownLatch(1);
-            AtomicReference<T> jb = new AtomicReference<>(null);
-
-            boolean flag = requestResponseHandler.registryRequest(getIdFromRequest(request), response -> {
-                latch.countDown();
-                jb.set(response);
-            });
-
-            if (flag) {
-                channel.writeAndFlush(new TextWebSocketFrame(JSON.toJSONString(request)));
-                log.debug("send request [{}] success", request);
-            } else {
-                log.error("request id registered");
-                return null;
-            }
-
-            try {
-                if (!latch.await(NettyConstants.REQUEST_WAITE_SECONDS, TimeUnit.SECONDS)) return null;
-
-                return jb.get();
-            } catch (InterruptedException e) {
-                log.error("send request interrupted", e);
-                return null;
-            }
-        }, callbackInvoker);
-    }
-
-    /**
-     * 发送ping
-     */
-    public void sendPing() {
-        log.debug("client [{}] send ping {}", name, url);
-        channel.writeAndFlush(new PingWebSocketFrame());
-    }
-
-    /**
-     * 发送pong
-     */
-    public void sendPong() {
-        log.debug("client [{}] send pong {}", name, url);
-        channel.writeAndFlush(new PongWebSocketFrame());
-    }
-
-    /**
-     * 发送请求,不组册监听
-     *
-     * @param request 请求体
-     */
-    public void sendRequestNoListener(P request) {
-        channel.writeAndFlush(new TextWebSocketFrame(JSON.toJSONString(request)));
-    }
-
-
-    /**
-     * 解析参数
-     *
-     * @throws URISyntaxException url解析错误
-     */
-    private void resolveParamFromUrl() throws URISyntaxException {
-        uri = new URI(url);
-        String scheme = uri.getScheme() == null ? "ws" : uri.getScheme();
-        host = uri.getHost() == null ? "127.0.0.1" : uri.getHost();
-        if (uri.getPort() == -1) {
-            if ("ws".equalsIgnoreCase(scheme)) {
-                port = 80;
-            } else if ("wss".equalsIgnoreCase(scheme)) {
-                port = 443;
-            } else {
-                port = -1;
-            }
-        } else {
-            port = uri.getPort();
-        }
-
-        if (!"ws".equalsIgnoreCase(scheme) && !"wss".equalsIgnoreCase(scheme)) {
-            log.error("Only WS(S) is supported.");
-            throw new IllegalArgumentException("url error, Only WS(S) is supported.");
-        }
-
-        useSSL = "wss".equalsIgnoreCase(scheme);
-    }
-
-
-    /**
-     * 提交请求的响应
-     *
-     * @param id       id
-     * @param response response
-     * @return 是否成功
-     */
-    public boolean submitResponse(String id, T response) {
-        return requestResponseHandler.submitResponse(id, response);
-    }
-
-    /**
-     * 提交stream流的响应
-     *
-     * @param streamName streamName, 通常由symbol和WebSocketStreamType组合成
-     * @param message    message
-     */
-    public abstract void submitStreamResponse(String streamName, T message);
-}
-
-
-
-
-
-package com.helei.util;
-
-import com.helei.dto.account.AccountPositionConfig;
-import com.helei.dto.TrendLine;
-
-import java.util.List;
-import java.util.function.Function;
-
-public class CalculatorUtil {
-
-
-    /**
-     *  EMA 计算公式
-     * @param price 当前价格
-     * @param previousMA 前一个ema值
-     * @param period 间隔
-     * @return 当前ma
-     */
-    public static double calculateMA(double price, double previousMA, int period) {
-        return (previousMA * (period - 1) + price) / period;
-    }
-
-
-    /**
-     *  EMA 计算公式
-     * @param price 当前价格
-     * @param previousEMA 前一个ema值
-     * @param period 间隔
-     * @return 当前ema
-     */
-    public static double calculateEMA(double price, double previousEMA, int period) {
-        double alpha = 2.0 / (period + 1.0);
-        return alpha * price + (1 - alpha) * previousEMA;
-    }
-
-
-    /**
-     * 计算rsi
-     * @param open 开盘价格
-     * @param close 收盘价格
-     * @param previousRSI   前一个rsi
-     * @param interval  间隔
-     * @return  rsi
-     */
-    public static double calculateRSI(double open, double close, double previousRSI, int interval) {
-        double gain = Math.max(0, close - open);
-        double loss = Math.max(0 , open - close);
-        double avgGain = (gain + (interval - 2) * previousRSI) / (interval - 1);
-        double avgLoss = (loss + (interval - 2) * (100 - previousRSI)) / (interval - 1);
-
-        return 100 - (100/(1 + avgGain/avgLoss));
-    }
-
-
-
-    /**
-     * 计算趋势线，采用最小二乘法
-     * @param data data
-     * @param getY getY
-     * @param getX getX
-     * @return TrendLine
-     */
-    public static<T> TrendLine calculateTrend(List<T> data, Function<T, Double> getX, Function<T, Double> getY) {
-        if (data == null || data.isEmpty() || data.size() < 2) {
-            return new TrendLine(0,0);
-        }
-        int n = data.size();
-        double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
-        for (T kLine : data) {
-            double y =  getY.apply(kLine);
-//            long x = kLine.getOpenTime().toInstant(ZoneOffset.UTC).getEpochSecond();
-            double x = getX.apply(kLine);
-
-            sumY += y;
-            sumX += x;
-            sumXY += x * y;
-            sumX2 += x * x;
-        }
-
-        double k = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
-        double m = (sumY - k * sumX) / n;
-
-        return  new TrendLine(k, m);
-    }
-
-
-    /**
-     * 计算list的单调性，从后往前取出具有单调性的部分
-     * @param arr arr
-     * @param calField 要计算单调性的字段
-     * @param <T> 范型
-     * @return 从后往前具有单调性的数组
-     */
-    public static <T> List<T> getLastMonotonicPart(List<T> arr, Function<T, Double> calField) {
-        if (arr == null || arr.size() < 2) {
-            return null;
-        }
-
-        int n = arr.size();
-        int count = 1;
-
-        // 从倒数第二个元素开始，比较相邻元素的大小
-        boolean isIncreasing = calField.apply(arr.get(n - 2)) <= calField.apply(arr.get(n - 1));  // 判断单调性（递增或递减）
-
-        // 从倒数第二个元素往前遍历
-        for (int i = n - 2; i >= 0; i--) {
-            if (isIncreasing) {
-                // 如果是递增序列
-                if (calField.apply(arr.get(i)) > calField.apply(arr.get(i + 1))) {
-                    break;
-                }
-
-            } else {
-                // 如果是递减序列
-                if (calField.apply(arr.get(i)) > calField.apply(arr.get(i + 1))) {
-                    break;
-                }
-            }
-            count++;
-        }
-
-        // 返回最后具有单调性的部分
-        return arr.subList(n - Math.max(2, count), n);
-    }
-
-
-
-    /**
-     * 计算仓位大小
-     * @param totalCapital  总可用金额
-     * @param locationConfig    仓位设置
-     * @param currentPrice  当前价格
-     * @return 仓位大小
-     */
-    public static double calculatePositionSize(
-            double totalCapital,
-            AccountPositionConfig locationConfig,
-            double currentPrice
-
-    ) {
-        double riskPercent = locationConfig.getRiskPercent();
-        double leverage = locationConfig.getLeverage();
-        double stopLoss = locationConfig.getStopLoss();
-        // Calculate the maximum amount of capital to risk in this trade
-        double maxRiskAmount = totalCapital * riskPercent;
-
-        // Calculate the risk per contract (difference between current price and stop loss)
-        double perContractRisk = currentPrice - stopLoss;
-
-        // If stop loss is greater than or equal to current price, return 0 as position size is invalid
-        if (perContractRisk <= 0) {
-            System.out.println("Invalid stop loss: Stop loss must be less than current price.");
-            return 0;
-        }
-
-        // Calculate the position size (number of contracts) taking leverage into account
-
-        return (maxRiskAmount / perContractRisk) * leverage;
-    }
-
-}
-
-
-
-
-
-package com.helei.binanceapi.api.ws;
-
-import cn.hutool.core.util.StrUtil;
-import com.alibaba.fastjson.JSONObject;
-import com.helei.binanceapi.BinanceWSApiClient;
-import com.helei.binanceapi.base.AbstractBinanceWSApi;
-import com.helei.constants.WebSocketStreamParamKey;
-import com.helei.binanceapi.constants.command.AccountCommandType;
-import com.helei.binanceapi.constants.command.BaseCommandType;
-import com.helei.dto.ASKey;
-import com.helei.dto.WebSocketCommandBuilder;
-import lombok.extern.slf4j.Slf4j;
-
-import java.net.URISyntaxException;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.function.Consumer;
-
-
-@Slf4j
-public class BinanceWSBaseApi extends AbstractBinanceWSApi {
-    public BinanceWSBaseApi(BinanceWSApiClient binanceWSApiClient) throws URISyntaxException {
-        super(binanceWSApiClient);
-    }
-
-
-    /**
-     * 测试服务端联通性
-     */
-    public void pingServer() {
-        binanceWSApiClient.sendPing();
-    }
-
-
-    /**
-     * 查询服务端的时间
-     * @param callback callback, 失败则会传入null. 由父类的线程池执行
-     */
-    public void queryServerTime(Consumer<Long> callback) {
-        JSONObject command = WebSocketCommandBuilder.builder().setCommandType(BaseCommandType.TIME).build();
-
-        String id = command.getString("id");
-        binanceWSApiClient.sendRequest(1, command, result -> {
-            if (result != null) {
-                try {
-                    callback.accept(result.getLong("serverTime"));
-                    log.debug("get server time [{}], request id[{}] success", result, id);
-                } catch (Exception e) {
-                    callback.accept(null);
-                    log.error("parse server time error, requestId [{}]", id,e);
-                }
-            } else {
-                callback.accept(null);
-                log.warn("get server time, request id[{}] fail", id);
-            }
-        });
-    }
-
-
-    /**
-     * 查询交易规范信息,
-     * @param permissions permissions
-     * @param callback callback。失败则会传入null. 由父类的线程池执行
-     */
-    public void queryExchangeInfo(
-            Consumer<JSONObject> callback,
-            List<String> permissions
-    ) {
-        queryExchangeInfo(null, null, permissions, callback);
-    }
-
-    /**
-     * 查询交易规范信息,
-     * @param symbols symbols
-     * @param callback callback。失败则会传入null. 由父类的线程池执行
-     */
-    public void queryExchangeInfo(
-            List<String> symbols,
-            Consumer<JSONObject> callback
-    ) {
-        queryExchangeInfo(null, symbols, null, callback);
-    }
-
-    /**
-     * 查询交易规范信息, symbol,
-     * @param symbol symbol
-     * @param callback callback。失败则会传入null. 由父类的线程池执行
-     */
-    public void queryExchangeInfo(
-            String symbol,
-            Consumer<JSONObject> callback
-    ) {
-        queryExchangeInfo(symbol, null, null, callback);
-    }
-
-
-    /**
-     * 查询交易规范信息, symbol,symbols,permissions三个参数只能生效一个，从前到后第一个不为空的生效
-     * @param symbol symbol
-     * @param symbols symbols
-     * @param permissions permissions
-     * @param callback callback。失败则会传入null. 由父类的线程池执行
-     */
-    public void queryExchangeInfo(
-            String symbol,
-            List<String> symbols,
-            List<String> permissions,
-            Consumer<JSONObject> callback
-    ) {
-
-
-        JSONObject jb = new JSONObject();
-        if (StrUtil.isNotBlank(symbol)) {
-            jb.put("symbol", symbol);
-        }
-        else if (symbols != null && !symbols.isEmpty()) {
-            jb.put("symbols", symbols);
-        }
-        else if (permissions != null && !permissions.isEmpty()) {
-            jb.put("permissions", permissions);
-        }
-        JSONObject command = WebSocketCommandBuilder
-                .builder()
-                .setCommandType(BaseCommandType.EXCHANGE_INFO)
-                .setParams(jb)
-                .build();
-        binanceWSApiClient.sendRequest(20, command, callback);
-    }
-
-
-
-        /**
-         * 请求listenKey
-         * @return CompletableFuture<String> listenKey
-         */
-        public CompletableFuture<String> requestListenKey(ASKey asKey) {
-            JSONObject command = WebSocketCommandBuilder.builder()
-                    .setCommandType(AccountCommandType.USER_DATA_STREAM_START)
-                    .addParam(WebSocketStreamParamKey.API_KEY, asKey.getApiKey())
-                    .build();
-
-            log.info("请求获取listenKey， 请求[{}}", command);
-            return binanceWSApiClient.sendRequest(5, command, ASKey.EMPTY_ASKEY)
-                    .thenApplyAsync(json -> json.getJSONObject("result").getString("listenKey"));
-        }
-
-        /**
-         * Websocket API延长listenKey有效期
-         * 有效期延长至本次调用后60分钟
-         * @return CompletableFuture<String> listenKey
-         */
-        public CompletableFuture<String> lengthenListenKey(String listenKey, ASKey asKey) {
-            JSONObject command = WebSocketCommandBuilder.builder()
-                    .setCommandType(AccountCommandType.USER_DATA_STREAM_PING)
-                    .addParam(WebSocketStreamParamKey.API_KEY, asKey.getApiKey())
-                    .addParam(WebSocketStreamParamKey.LISTEN_KEY, listenKey)
-                    .build();
-
-            log.info("请求延长listenKey， 请求[{}}", command);
-            return binanceWSApiClient.sendRequest(5, command, ASKey.EMPTY_ASKEY)
-                    .thenApplyAsync(json -> json.getJSONObject("result").getString("listenKey"));
-        }
-
-        /**
-         * Websocket API关闭listenKey
-         * @return CompletableFuture<String> listenKey
-         */
-        public CompletableFuture<Boolean> closeListenKey(String listenKey, ASKey asKey) {
-            JSONObject command = WebSocketCommandBuilder.builder()
-                    .setCommandType(AccountCommandType.USER_DATA_STREAM_CLOSE)
-                    .addParam(WebSocketStreamParamKey.API_KEY, asKey.getApiKey())
-                    .addParam(WebSocketStreamParamKey.LISTEN_KEY, listenKey)
-                    .build();
-
-            log.info("请求关闭listenKey， 请求[{}}", command);
-            return binanceWSApiClient.sendRequest(5, command, ASKey.EMPTY_ASKEY)
-                    .thenApplyAsync(json -> json.getInteger("status") == 200);
-        }
-
-}
-
-
-
-
-package com.helei.binanceapi.dto.accountevent;
-
-import com.helei.constants.PositionSide;
-import com.helei.binanceapi.constants.AccountEventType;
-import lombok.*;
-
-import java.util.List;
-
-/**
- * 保证金追加通知
- *
- * <p>
- *     当用户持仓风险过高，会推送此消息。
- *  此消息仅作为风险指导信息，不建议用于投资策略。
- * 在大波动市场行情下,不排除此消息发出的同时用户仓位已被强平的可能。
- * 全仓模式下若保证金不足每小时仅会推送一次此事件，不会重复推送；逐仓模式下保证金不足一个交易对每小时仅会推送一次此事件，不会重复推送
- * </p>
- */
-@Getter
-@Setter
-@ToString
-public class BailNeedEvent extends AccountEvent {
-
-    /**
-     * 除去逐仓仓位保证金的钱包余额, 仅在全仓 margin call 情况下推送此字段
-     */
-    private Double bailRemoveWalletBalance;
-
-    /**
-     * 涉及持仓
-     */
-    private List<PositionNeedInfo> positionNeedInfos;
-
-    public BailNeedEvent(Long eventTime) {
-        super(AccountEventType.MARGIN_CALL, eventTime);
-    }
-
-
-    /**
-     * 需要保证金的信息
-     */
-    @Data
-    @NoArgsConstructor
-    @AllArgsConstructor
-    @Builder
-    public static class PositionNeedInfo {
-
-        /**
-         * 交易对
-         */
-        private String symbol;
-
-        /**
-         * 持仓方向
-         */
-        private PositionSide positionSide;
-
-        /**
-         * 仓位
-         */
-        private Double position;
-
-        /**
-         * 保证金模式
-         * TODO 枚举
-         */
-        private String mode;
-
-        /**
-         * 保证金
-         */
-        private Double bail;
-
-        /**
-         * 标记价格
-         */
-        private Double markPrice;
-
-        /**
-         * 未实现盈亏
-         */
-        private Double unrealizedProfitOrLoss;
-
-        /**
-         * 持仓需要的维持保证金
-         */
-        private Double needBail;
-    }
-
-}
-
-package com.helei.binanceapi.dto.accountevent;
-
-import com.helei.constants.PositionSide;
-import com.helei.binanceapi.constants.AccountEventType;
-import lombok.*;
-
-import java.util.List;
-
-/**
- *
- * <p>账户资金仓位发生变化事件</p>
- * <p>
- * 账户更新事件的 event type 固定为 ACCOUNT_UPDATE
- * <p/>
- * <p>
- *  当账户信息有变动时，会推送此事件： 1.仅当账户信息有变动时(包括资金、仓位、保证金模式等发生变化)，才会推送此事件；
- *                               2.订单状态变化没有引起账户和持仓变化的，不会推送此事件；
- *                               3.position 信息：仅当symbol仓位有变动时推送。
- *  </p>
- *
-    <p>
- * "FUNDING FEE" 引起的资金余额变化，仅推送简略事件：
- * 1.当用户某全仓持仓发生"FUNDING FEE"时，事件ACCOUNT_UPDATE将只会推送相关的用户资产余额信息B(仅推送FUNDING FEE 发生相关的资产余额信息)，而不会推送任何持仓信息P。
- * 2.当用户某逐仓仓持仓发生"FUNDING FEE"时，事件ACCOUNT_UPDATE将只会推送相关的用户资产余额信息B(仅推送"FUNDING FEE"所使用的资产余额信息)，和相关的持仓信息P(仅推送这笔"FUNDING FEE"发生所在的持仓信息)，其余持仓信息不会被推送。
- * </p>
- * <p>
- * 字段"m"代表了事件推出的原因，包含了以下可能类型:
- * 1.DEPOSIT
- * 2.WITHDRAW
- * 3.ORDER
- * 4.FUNDING_FEE
- * 5.WITHDRAW_REJECT
- * 6.ADJUSTMENT
- * 7.INSURANCE_CLEAR
- * 8.ADMIN_DEPOSIT
- * 9.ADMIN_WITHDRAW
- * 10.MARGIN_TRANSFER
- * 11.MARGIN_TYPE_CHANGE
- * 12.ASSET_TRANSFER
- * 13.OPTIONS_PREMIUM_FEE
- * 14.OPTIONS_SETTLE_PROFIT
- * 15.AUTO_EXCHANGE
- * 16.COIN_SWAP_DEPOSIT
- * 17.COIN_SWAP_WITHDRAW
- * </p>
- * <p>
- * 字段"bc"代表了钱包余额的改变量，即 balance change，但注意其不包含仓位盈亏及交易手续费。
- * </p>
- */
-@EqualsAndHashCode(callSuper = true)
-@Getter
-@Setter
-@ToString
-public class BalancePositionUpdateEvent extends AccountEvent {
-
-    /**
-     * 撮合时间
-     */
-    private Long matchMakingTime;
-
-    /**
-     * 事件推出原因
-     */
-    private String reason;
-
-    /**
-     * 资金发生变化的信息
-     */
-    private List<BalanceChangeInfo> balanceChangeInfos;
-
-    /**
-     * 仓位发生变化的信息
-     */
-    private List<PositionChangeInfo> positionChangeInfos;
-
-    public BalancePositionUpdateEvent(Long eventTime) {
-        super(AccountEventType.ACCOUNT_UPDATE, eventTime);
-    }
-
-
-
-    /**
-     * 资产变化信息
-     */
-    @Data
-    @AllArgsConstructor
-    @NoArgsConstructor
-    @EqualsAndHashCode(callSuper = false)
-    public static class BalanceChangeInfo {
-
-        /**
-         * 资产名称
-         */
-        private String asset;
-
-        /**
-         * 钱包余额
-         */
-        private Double walletBalance;
-
-        /**
-         * 除去逐仓保证金的钱包余额
-         */
-        private Double bailRemoveWalletBalance;
-
-        /**
-         * 除去盈亏和手续费的变化量
-         */
-        private Double walletBalanceChange;
-    }
-
-
-    /**
-     * 仓位变化信息
-     */
-    @Data
-    @NoArgsConstructor
-    @AllArgsConstructor
-    @Builder
-    public static class PositionChangeInfo {
-
-        /**
-         * 交易对
-         */
-        private String symbol;
-
-        /**
-         * 仓位
-         */
-        private Double position;
-
-        /**
-         * 入仓价格
-         */
-        private Double enterPosition;
-
-        /**
-         * 盈亏平衡价
-         */
-        private Double balanceEqualPrice;
-
-        /**
-         * 总盈亏
-         */
-        private Double countProfitOrLoss;
-
-        /**
-         * 未实现盈亏
-         */
-        private Double unrealizedProfitOrLoss;
-
-        /**
-         * 保证金模式
-         * TODO 切换枚举
-         */
-        private String  model;
-
-        /**
-         * 保证金
-         */
-        private Double bail;
-
-        /**
-         * 持仓方向
-         */
-        private PositionSide positionSide;
-
-    }
-
-}
-
-
-
-package com.helei.binanceapi.dto.accountevent;
-
-import com.helei.binanceapi.constants.AccountEventType;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.ToString;
-
-/**
- * listenKey过期事件
- * <p>当前连接使用的有效listenKey过期时，user data stream 将会推送此事件。</p>
- * <p>注意:</p>
- * <p>
- * 1.此事件与websocket连接中断没有必然联系
- * 2.只有正在连接中的有效listenKey过期时才会收到此消息
- * 3.收到此消息后user data stream将不再更新，直到用户使用新的有效的listenKey
- * </p>
- */
-@Getter
-@Setter
-@ToString
-
-public class ListenKeyExpireEvent extends AccountEvent {
-
-    public ListenKeyExpireEvent(Long eventTime) {
-        super(AccountEventType.LISTEN_KEY_EXPIRED, eventTime);
-    }
-
-}
-
-
-
-package com.helei.binanceapi.dto.accountevent;
-
-import com.helei.binanceapi.constants.AccountEventType;
-import com.helei.binanceapi.constants.order.*;
-import com.helei.binanceapi.constants.TimeInForce;
-import com.helei.constants.PositionSide;
-import com.helei.constants.TradeSide;
-import lombok.*;
-
-/**
- * 订单交易更新推送事件
- */
-@Getter
-@Setter
-@ToString
-
-public class OrderTradeUpdateEvent extends AccountEvent {
-
-    /**
-     * 撮合时间
-     */
-    private Long MatchMakingTime;
-
-    /**
-     * 发生更新的交易对详情
-     */
-    private OrderTradeUpdateDetails orderTradeUpdateDetails;
-
-    public OrderTradeUpdateEvent(Long eventTime) {
-        super(AccountEventType.ORDER_TRADE_UPDATE, eventTime);
-    }
-
-    @Data
-    @AllArgsConstructor
-    @NoArgsConstructor
-    @Builder
-    @EqualsAndHashCode(callSuper = false)
-    public static class OrderTradeUpdateDetails {
-        /**
-         * 交易对
-         */
-        private String symbol;
-        /**
-         * 客户端自定订单ID
-         */
-        private String clientOrderId;
-        /**
-         * 订单方向
-         */
-        private TradeSide orderSide;
-        /**
-         * 订单类型
-         */
-        private OrderType orderType;
-        /**
-         * 有效方式
-         */
-        private TimeInForce timeInForce;
-        /**
-         * 订单原始数量
-         */
-        private Double originalQuantity;
-        /**
-         * 订单原始价格
-         */
-        private Double originalPrice;
-        /**
-         * 订单平均价格
-         */
-        private Double averagePrice;
-        /**
-         * 条件订单触发价格,对追踪止损单无效
-         */
-        private String stopPrice;
-        /**
-         * 本次事件的具体执行类型
-         */
-        private OrderExcuteType executionType;
-        /**
-         * 订单的当前状态
-         */
-        private OrderStatus orderStatus;
-        /**
-         * 订单ID
-         */
-        private Long orderId;
-        /**
-         * 订单末次成交量
-         */
-        private Double lastFilledQuantity;
-        /**
-         * 订单累计已成交量
-         */
-        private Double cumulativeFilledQuantity;
-        /**
-         *  订单末次成交价格
-         */
-        private Double lastFilledPrice;
-        /**
-         * 手续费资产类型
-         */
-        private String commissionAsset;
-        /**
-         * 手续费数量
-         */
-        private Double commissionAmount;
-        /**
-         * 成交时间
-         */
-        private Long tradeTime;
-        /**
-         * 成交ID
-         */
-        private Long tradeId;
-        /**
-         * 买单净值
-         */
-        private Double buyerNetValue;
-        /**
-         * 卖单净值
-         */
-        private Double sellerNetValue;
-        /**
-         * 该成交是作为挂单成交吗？
-         */
-        private boolean maker;
-        /**
-         * 是否是只减仓单
-         */
-        private boolean reduceOnly;
-        /**
-         * 触发价类型
-         */
-        private WorkingType workingType;
-        /**
-         * 原始订单类型
-         */
-        private OrderType originalOrderType;
-        /**
-         *  持仓方向
-         */
-        private PositionSide positionSide;
-        /**
-         * 是否为触发平仓单,仅在条件订单情况下会推送此字段
-         */
-        private boolean closePosition;
-        /**
-         * 追踪止损激活价格,仅在追踪止损单时会推送此字段
-         */
-        private Double activationPrice;
-        /**
-         * 追踪止损回调比例,仅在追踪止损单时会推送此字段
-         */
-        private Double callbackRate;
-        /**
-         * 是否开启条件单触发保护
-         */
-        private boolean priceProtect;
-        /**
-         * 该交易实现盈亏
-         */
-        private Double realizedProfit;
-        /**
-         *  自成交防止模式
-         */
-        private SelfTradePreventionMode selfTradePreventionMode;
-        /**
-         * 价格匹配模式
-         */
-        private OpponentPriceMode opponentPriceMode;
-        /**
-         * TIF为GTD的订单自动取消时间
-         */
-        private long gtdCancelTime;
-    }
-
-}
-
-package com.helei.binanceapi.supporter;
-
-import com.alibaba.fastjson.JSONObject;
-import com.helei.binanceapi.constants.TimeInForce;
-import com.helei.binanceapi.constants.order.*;
-import com.helei.binanceapi.constants.strategy.StrategyOPCode;
-import com.helei.binanceapi.constants.strategy.StrategyStatus;
-import com.helei.binanceapi.constants.strategy.StrategyType;
-import com.helei.binanceapi.dto.accountevent.*;
-import com.helei.constants.PositionSide;
-import com.helei.constants.TradeSide;
-
-import java.util.ArrayList;
-import java.util.List;
-
-public interface AccountEventConverter {
-    AccountEvent convertFromJsonObject(JSONObject jsonObject);
-
-
-    enum Converter implements AccountEventConverter {
-        LISTEN_KEY_EXPIRED{
-            @Override
-            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
-                return new ListenKeyExpireEvent(jsonObject.getLong("E"));
-            }
-        },
-        ACCOUNT_UPDATE{
-            @Override
-            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
-                BalancePositionUpdateEvent event = new BalancePositionUpdateEvent(jsonObject.getLong("E"));
-                event.setMatchMakingTime(jsonObject.getLong("T"));
-
-                JSONObject a = jsonObject.getJSONObject("a");
-                event.setReason(a.getString("m"));
-
-                List<BalancePositionUpdateEvent.BalanceChangeInfo> bList = new ArrayList<>();
-                for (int i = 0; i < a.getJSONArray("B").size(); i++) {
-                    JSONObject jb = a.getJSONArray("B").getJSONObject(i);
-                    BalancePositionUpdateEvent.BalanceChangeInfo changeInfo = new BalancePositionUpdateEvent.BalanceChangeInfo();
-                    changeInfo.setAsset(jb.getString("a"));
-                    changeInfo.setWalletBalance(jb.getDouble("wb"));
-                    changeInfo.setWalletBalanceChange(jb.getDouble("cw"));
-                    changeInfo.setBailRemoveWalletBalance(jb.getDouble("bc"));
-                    bList.add(changeInfo);
-                }
-                event.setBalanceChangeInfos(bList);
-
-                List<BalancePositionUpdateEvent.PositionChangeInfo> pList = new ArrayList<>();
-                for (int i = 0; i < a.getJSONArray("P").size(); i++) {
-                    JSONObject jb = a.getJSONArray("P").getJSONObject(i);
-                    BalancePositionUpdateEvent.PositionChangeInfo changeInfo = new BalancePositionUpdateEvent.PositionChangeInfo();
-                    changeInfo.setSymbol(jb.getString("s"));
-                    changeInfo.setPosition(jb.getDouble("pa"));
-                    changeInfo.setEnterPosition(jb.getDouble("ep"));
-                    changeInfo.setBalanceEqualPrice(jb.getDouble("bep"));
-                    changeInfo.setCountProfitOrLoss(jb.getDouble("cr"));
-                    changeInfo.setUnrealizedProfitOrLoss(jb.getDouble("up"));
-                    changeInfo.setModel(jb.getString("mt"));
-                    changeInfo.setBail(jb.getDouble("iw"));
-                    changeInfo.setPositionSide(PositionSide.STATUS_MAP.get(jb.getString("ps")));
-                }
-                event.setPositionChangeInfos(pList);
-                return event;
-            }
-        },
-
-        MARGIN_CALL{
-            @Override
-            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
-                BailNeedEvent event = new BailNeedEvent(jsonObject.getLong("E"));
-                event.setBailRemoveWalletBalance(jsonObject.getDouble("cw"));
-
-                JSONObject p = jsonObject.getJSONObject("p");
-
-                BailNeedEvent.PositionNeedInfo positionNeedInfo = new BailNeedEvent.PositionNeedInfo();
-                positionNeedInfo.setSymbol(p.getString("s"));
-                positionNeedInfo.setPositionSide(PositionSide.STATUS_MAP.get(p.getString("ps")));
-                positionNeedInfo.setPosition(p.getDouble("pa"));
-                positionNeedInfo.setMode(p.getString("mt"));
-                positionNeedInfo.setBail(p.getDouble("iw"));
-                positionNeedInfo.setMarkPrice(p.getDouble("mp"));
-                positionNeedInfo.setUnrealizedProfitOrLoss(p.getDouble("up"));
-                positionNeedInfo.setNeedBail(p.getDouble("mm"));
-
-                return event;
-            }
-        },
-
-        ORDER_TRADE_UPDATE{
-            @Override
-            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
-                OrderTradeUpdateEvent event = new OrderTradeUpdateEvent(jsonObject.getLong("E"));
-                event.setMatchMakingTime(jsonObject.getLong("T"));
-
-                JSONObject o = jsonObject.getJSONObject("o");
-
-                OrderTradeUpdateEvent.OrderTradeUpdateDetails details = new OrderTradeUpdateEvent.OrderTradeUpdateDetails();
-                details.setSymbol(o.getString("s"));
-                details.setClientOrderId(o.getString("c"));
-                details.setOrderSide(TradeSide.STATUS_MAP.get(o.getString("S")));
-                details.setOrderType(OrderType.STATUS_MAP.get(o.getString("o")));
-                details.setTimeInForce(TimeInForce.STATUS_MAP.get(o.getString("f")));
-                details.setOriginalQuantity(o.getDouble("q"));
-                details.setOriginalPrice(o.getDouble("p"));
-                details.setAveragePrice(o.getDouble("ap"));
-                details.setStopPrice(o.getString("sp"));
-                details.setExecutionType(OrderExcuteType.STATUS_MAP.get(o.getString("x")));
-                details.setOrderStatus(OrderStatus.STATUS_MAP.get(o.getString("X")));
-                details.setOrderId(o.getLong("i"));
-                details.setLastFilledQuantity(o.getDouble("l"));
-                details.setCumulativeFilledQuantity(o.getDouble("z"));
-                details.setLastFilledPrice(o.getDouble("L"));
-                details.setCommissionAsset(o.getString("N"));
-                details.setCommissionAmount(o.getDouble("n"));
-                details.setTradeTime(o.getLong("T"));
-                details.setTradeId(o.getLong("t"));
-                details.setBuyerNetValue(o.getDouble("b"));
-                details.setSellerNetValue(o.getDouble("a"));
-                details.setMaker(o.getBoolean("m"));
-                details.setReduceOnly(o.getBoolean("R"));
-                details.setWorkingType(WorkingType.STATUS_MAP.get(o.getString("wt")));
-                details.setOriginalOrderType(OrderType.STATUS_MAP.get(o.getString("ot")));
-                details.setPositionSide(PositionSide.STATUS_MAP.get(o.getString("ps")));
-                details.setClosePosition(o.getBoolean("cp"));
-                details.setActivationPrice(o.getDouble("AP"));
-                details.setCallbackRate(o.getDouble("cr"));
-                details.setPriceProtect(o.getBoolean("pP"));
-                details.setRealizedProfit(o.getDouble("rp"));
-                details.setSelfTradePreventionMode(SelfTradePreventionMode.STATUS_MAP.get(o.getString("V")));
-                details.setOpponentPriceMode(OpponentPriceMode.STATUS_MAP.get(o.getString("pm")));
-                details.setGtdCancelTime(o.getLong("gtd"));
-
-                event.setOrderTradeUpdateDetails(details);
-                return event;
-            }
-        },
-
-        TRADE_LITE{
-            @Override
-            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
-                OrderTradeUpdateLiteEvent event = new OrderTradeUpdateLiteEvent(jsonObject.getLong("E"));
-                event.setTradeTime(jsonObject.getLong("T"));
-                event.setSymbol(jsonObject.getString("s"));
-                event.setOriginalQuantity(jsonObject.getDouble("q"));
-                event.setOriginalPrice(jsonObject.getDouble("p"));
-                event.setIsMaker(jsonObject.getBoolean("m"));
-                event.setClientOrderId(jsonObject.getString("c"));
-                event.setOrderSide(TradeSide.STATUS_MAP.get(jsonObject.getString("S")));
-                event.setLastTradePrice(jsonObject.getDouble("L"));
-                event.setLastTradeQuantity(jsonObject.getDouble("l"));
-                event.setTradeId(jsonObject.getLong("t"));
-                event.setOrderId(jsonObject.getLong("i"));
-                return event;
-            }
-        },
-
-        ACCOUNT_CONFIG_UPDATE{
-            @Override
-            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
-                AccountConfigUpdateEvent event = new AccountConfigUpdateEvent(jsonObject.getLong("E"));
-                event.setMatchMakingTime(jsonObject.getLong("T"));
-
-                JSONObject ac = jsonObject.getJSONObject("ac");
-                if (ac != null) {
-                    AccountConfigUpdateEvent.AccountLeverConfigChangeInfo leverConfigChangeInfo = new AccountConfigUpdateEvent.AccountLeverConfigChangeInfo();
-                    leverConfigChangeInfo.setSymbol(ac.getString("s"));
-                    leverConfigChangeInfo.setLever(ac.getInteger("l"));
-                    event.setLeverChangeInfo(leverConfigChangeInfo);
-                }
-
-                JSONObject ai = jsonObject.getJSONObject("ai");
-                if (ai != null) {
-                    AccountConfigUpdateEvent.AccountInfoChangeInfo accountInfoChangeInfo = new AccountConfigUpdateEvent.AccountInfoChangeInfo();
-                    accountInfoChangeInfo.setUnitBailState(ai.getBoolean("j"));
-                    event.setInfoChangeInfo(accountInfoChangeInfo);
-                }
-
-                return event;
-            }
-        },
-
-        STRATEGY_UPDATE{
-            @Override
-            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
-                StrategyUpdateEvent event = new StrategyUpdateEvent(jsonObject.getLong("E"));
-                event.setMatchMakingTime(jsonObject.getLong("T"));
-
-                StrategyUpdateEvent.StrategyUpdateInfo updateInfo = new StrategyUpdateEvent.StrategyUpdateInfo();
-                JSONObject su = jsonObject.getJSONObject("su");
-                updateInfo.setStrategyId(su.getLong("si"));
-                updateInfo.setStrategyType(StrategyType.STATUS_MAP.get(su.getString("st")));
-                updateInfo.setStrategyStatus(StrategyStatus.STATUS_MAP.get(su.getString("ss")));
-                updateInfo.setSymbol(su.getString("s"));
-                updateInfo.setUpdateTime(su.getLong("ut"));
-                updateInfo.setStrategyOPCode(StrategyOPCode.STATUS_MAP.get(su.getInteger("c")));
-                event.setStrategyUpdateInfo(updateInfo);
-                return event;
-            }
-        },
-
-        GRID_UPDATE{
-            @Override
-            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
-                GridUpdateEvent event = new GridUpdateEvent(jsonObject.getLong("E"));
-                event.setMatchMakingTime(jsonObject.getLong("T"));
-
-                JSONObject gu = jsonObject.getJSONObject("gu");
-                GridUpdateEvent.GridUpdateInfo updateInfo = new GridUpdateEvent.GridUpdateInfo();
-                updateInfo.setStrategyId(gu.getLong("si"));
-                updateInfo.setStrategyType(StrategyType.STATUS_MAP.get(gu.getString("st")));
-                updateInfo.setStrategyStatus(StrategyStatus.STATUS_MAP.get(gu.getString("ss")));
-                updateInfo.setSymbol(gu.getString("s"));
-                updateInfo.setRealizedPnl(gu.getDouble("r"));
-                updateInfo.setUnpairedAverage(gu.getDouble("up"));
-                updateInfo.setUnpairedQuantity(gu.getDouble("uq"));
-                updateInfo.setUnpairedFee(gu.getDouble("uf"));
-                updateInfo.setMatchedPnl(gu.getDouble("mp"));
-                updateInfo.setUpdateTime(gu.getLong("ut"));
-
-                event.setGridUpdateInfo(updateInfo);
-                return event;
-            }
-        },
-
-        CONDITIONAL_ORDER_TRIGGER_REJECT{
-            @Override
-            public AccountEvent convertFromJsonObject(JSONObject jsonObject) {
-                ConditionalOrderTriggerRejectEvent event = new ConditionalOrderTriggerRejectEvent(jsonObject.getLong("E"));
-                event.setMatchMakingTime(jsonObject.getLong("T"));
-
-
-                JSONObject or = jsonObject.getJSONObject("or");
-                ConditionalOrderTriggerRejectEvent.OrderRejectInfo orderRejectInfo = new ConditionalOrderTriggerRejectEvent.OrderRejectInfo();
-
-                orderRejectInfo.setSymbol(or.getString("s"));
-                orderRejectInfo.setOrderId(or.getLong("o"));
-                orderRejectInfo.setRejectReason(or.getString("r"));
-                event.setOrderRejectInfo(orderRejectInfo);
-                return event;
-            }
-        }
-    }
-}
-package com.helei.cexapi.client;
-
-import cn.hutool.core.util.BooleanUtil;
-import cn.hutool.core.util.StrUtil;
-import com.helei.binanceapi.BinanceWSAccountStreamClient;
-import com.helei.binanceapi.BinanceWSApiClient;
-import com.helei.binanceapi.dto.accountevent.AccountEvent;
-import com.helei.binanceapi.supporter.IpWeightSupporter;
-import com.helei.dto.ASKey;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-
-import java.net.InetSocketAddress;
-import java.util.UUID;
-import java.util.concurrent.*;
-import java.util.function.Consumer;
-
-
-/**
- * 币安账户综合客户端
- * <P>主要由两部分组成</P>
- * <p>一是用于请求维护listenKey的BinanceWSApiClient</p>
- * <p>
- * 二是ConcurrentMap< ASKey, BinanceWSAccountStreamClient>
- * 里面记录了账户鉴权信息和对应的账户信息推送连接BinanceWSAccountStreamClient
- * </p>
- */
-@Slf4j
-public class BinanceAccountMergeClient {
-
-    /**
-     * 处理相关异步任务的线程池
-     */
-    @Getter
-    private final ExecutorService executor;
-
-    /**
-     * 用于请求listenKey，更新listenKey等请求的WSClient
-     */
-    private final BinanceWSApiClient requestClient;
-
-    /**
-     * 账户信息推送的base url
-     */
-    private final String accountStreamUrl;
-
-    /**
-     * 代理
-     */
-    private InetSocketAddress proxy;
-
-
-    public BinanceAccountMergeClient(
-            BinanceWSApiClient requestClient,
-            String accountStreamUrl,
-            ExecutorService executor
-
-    ) throws Exception {
-        this.requestClient = requestClient;
-        if (StrUtil.isBlank(requestClient.getName())) {
-            this.requestClient.setName("账户信息请求客户端-" + UUID.randomUUID().toString().substring(0, 8));
-        }
-
-        this.accountStreamUrl = accountStreamUrl;
-        this.executor = executor;
-
-        log.info("开始连接请求服务器");
-        requestClient.connect().get();
-    }
-
-
-    public void setProxy(InetSocketAddress proxy) {
-        this.proxy = proxy;
-        requestClient.setProxy(proxy);
-    }
-
-
-    /**
-     * 添加账户流，根据asKey创建BinanceWSAccountStreamClient对象进行连接，并绑定收到事件的回调。
-     *
-     * @param asKey                   asKey
-     * @param whenReceiveAccountEvent channel收到事件消息时的回调
-     * @return this
-     * @throws Exception exception
-     */
-    public BinanceWSAccountStreamClient getAccountStream(ASKey asKey, Consumer<AccountEvent> whenReceiveAccountEvent) throws Exception {
-
-        try {
-            BinanceWSAccountStreamClient client = new BinanceWSAccountStreamClient(
-                    accountStreamUrl,
-                    new IpWeightSupporter("localIp"),
-                    asKey,
-                    whenReceiveAccountEvent,
-                    requestClient.getBaseApi()
-            );
-            client.setProxy(proxy);
-
-            return client;
-        } catch (Exception e) {
-            log.error("创建account连接出错, apiKey[{}]", asKey.getApiKey(), e);
-            throw new RuntimeException(e);
-        }
-    }
-
-    /**
-     * 刷新BinanceWSAccountStreamClient
-     *
-     * @param streamClient streamClient
-     * @return boolean
-     */
-    private static boolean refreshClient(BinanceWSAccountStreamClient streamClient) {
-        try {
-            String s = streamClient.lengthenListenKey().get();
-            if (s == null) {
-                log.error("延长listenKey[{}]得到结果为null", streamClient.getListenKey());
-                return false;
-            }
-            return true;
-        } catch (InterruptedException | ExecutionException e) {
-            log.error("延长listenKey[{}]发生错误", streamClient.getListenKey(), e);
-            return false;
-        }
-    }
-
-
-    /**
-     * 重连接账户信息推送流
-     *
-     * @param streamClient streamClient
-     * @param retryTimes   retryTimes
-     */
-    private static boolean reConnectStream(BinanceWSAccountStreamClient streamClient, int retryTimes) {
-        for (int i = 1; i <= retryTimes; i++) {
-            log.info("开始重连接account stream， [{}/{}]，旧的listenKey[{}]", i, retryTimes, streamClient.getListenKey());
-            Boolean b = null;
-            try {
-
-                //关闭，重置
-                streamClient.close();
-
-                //开始连接
-                b = streamClient.startAccountInfoStream().get();
-            } catch (InterruptedException | ExecutionException e) {
-                log.error("重新连接account stream发生错误，", e);
-            }
-            if (BooleanUtil.isTrue(b)) {
-                log.info("重连接account stream成功, 新的listenKey[{}]", streamClient.getListenKey());
-                return true;
-            }
-        }
-
-        log.error("重连接失败,apiKey[{}]", streamClient.getAsKey().getApiKey());
-        return false;
+    private Tuple2<SignalGroupKey, List<IndicatorSignal>> getHistorySignal(String kLineStreamKey) throws Exception {
+        return historySignalMapState.get(kLineStreamKey);
     }
 }
 
 
-
-
-package com.helei.cexapi;
-
-
-import com.helei.binanceapi.BinanceWSApiClient;
-import com.helei.binanceapi.BinanceWSApiClientHandler;
-import com.helei.binanceapi.api.rest.BinanceUContractMarketRestApi;
-import com.helei.binanceapi.supporter.IpWeightSupporter;
-import lombok.extern.slf4j.Slf4j;
-
-import javax.net.ssl.SSLException;
-import java.net.InetSocketAddress;
-import java.net.URISyntaxException;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
-
-@Slf4j
-public class CEXApiFactory {
-
-    private static final String CLIENT_CONNECT_KEY_SPACER = "<@>?";
-    //TODO 配置化
-//    private static InetSocketAddress proxy = new InetSocketAddress("127.0.0.1", 7897);
-    private static InetSocketAddress proxy = new InetSocketAddress("127.0.0.1", 7890);
-//    private static InetSocketAddress proxy = null;
-
-    private static IpWeightSupporter ipWeightSupporter = new IpWeightSupporter("localIp");
-
-    private static final ConcurrentMap<String, BinanceWSApiClient> CLIENT_CONNECTION_MAP = new ConcurrentHashMap<>();
-
-    public static BinanceWSApiClient binanceApiClient(
-            String url,
-            String name
-    ) {
-        String clientKey = buildClientConnectKey(url, name);
-
-        BinanceWSApiClient binanceWSApiClient = CLIENT_CONNECTION_MAP.get(clientKey);
-        if (binanceWSApiClient != null) {
-            log.info("已存在链接客户端 [{}] - [{}]", name, url);
-            return binanceWSApiClient;
-        }
-
-        BinanceWSApiClient client;
-        synchronized (CEXApiFactory.class) {
-            try {
-                log.info("创建链接客户端 [{}] - [{}]", name, url);
-
-                client = binanceApiClient(url);
-                client.setName(name);
-                CLIENT_CONNECTION_MAP.put(clientKey, client);
-
-                log.info("创建链接客户端 [{}] - [{}] 成功", name, url);
-            } catch (Exception e) {
-                log.error("创建链接客户端 [{}] - [{}] 失败", name, url, e);
-                throw new RuntimeException("创建连接客户端失败", e);
-            }
-        }
-        return client;
-    }
-
-    public static BinanceWSApiClient binanceApiClient(
-            String url
-    ) throws URISyntaxException, SSLException {
-
-        BinanceWSApiClientHandler handler = new BinanceWSApiClientHandler();
-
-        BinanceWSApiClient client = new BinanceWSApiClient(
-                url,
-                ipWeightSupporter,
-                handler
-        );
-        client.setProxy(proxy);
-        client.setName("binance-api-client-" + UUID.randomUUID().toString().substring(0, 8));
-
-        return client;
-    }
-
-    public static BinanceUContractMarketRestApi binanceUContractMarketRestApi(String baseUrl,
-                                                                              ExecutorService executor) {
-        return new BinanceUContractMarketRestApi(executor, baseUrl, ipWeightSupporter);
-    }
-
-
-    /**
-     * 创建客户端链接的key，保证同一个名和url只有一个链接
-     * @param url url
-     * @param name name
-     * @return String
-     */
-    private static String buildClientConnectKey(String url, String name) {
-        return name + CLIENT_CONNECT_KEY_SPACER + url;
-    }
-}
-
-
-
-package com.helei.reaktimedatacenter.service.impl;
-
-
-import com.helei.binanceapi.dto.accountevent.*;
-import com.helei.dto.account.PositionInfo;
-import com.helei.dto.account.UserAccountInfo;
-import com.helei.reaktimedatacenter.manager.BinanceAccountClientManager;
-import com.helei.reaktimedatacenter.mapper.PositionInfoMapper;
-import com.helei.reaktimedatacenter.service.AccountEventResolveService;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
-@Slf4j
-@Service
-public class BinanceAccountEventResolveService implements AccountEventResolveService {
-
-    private final ExecutorService eventExecutor = Executors.newVirtualThreadPerTaskExecutor();
-
-
-    @Autowired
-    private BinanceAccountClientManager binanceAccountClientManager;
-
-
-    @Override
-    public void resolveAccountEvent(UserAccountInfo accountInfo, AccountEvent accountEvent) {
-        CompletableFuture<Void> future = null;
-
-        if (accountEvent instanceof ListenKeyExpireEvent listenKeyExpireEvent) {
-            future = resolveListenKeyExpireEvent(accountInfo, listenKeyExpireEvent);
-        } else if (accountEvent instanceof BailNeedEvent bailNeedEvent) {
-            future = resolveBailNeedEvent(accountInfo, bailNeedEvent);
-        } else if (accountEvent instanceof BalancePositionUpdateEvent balancePositionUpdateEvent) {
-            future = resolveBalancePositionUpdateEvent(accountInfo, balancePositionUpdateEvent);
-        }
-
-
-        if (future == null) return;
-
-
-        future.whenCompleteAsync((unused, throwable) -> {
-            if (throwable != null) {
-
-            }
-        }, eventExecutor);
-    }
-
-    /**
-     * 创立账户仓位更新事件
-     * @param accountInfo accountInfo
-     * @param balancePositionUpdateEvent balancePositionUpdateEvent
-     * @return CompletableFuture<Void>
-     */
-    private CompletableFuture<Void> resolveBalancePositionUpdateEvent(UserAccountInfo accountInfo, BalancePositionUpdateEvent balancePositionUpdateEvent) {
-        List<BalancePositionUpdateEvent.PositionChangeInfo> positionChangeInfos = balancePositionUpdateEvent.getPositionChangeInfos();
-        List<PositionInfo> positionInfos = PositionInfoMapper.INSTANCE.convertFromPositionChangeInfoList(positionChangeInfos);
-
-        accountInfo.getAccountPositionInfo().updatePositionInfos(positionInfos);
-    }
-
-
-    /**
-     * 处理追加保证金事件
-     * @param accountInfo accountInfo
-     * @param bailNeedEvent bailNeedEvent
-     * @return CompletableFuture<Void>
-     */
-    private CompletableFuture<Void> resolveBailNeedEvent(UserAccountInfo accountInfo, BailNeedEvent bailNeedEvent) {
-        return CompletableFuture.runAsync(() -> {
-            log.warn("账户userId[{}]-accountId[{}]追加保证金事件, 详情:[{}]", accountInfo.getUserId(), accountInfo.getId(), bailNeedEvent);
-
-        }, eventExecutor);
-    }
-
-
-    /**
-     * listenKey过期了，要重新获取
-     *
-     * @param listenKeyExpireEvent listenKeyExpireEvent
-     * @return CompletableFuture<Void>
-     */
-    public CompletableFuture<Void> resolveListenKeyExpireEvent(UserAccountInfo userAccountInfo, ListenKeyExpireEvent listenKeyExpireEvent) {
-        long accountId = userAccountInfo.getId();
-        log.info("收到accountId[{}]的账户listenKey过期事件，尝试重新连接", accountId);
-
-        CompletableFuture.runAsync(() -> {
-            boolean result = binanceAccountClientManager.startAccountEventStream(accountId);
-            if (result) {
-                log.info("accountId[{}]的账户重新获取listenKey成功", accountId);
-            } else {
-                // TODO 日志上传
-                log.error("accountId[{}]的账户重新获取listenKey失败", accountId);
-            }
-        }, eventExecutor);
-    }
-}
-
-
-package com.helei.reaktimedatacenter.service.impl;
-
-import com.helei.binanceapi.BinanceWSAccountStreamClient;
-import com.helei.binanceapi.dto.accountevent.AccountEvent;
-import com.helei.constants.RunEnv;
-import com.helei.constants.TradeType;
-import com.helei.dto.account.UserAccountInfo;
-import com.helei.dto.account.UserInfo;
-import com.helei.reaktimedatacenter.manager.BinanceAccountClientManager;
-import com.helei.reaktimedatacenter.service.AccountEventResolveService;
-import com.helei.reaktimedatacenter.service.AccountEventStreamService;
-import com.helei.reaktimedatacenter.service.UserService;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
-
-@Slf4j
-@Service
-public class BinanceAccountEventStreamService implements AccountEventStreamService {
-
-    private static final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-
-    private static final int ACCOUNT_STREAM_START_TIMES_LIMIT = 3;
-
-
-    @Autowired
-    private UserService userService;
-
-    @Autowired
-    private AccountEventResolveService  accountEventResolveService;
-
-
-    @Autowired
-    private BinanceAccountClientManager binanceAccountClientManager;
-
-
-    /**
-     * 开启所有用户事件流
-     */
-    @Override
-    public void startAllUserInfoEventStream() {
-        log.info("开始获取所有用户的账户事件流");
-
-        List<CompletableFuture<Void>> list = userService.queryAll().stream()
-                .map(userInfo -> CompletableFuture.runAsync(() -> startUserInfoEventStream(userInfo), executor)).toList();
-        list.forEach(CompletableFuture::join);
-
-        log.info("所有用户账户事件流获取完毕，共[{}]个用户", list.size());
-    }
-
-
-    /**
-     * 开启用户信息事件，会开启用户名下所有账户的事件流
-     * @param userInfo userInfo
-     */
-    @Override
-    public void startUserInfoEventStream(UserInfo userInfo) {
-        log.info("开始获取用户id[{}]-name[{}]拥有账户事件流", userInfo.getId(), userInfo.getUsername());
-
-        List<UserAccountInfo> accountInfos = userInfo.getAccountInfos();
-
-        if (accountInfos == null || accountInfos.isEmpty()) {
-            log.warn("用户[{}]-id[{}]没有注册交易账户事件", userInfo.getUsername(), userInfo.getId());
-            return;
-        }
-
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-
-        for (UserAccountInfo accountInfo : accountInfos) {
-            CompletableFuture<Void> future = buildAndStartAccountEventStream(accountInfo);
-            futures.add(future);
-        }
-
-        futures.forEach(CompletableFuture::join);
-
-        log.info("用户id[{}]-name[{}]所有账户事件流[共{}个]开启成功", userInfo.getId(), userInfo.getUsername(), futures.size());
-    }
-
-    /**
-     * 构建并启动账户事件流，
-     * @param accountInfo accountInfo
-     * @return CompletableFuture<Void>
-     */
-    private CompletableFuture<Void> buildAndStartAccountEventStream(UserAccountInfo accountInfo) {
-        long userId = accountInfo.getUserId();
-        long accountId = accountInfo.getId();
-
-        RunEnv runEnv = accountInfo.getRunEnv();
-        TradeType tradeType = accountInfo.getTradeType();
-
-
-
-        log.info("开始获取账户事件流, userId[{}], accountId[{}], runEvn[{}], tradeType[{}]", userId, accountId, runEnv, tradeType);
-
-        CompletableFuture<Void> future = CompletableFuture
-                //1 获取流客户端
-                .supplyAsync(() -> {
-                    BinanceWSAccountStreamClient binanceWSAccountStreamClient = null;
-
-                    //1.1 带重试
-                    for (int i = 0; i < ACCOUNT_STREAM_START_TIMES_LIMIT; i++) {
-                        try {
-                            log.info("第 [{}] 次获取账户事件流, userId[{}], accountId[{}]", i, userId, accountId);
-
-                            //1.2 创建 binanceWSAccountStreamClient 用于开启事件流
-                            binanceWSAccountStreamClient = binanceAccountClientManager.getAccountInfoStream(accountInfo, this::resolveAccountEvent);
-
-                            log.info("第 [{}] 次获取账户事件流成功, userId[{}], accountId[{}], listenKey[{}]", i, userId, accountId, binanceWSAccountStreamClient.getListenKey());
-
-                            return binanceWSAccountStreamClient;
-                        } catch (Exception e) {
-                            log.error("第 [{}] 次获取账户事件流失败， userId[{}], accountId[{}]", i, userId, accountId, e);
-
-                            binanceAccountClientManager.removeAccountStreamClient(accountId);
-
-                            if (i == ACCOUNT_STREAM_START_TIMES_LIMIT - 1) {
-                                log.error("重试次数 [{}] 超过了限制[{}], 不再继续重试, userId[{}], accountId[{}]", i, ACCOUNT_STREAM_START_TIMES_LIMIT, userId, accountId);
-                            }
-                        }
-                    }
-
-                    return binanceWSAccountStreamClient;
-                }, executor)
-                //2 开启流客户端
-                .thenAcceptAsync(binanceWSAccountStreamClient -> {
-                    // 开启事件流
-                    startAccountEventStream(accountInfo, binanceWSAccountStreamClient);
-                }, executor);
-
-        return future;
-    }
-
-
-    /**
-     * 开始账户事件流，通过 binanceWSAccountStreamClient 进行获取
-     * @param accountInfo accountInfo
-     * @param binanceWSAccountStreamClient binanceWSAccountStreamClient
-     */
-    private void startAccountEventStream(UserAccountInfo accountInfo,
-                                         BinanceWSAccountStreamClient binanceWSAccountStreamClient) {
-        long accountId = accountInfo.getId();
-
-        boolean success = binanceAccountClientManager.startAccountEventStream(accountId, binanceWSAccountStreamClient);
-
-        if (success) {
-            log.info("开启账户事件流成功, accountId[{}], listenKey [{}]", accountId, binanceWSAccountStreamClient.getListenKey());
-        } else {
-            // TODO 错误日志上传
-            log.error("开启账户事件流失败, accountId[{}]", accountId);
-        }
-    }
-
-
-
-    @Override
-    public void resolveAccountEvent(final UserAccountInfo accountInfo, AccountEvent accountEvent) {
-        log.info("账户[{}]-[{}]收到事件 [{}]", accountInfo.getUserId(), accountInfo.getId(), accountEvent);
-        accountEventResolveService.resolveAccountEvent(accountInfo, accountEvent);
-    }
-}
-
-package com.helei.reaktimedatacenter.service.impl;
-
-
-import com.helei.dto.account.UserAccountInfo;
-
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-
-public class RealtimeAccountInfoSpace {
-
-    private final ConcurrentMap<Long, UserAccountInfo> userAccountInfoMap = new ConcurrentHashMap<>();
-
-
-
-
-}
-
-
-
-
-package com.helei.reaktimedatacenter.service;
-
-import com.helei.binanceapi.dto.accountevent.AccountEvent;
-import com.helei.dto.account.UserAccountInfo;
-
-public interface AccountEventResolveService {
-
-
-    /**
-     * 处理账户事件
-     * @param accountInfo 账户信息
-     * @param accountEvent 账户事件
-     */
-    void resolveAccountEvent(UserAccountInfo accountInfo, AccountEvent accountEvent);
-}
-
-
-
-
-
-package com.helei.reaktimedatacenter.manager;
-
-import com.helei.binanceapi.BinanceWSAccountStreamClient;
-import com.helei.binanceapi.BinanceWSApiClient;
-import com.helei.binanceapi.config.BinanceApiConfig;
-import com.helei.binanceapi.dto.accountevent.AccountEvent;
-import com.helei.cexapi.CEXApiFactory;
-import com.helei.cexapi.client.BinanceAccountMergeClient;
-import com.helei.constants.RunEnv;
-import com.helei.constants.TradeType;
-import com.helei.dto.ASKey;
-import com.helei.dto.KeyValue;
-import com.helei.dto.account.UserAccountInfo;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.InitializingBean;
-import org.springframework.stereotype.Component;
-
-import java.net.InetSocketAddress;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.BiConsumer;
-
-
-@Slf4j
-@Component
-public class BinanceAccountClientManager implements InitializingBean {
-
-    private final static long REFRESH_TASK_SLEEP_TIME = 60000;
-
-    private final static long REFRESH_INTERVAL = 1000 * 60 * 10;
-
-    private final static int REFRESH_CONCURRENT_LIMIT = 10;
-
-    private static final int ACCOUNT_STREAM_START_TIMES_LIMIT = 3;
-
-
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-
-
-    private final static ConcurrentMap<String, BinanceAccountMergeClient> mergeClientMap = new ConcurrentHashMap<>();
-
-
-    private final static ConcurrentMap<Long, KeyValue<BinanceWSAccountStreamClient, Long>> accountIdMapClientAndExpireMap = new ConcurrentHashMap<>();
-
-
-    private final BinanceApiConfig binanceApiConfig = BinanceApiConfig.INSTANCE;
-
-
-    private final AtomicBoolean streamRefreshTaskState = new AtomicBoolean(true);
-
-
-    /**
-     * 创建 BinanceWSAccountStreamClient，用来获取账户事件推送流
-     *
-     * @param accountInfo accountInfo
-     * @return BinanceWSAccountStreamClient
-     * @throws Exception Exception
-     */
-    public BinanceWSAccountStreamClient getAccountInfoStream(final UserAccountInfo accountInfo, BiConsumer<UserAccountInfo, AccountEvent> whenReceiveAccountEvent) throws Exception {
-
-        RunEnv runEnv = accountInfo.getRunEnv();
-        TradeType tradeType = accountInfo.getTradeType();
-        ASKey asKey = accountInfo.getAsKey();
-
-
-        BinanceApiConfig.BinanceTypedUrl envUrlSet = binanceApiConfig.getEnvUrlSet(runEnv, tradeType);
-
-
-        // 1. 创建用于获取 listenKey 的客户端
-        BinanceWSApiClient requestClient = CEXApiFactory.binanceApiClient(envUrlSet.getWs_market_url(), "账户事件请求链接");
-
-        // 2, 获取 merge 客户端
-        String key = generateMergeClientKey(runEnv, tradeType);
-        String streamUrl = envUrlSet.getWs_account_info_stream_url();
-
-        BinanceAccountMergeClient accountMergeClient = mergeClientMap.compute(key, (k, v) -> {
-            if (v == null) {
-                try {
-                    v = new BinanceAccountMergeClient(requestClient, streamUrl, executor);
-
-                    InetSocketAddress proxy = binanceApiConfig.getProxy();
-                    if (proxy != null) {
-                        v.setProxy(proxy);
-                    }
-                } catch (Exception e) {
-                    log.error("创建BinanceAccountMergeClient发生错误, url[{}}", streamUrl, e);
-                    throw new RuntimeException(e);
-                }
-            }
-
-            return v;
-        });
-
-
-        // 3. 开始根据 merge 客户端，获取该账户的推送流链接
-        KeyValue<BinanceWSAccountStreamClient, Long> clientLongKeyValue = accountIdMapClientAndExpireMap.compute(accountInfo.getId(), (k, v) -> {
-            if (v == null) {
-                try {
-                    BinanceWSAccountStreamClient binanceWSAccountStreamClient = accountMergeClient.getAccountStream(asKey, accountEvent -> whenReceiveAccountEvent.accept(accountInfo, accountEvent));
-
-                    //刷新时间ddl设置为特殊值0代表没有启动
-                    v = new KeyValue<>(binanceWSAccountStreamClient, 0L);
-                } catch (Exception e) {
-                    throw new RuntimeException("创建币按账户推送流失", e);
-                }
-            }
-
-            return v;
-        });
-
-        return clientLongKeyValue.getKey();
-    }
-
-
-    /**
-     * 根据accountId删除accountIdMapClientAndExpireMap里缓存的client
-     * @param accountId accountId
-     */
-    public void removeAccountStreamClient(long accountId) {
-        KeyValue<BinanceWSAccountStreamClient, Long> remove = accountIdMapClientAndExpireMap.remove(accountId);
-        if (remove != null) {
-            log.warn("已移除AccountStreamClient [{}]", remove.getKey().getName());
-        }
-    }
-
-    /**
-     * 开始账户事件流，通过 binanceWSAccountStreamClient 进行获取
-     * <p>带重试次数，未达到重试限制之前，都会一直重试</p>
-     *
-     * @param accountId                    accountId
-     */
-    public boolean startAccountEventStream(long accountId) {
-        KeyValue<BinanceWSAccountStreamClient, Long> pair = accountIdMapClientAndExpireMap.get(accountId);
-
-        if (pair == null) return false;
-
-        return startAccountEventStream(accountId, pair.getKey());
-    }
-
-
-    /**
-     * 开始账户事件流，通过 binanceWSAccountStreamClient 进行获取
-     * <p>带重试次数，未达到重试限制之前，都会一直重试</p>
-     *
-     * @param accountId                    accountId
-     * @param binanceWSAccountStreamClient binanceWSAccountStreamClient
-     */
-    public boolean startAccountEventStream(long accountId,
-                                           BinanceWSAccountStreamClient binanceWSAccountStreamClient) {
-
-        for (int i = 0; i < ACCOUNT_STREAM_START_TIMES_LIMIT; i++) {
-            try {
-                Boolean success = binanceWSAccountStreamClient.startAccountInfoStream().get();
-
-                if (success) {
-
-                    //设置刷新时间
-                    accountIdMapClientAndExpireMap.compute(accountId, (k,v)->{
-                        if (v == null) v = new KeyValue<>(binanceWSAccountStreamClient, System.currentTimeMillis() + REFRESH_INTERVAL);
-                        return v;
-                    });
-
-                    return true;
-                } else {
-                    log.error("开启账户事件流失败[{}/{}], accountId[{}]", i, ACCOUNT_STREAM_START_TIMES_LIMIT, accountId);
-                }
-            } catch (InterruptedException | ExecutionException e) {
-                log.error("开启账户事件流发生错误[{}/{}], accountId[{}]", i, ACCOUNT_STREAM_START_TIMES_LIMIT, accountId, e);
-            }
-
-            log.warn("开始账户事件流重试 [{}/{}], accountId[{}]", i, ACCOUNT_STREAM_START_TIMES_LIMIT, accountId);
-
-        }
-
-        log.error(" accountId[{}] 重试次数[{}]超过限制[{}],", accountId, ACCOUNT_STREAM_START_TIMES_LIMIT, ACCOUNT_STREAM_START_TIMES_LIMIT);
-        return false;
-    }
-
-
-    /**
-     * 定期刷新账户流的ListenKey
-     */
-    private void refreshAccountStreamListenKey() {
-        while (streamRefreshTaskState.get()) {
-            long startTime = System.currentTimeMillis();
-            Semaphore semaphore = new Semaphore(REFRESH_CONCURRENT_LIMIT);
-            try {
-
-
-                // 1. 去除失效的
-                List<Long> expireIdList = accountIdMapClientAndExpireMap.entrySet().stream().filter(e -> e.getValue().getValue() == -1L).map(Map.Entry::getKey).toList();
-
-                if (!expireIdList.isEmpty()) {
-                    log.warn("去除失效的客户端链接 accountIds [{}]", expireIdList);
-                    expireIdList.forEach(accountIdMapClientAndExpireMap::remove);
-                }
-
-                // 2.尝试刷新listenKey
-                for (Map.Entry<Long, KeyValue<BinanceWSAccountStreamClient, Long>> entry : accountIdMapClientAndExpireMap.entrySet()) {
-                    Long accountId = entry.getKey();
-                    KeyValue<BinanceWSAccountStreamClient, Long> keyValue = entry.getValue();
-                    BinanceWSAccountStreamClient client = keyValue.getKey();
-                    Long expireTime = keyValue.getValue();
-
-                    //没启动的，特殊特殊处理，跳过刷新listenKey
-                    if (expireTime == 0L) continue;
-
-                    semaphore.acquire();
-
-                    if (System.currentTimeMillis() <= expireTime) {
-                        log.info("accountId[{}]的事件流到了刷新时间，开始延长listenKey[{}]", accountId, client.getListenKey());
-
-                        client.lengthenListenKey().whenCompleteAsync((listenKey, e) -> {
-                            try {
-                                if (e != null) {
-                                    log.error("延长accountId[{}]的listenKey[{}]发生错误, 重新启动account链接", accountId, client.getListenKey(), e);
-
-                                    //重新获取listenKey启动
-                                    boolean result = startAccountEventStream(accountId, client);
-                                    if (!result) {
-                                        // TODO 错误日志上传
-                                        log.error("accountId[{}}重新获取推送链接失败", accountId);
-
-                                        //特殊标记，下一次刷新时删掉
-                                        keyValue.setValue(-1L);
-                                    } else {
-                                        log.info("accountId[{}]重新获取推送链接成功, listenKey[{}]", accountId, client.getListenKey());
-                                        keyValue.setValue(System.currentTimeMillis() + REFRESH_INTERVAL);
-                                    }
-                                }
-                            } finally {
-                                semaphore.release();
-
-                            }
-                        }, executor);
-                    }
-                }
-            } catch (InterruptedException e) {
-                log.error("定时刷新账户流ListenKey失败");
-            }
-
-            try {
-                TimeUnit.MILLISECONDS.sleep(REFRESH_TASK_SLEEP_TIME - System.currentTimeMillis() + startTime);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
-        }
-    }
-
-
-    /**
-     * 初始化，开始刷新链接任务
-     *
-     * @throws Exception Exception
-     */
-    @Override
-    public void afterPropertiesSet() throws Exception {
-        executor.execute(this::refreshAccountStreamListenKey);
-    }
-
-
-    /**
-     * 获取 MergeClientKey
-     *
-     * @param runEnv    runEnv
-     * @param tradeType tradeType
-     * @return key
-     */
-    private String generateMergeClientKey(RunEnv runEnv, TradeType tradeType) {
-        return runEnv + "." + tradeType;
-    }
-
-
-    public void close() {
-        streamRefreshTaskState.set(false);
-        executor.shutdown();
-    }
-}
-
-
-package com.helei.reaktimedatacenter.mapper;
-
-import com.helei.binanceapi.dto.accountevent.BalancePositionUpdateEvent;
-import com.helei.dto.account.PositionInfo;
-import org.mapstruct.Mapper;
-import org.mapstruct.Mapping;
-import org.mapstruct.Mappings;
-import org.mapstruct.factory.Mappers;
-
-import java.util.List;
-
-@Mapper
-public interface PositionInfoMapper {
-
-    PositionInfoMapper INSTANCE = Mappers.getMapper(PositionInfoMapper.class);
-
-
-    @Mappings({
-            @Mapping(source = "symbol", target = "symbol"),
-            @Mapping(source = "position", target = "position"),
-            @Mapping(source = "enterPosition", target = "enterPosition"),
-            @Mapping(source = "balanceEqualPrice", target = "balanceEqualPrice"),
-            @Mapping(source = "countProfitOrLoss", target = "countProfitOrLoss"),
-            @Mapping(source = "unrealizedProfitOrLoss", target = "unrealizedProfitOrLoss"),
-            @Mapping(source = "model", target = "model"),
-            @Mapping(source = "bail", target = "bail"),
-            @Mapping(source = "positionSide", target = "positionSide")
-    })
-    PositionInfo convertFromPositionChangeInfo(BalancePositionUpdateEvent.PositionChangeInfo positionChangeInfo);
-
-    List<PositionInfo> convertFromPositionChangeInfoList(List<BalancePositionUpdateEvent.PositionChangeInfo> positionChangeInfoList);
-}
-
-
-
-accountinfomapper
-bainanceacocuntEventSource
-accountinfoservice
-比南accounteventSourceTest
-
-
+shinano:
+  quantity:
+    # 信号生成服务配置
+    trade_signal_maker:
+      # name
+      name: test
+      # symbol
+      symbol: btcusdt
+
+      run_type:
+        configs:
+          - env: NORMAL  # 运行环境
+            trade_type:  # 交易类型
+              - SPOT
+        snow_flow: # 雪花算法配置
+          datacenter_id: 0 # 数据中心id
+          machine_id: 1 # 机器id
+
+      # 历史k线加载批大小
+      historyKLineBatchSize: 200
+      # 批加载的网络并发度
+      batchLoadConcurrent: 10
+      # 实时数据配置
+      realtime:
+        # kafka配置
+        kafka:
+          input:
+            bootstrapServer: 192.168.1.2:9092
+            groupId: trade_signal_app_test
+            transaction_timeout_ms: 900000
+
+          output:
+            bootstrapServer: 192.168.1.2:9092
+            groupId: trade_signal_app_test
+            transaction_timeout_ms: 900000
+
+        # flink配置
+        flink:
+          jobManagerHost: 192.168.1.2
+          jobManagerPort: 8081
 
