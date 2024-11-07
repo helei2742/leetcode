@@ -1,17 +1,1476 @@
+package com.helei.binanceapi.constants;
 
-package com.helei.tradeapplication.service.impl;
+
+/**
+ * Binance WS 客户端的类型
+ */
+public enum BinanceWSClientType {
+    /**
+     * 请求、响应类型客户端
+     */
+    REQUEST_RESPONSE,
+    /**
+     * 市场行情推送流客户端
+     */
+    MARKET_STREAM,
+    /**
+     * 账户信息推送流客户端
+     */
+    ACCOUNT_STREAM,
+}
 
 
+
+package com.helei.binanceapi.supporter;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.dto.StreamSubscribeEntity;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+
+
+@Slf4j
+public class BinanceWSStreamSupporter {
+
+
+}
+
+
+
+
+package com.helei.binanceapi;
+
+import com.helei.binanceapi.base.AbstractBinanceWSApiClient;
+import com.helei.binanceapi.constants.BinanceWSClientType;
+import com.helei.binanceapi.supporter.IpWeightSupporter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.net.URISyntaxException;
+import java.util.concurrent.CompletableFuture;
+
+
+@Slf4j
+public class BinanceWSAccountEventStreamClient extends AbstractBinanceWSApiClient {
+
+    /**
+     * baseUrl
+     */
+    private String baseUrl;
+
+    /**
+     * 账户消息流的listenKey
+     */
+    private String listenKey;
+
+
+    public BinanceWSAccountEventStreamClient(
+            String baseUrl,
+            IpWeightSupporter ipWeightSupporter
+    ) throws URISyntaxException {
+        super(BinanceWSClientType.ACCOUNT_STREAM, baseUrl, ipWeightSupporter, new BinanceWSAccountStreamClientHandler());
+        this.baseUrl = baseUrl;
+    }
+
+    @Override
+    public CompletableFuture<Void> connect() {
+        return CompletableFuture.runAsync(()->{
+            log.info("账户事件推送流客户端, 调用connect()方法不会启动");
+        });
+    }
+
+    public void startAccountEventStream(String listenKey) {
+        this.listenKey = listenKey;
+        super.url = baseUrl + "/" + listenKey;
+
+        try {
+            connect().get();
+
+            log.info("币安账户信息流已开启，listenKey = [{}]", listenKey);
+        } catch (Exception e) {
+            log.error("连接币安服务器[{}}发生错误", url, e);
+            throw new RuntimeException(String.format("连接币安服务器[%s]发生错误", url), e);
+        }
+    }
+}
+
+
+package com.helei.binanceapi;
+
+import com.helei.binanceapi.api.ws.BinanceWSBaseApi;
+import com.helei.binanceapi.base.AbstractBinanceWSApiClient;
+import com.helei.binanceapi.constants.BinanceWSClientType;
+import com.helei.binanceapi.dto.accountevent.AccountEvent;
+import com.helei.dto.ASKey;
+import com.helei.binanceapi.supporter.IpWeightSupporter;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.net.URISyntaxException;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
+
+/**
+ * 币安账户信息流推送客户端
+ */
+@Slf4j
+public class BinanceWSAccountStreamClient extends AbstractBinanceWSApiClient {
+
+
+    /**
+     * stream url
+     */
+    private final String streamUrl;
+
+    /**
+     * 账户信息的asKey
+     */
+    @Getter
+    private final ASKey asKey;
+
+    /**
+     * BaseApi，用来维护listenKey
+     */
+    private final BinanceWSBaseApi baseApi;
+
+    /**
+     * 当前的listenKey
+     */
+    @Getter
+    private String listenKey;
+
+    /**
+     * 收到信息的回调
+     */
+    @Getter
+    private final Consumer<AccountEvent> whenReceiveEvent;
+
+
+    public BinanceWSAccountStreamClient(
+            String streamUrl,
+            IpWeightSupporter ipWeightSupporter,
+            ASKey asKey,
+            Consumer<AccountEvent> whenReceiveEvent,
+            BinanceWSBaseApi baseApi
+    ) throws URISyntaxException {
+        super(BinanceWSClientType.ACCOUNT_STREAM, streamUrl, ipWeightSupporter, new BinanceWSAccountStreamClientHandler(whenReceiveEvent));
+        this.streamUrl = streamUrl;
+        this.whenReceiveEvent = whenReceiveEvent;
+        this.asKey = asKey;
+        this.baseApi = baseApi;
+
+        setName("币安账户信息推送客户端-" + asKey.getApiKey().substring(0, 8));
+    }
+
+    /**
+     * 开始获取账户信息流
+     *
+     * @return CompletableFuture<Boolean> 是否成功
+     */
+    public CompletableFuture<Boolean> startAccountInfoStream() {
+        log.info("开始获取账户信息流， apiKey = [{}]", asKey.getApiKey());
+
+        return baseApi
+                .requestListenKey(asKey)//获取listenKey
+                .thenApplyAsync(listenKey -> { //请求ws连接
+                    log.info("listenKey = [{}]", listenKey);
+                    if (listenKey == null) {
+                        log.error("获取listenKey结果为null，");
+                        return false;
+                    }
+                    this.listenKey = listenKey;
+                    super.url = streamUrl + "/" + listenKey;
+                    try {
+                        connect().get();
+                        log.info("账户信息流已开启，listenKey = [{}]", listenKey);
+                        return true;
+                    } catch (Exception e) {
+                        log.error("连接服务器[{}}发生错误", url, e);
+                    }
+                    return false;
+                });
+    }
+
+
+    /**
+     * 延长listenKey的时间
+     *
+     * @return future
+     */
+    public CompletableFuture<String> lengthenListenKey() {
+        return baseApi.lengthenListenKey(listenKey, asKey);
+    }
+
+}
+
+
+package com.helei.binanceapi;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.base.AbstractBinanceWSApiClientHandler;
+import com.helei.binanceapi.constants.AccountEventType;
+import com.helei.binanceapi.dto.accountevent.AccountEvent;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.function.Consumer;
+
+/**
+ * 币安账户信息流客户端处理消息的handler
+ */
+@Setter
+@Slf4j
+class BinanceWSAccountStreamClientHandler extends AbstractBinanceWSApiClientHandler {
+
+    private Consumer<AccountEvent> whenReceiveEvent;
+
+    @Override
+    protected void handleResponseMessage(String id, JSONObject response) {
+        log.warn("get an response, not stream message! [{}]", response);
+    }
+
+    @Override
+    protected void handleStreamMessage(String streamName, JSONObject context) {
+        if (whenReceiveEvent != null) {
+            whenReceiveEvent.accept(AccountEventType.STATUS_MAP.get(context.getString("e")).getConverter().convertFromJsonObject(context));
+        }
+    }
+}
+
+
+
+package com.helei.binanceapi;
+
+import com.helei.binanceapi.api.ws.*;
+import com.helei.binanceapi.base.AbstractBinanceWSApiClient;
+import com.helei.binanceapi.constants.BinanceWSClientType;
+import com.helei.binanceapi.supporter.IpWeightSupporter;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.net.URISyntaxException;
+
+
+/**
+ * 币安市场信息推送流客户端
+ */
+@Getter
+@Slf4j
+public class BinanceWSMarketStreamClient  extends AbstractBinanceWSApiClient {
+
+
+    /**
+     * stream流推送相关api
+     */
+    private final BinanceWSStreamApi streamApi;
+
+
+    public BinanceWSMarketStreamClient(
+            String url,
+            IpWeightSupporter ipWeightSupporter
+    ) throws URISyntaxException {
+        super(BinanceWSClientType.MARKET_STREAM, url, ipWeightSupporter, new BinanceWSMarketStreamClientHandler());
+        streamApi = new BinanceWSStreamApi(this);
+    }
+}
+
+
+package com.helei.binanceapi;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.base.AbstractBinanceWSApiClientHandler;
+import com.helei.binanceapi.dto.StreamSubscribeEntity;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+
+
+@Slf4j
+public class BinanceWSMarketStreamClientHandler extends AbstractBinanceWSApiClientHandler {
+
+
+
+    @Override
+    public void handleStreamMessage(String streamName, JSONObject context) {
+        publishStreamResponse(streamName, context, websocketClient.getCallbackInvoker());
+    }
+
+
+    /**
+     * 收到订阅的消息，执行相应的回调
+     * 1.首先会优先使用 StreamSubscribeEntity中传入的线程池执行
+     * 2.如果没有则会用AbstractBinanceWSApiClient中的线程池执行
+     * 3.如果还没有，使用netty线程池执行
+     *
+     * @param streamName      streamName
+     * @param message         message
+     * @param callbackInvoker callbackInvoker
+     */
+    public void publishStreamResponse(String streamName, JSONObject message, ExecutorService callbackInvoker) {
+
+        StreamSubscribeEntity subscribeEntity = subscribeMap.get(streamName);
+        if (subscribeEntity == null) {
+            log.error("No subscribe entity for stream type {}", streamName);
+            return;
+        }
+        Map<String, Object> params = subscribeEntity.getParams();
+
+        try {
+            ExecutorService executor = subscribeEntity.getCallbackExecutor();
+            if (executor != null) {
+                executor.submit(() -> {
+                    subscribeEntity.getInvocationHandler().invoke(streamName, params, message);
+                });
+            } else if (callbackInvoker != null) {
+                callbackInvoker.submit(() -> {
+                    subscribeEntity.getInvocationHandler().invoke(streamName, params, message);
+                });
+            } else {
+                subscribeEntity.getInvocationHandler().invoke(streamName, params, message);
+                log.warn("use netty thread pool execute, stream name [{}]", streamName);
+            }
+        } catch (Exception e) {
+            log.error("publish stream response error, stream name[{}]", streamName, e);
+        }
+    }
+}
+
+
+
+package com.helei.binanceapi;
+
+import com.helei.binanceapi.api.ws.*;
+import com.helei.binanceapi.base.AbstractBinanceWSApiClient;
+import com.helei.binanceapi.constants.BinanceWSClientType;
+import com.helei.binanceapi.supporter.IpWeightSupporter;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.net.URISyntaxException;
+
+/**
+ * 币安Websocket，请求-响应模式的api客户端
+ */
+@Getter
+@Slf4j
+public class BinanceWSReqRespApiClient extends AbstractBinanceWSApiClient {
+
+    /**
+     * 基础的api
+     */
+    private final BinanceWSBaseApi baseApi;
+
+    /**
+     * 行情相关的api
+     */
+    private final BinanceWSMarketApi marketApi;
+
+    /**
+     * 交易相关api
+     */
+    private final BinanceWSTradeApi tradeApi;
+
+    /**
+     * 现货账户api
+     */
+    private final BinanceWSSpotAccountApi spotAccountApi;
+
+    /**
+     * 合约账户api
+     */
+    private final BinanceWSContractAccountApi contractAccountApi;
+
+    public BinanceWSReqRespApiClient(
+            String url,
+            IpWeightSupporter ipWeightSupporter
+    ) throws URISyntaxException {
+        super(BinanceWSClientType.REQUEST_RESPONSE, url, ipWeightSupporter, new BinanceWSReqRespApiClientHandler());
+        baseApi = new BinanceWSBaseApi(this);
+        marketApi = new BinanceWSMarketApi(this);
+        tradeApi = new BinanceWSTradeApi(this);
+        spotAccountApi = new BinanceWSSpotAccountApi(this);
+        contractAccountApi = new BinanceWSContractAccountApi(this);
+    }
+}
+
+
+package com.helei.binanceapi;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.base.AbstractBinanceWSApiClientHandler;
+import lombok.extern.slf4j.Slf4j;
+
+
+@Slf4j
+public class BinanceWSReqRespApiClientHandler extends AbstractBinanceWSApiClientHandler {
+
+    @Override
+    protected void handleStreamMessage(String streamName, JSONObject content) {
+        log.warn("非流式客户端,收到了错误的消息, streamName[{}]-content[{}]", streamName, content);
+    }
+}
+
+package com.helei.cexapi.client;
+
+import cn.hutool.core.util.StrUtil;
+import com.helei.binanceapi.BinanceWSAccountEventStreamClient;
+import com.helei.binanceapi.BinanceWSMarketStreamClient;
+import com.helei.binanceapi.BinanceWSReqRespApiClient;
+import com.helei.binanceapi.base.AbstractBinanceWSApiClient;
+import com.helei.binanceapi.config.BinanceApiConfig;
+import com.helei.binanceapi.constants.BinanceWSClientType;
+import com.helei.cexapi.manager.BinanceBaseWSClientManager;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import lombok.extern.slf4j.Slf4j;
+
+import java.net.InetSocketAddress;
+import java.net.URISyntaxException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+@Slf4j
+public class BinanceWSEnvClient {
+
+    private final static String DEFAULT_MARK = "default";
+
+    private final RunEnv runEnv;
+
+    private final TradeType tradeType;
+
+    private final BinanceApiConfig.BinanceTypedUrl urlSet;
+
+    private final ConcurrentMap<BinanceWSClientType, ConcurrentHashMap<String, AbstractBinanceWSApiClient>> typedApiClient;
+
+    private final BinanceBaseWSClientManager clientManager;
+
+    private final InetSocketAddress proxy;
+
+    public BinanceWSEnvClient(RunEnv runEnv, TradeType tradeType, BinanceBaseWSClientManager clientManager) {
+        this.runEnv = runEnv;
+        this.tradeType = tradeType;
+        this.clientManager = clientManager;
+
+        BinanceApiConfig apiConfig = BinanceApiConfig.INSTANCE;
+        this.urlSet = apiConfig.getEnvUrlSet(runEnv, tradeType);
+        this.proxy = apiConfig.getProxy();
+
+        this.typedApiClient = new ConcurrentHashMap<>();
+    }
+
+    /**
+     * 获取或创建clientType类型的客户端
+     *
+     * @param clientType 客户端类型
+     * @param mark       客户端标志，根据这个标志可以创建出多个同类型的客户端
+     * @return 客户端
+     */
+    public AbstractBinanceWSApiClient getOrCreateTypedClient(BinanceWSClientType clientType, String mark) {
+        if (StrUtil.isBlank(mark)) mark = DEFAULT_MARK;
+
+        ConcurrentHashMap<String, AbstractBinanceWSApiClient> markMap = typedApiClient.compute(clientType, (k, v) -> {
+            if (v == null) {
+                v = new ConcurrentHashMap<>();
+            }
+            return v;
+        });
+
+        String finalMark = mark;
+
+        AbstractBinanceWSApiClient apiClient = markMap.compute(mark, (k, v) -> {
+            if (v == null) {
+                try {
+                    v = createClientByType(clientType, finalMark);
+                } catch (URISyntaxException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            return v;
+        });
+
+        log.info("runEnv[{}]-tradeType[{}]获取到客户端[{}]-mark[{}]", runEnv, tradeType, clientType, mark);
+
+        return apiClient;
+    }
+
+    /**
+     * 根据类型创建客户端
+     *
+     * @param clientType 客户端类型
+     * @param mark       标记
+     * @return 客户端
+     * @throws URISyntaxException 异常
+     */
+    private AbstractBinanceWSApiClient createClientByType(BinanceWSClientType clientType, String mark) throws URISyntaxException {
+        AbstractBinanceWSApiClient client = switch (clientType) {
+            case REQUEST_RESPONSE -> createReqRespApiClient();
+            case MARKET_STREAM -> createMarketStreamApiClient();
+            case ACCOUNT_STREAM -> createAccountStreamClient();
+        };
+
+
+        client.setName(mark);
+        client.setProxy(proxy);
+
+        return client;
+    }
+
+    /**
+     * 创建账户事件流客户端
+     *
+     * @return BinanceWSAccountEventStreamClient
+     */
+    private BinanceWSAccountEventStreamClient createAccountStreamClient() throws URISyntaxException {
+        String url = urlSet.getWs_account_info_stream_url();
+
+        return new BinanceWSAccountEventStreamClient(url, clientManager.getIpWeightSupporter());
+    }
+
+    /**
+     * 创建市场流数据客户端
+     *
+     * @return BinanceWSMarketStreamClient
+     * @throws URISyntaxException URISyntaxException
+     */
+    private BinanceWSMarketStreamClient createMarketStreamApiClient() throws URISyntaxException {
+        String url = urlSet.getWs_market_stream_url();
+        return new BinanceWSMarketStreamClient(url, clientManager.getIpWeightSupporter());
+    }
+
+    /**
+     * 创建请求、响应客户端
+     *
+     * @return BinanceWSReqRespApiClient
+     * @throws URISyntaxException URISyntaxException
+     */
+    private BinanceWSReqRespApiClient createReqRespApiClient() throws URISyntaxException {
+        String url = urlSet.getWs_market_url();
+        return new BinanceWSReqRespApiClient(url, clientManager.getIpWeightSupporter());
+    }
+}
+
+
+package com.helei.cexapi.manager;
+
+
+import com.helei.binanceapi.base.AbstractBinanceWSApiClient;
+import com.helei.binanceapi.constants.BinanceWSClientType;
+import com.helei.binanceapi.supporter.IpWeightSupporter;
+import com.helei.cexapi.client.BinanceWSEnvClient;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.base.KeyValue;
+import com.helei.dto.config.RunTypeConfig;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+
+
+@Slf4j
+@Getter
+public class BinanceBaseWSClientManager {
+
+    /**
+     * 运行设置a
+     */
+    private final RunTypeConfig runType;
+
+    /**
+     * 不同环境的客户端
+     */
+    private final ConcurrentMap<String, BinanceWSEnvClient> envClientMap;
+
+
+    private final IpWeightSupporter ipWeightSupporter = new IpWeightSupporter("localIp");
+
+    /**
+     * 执行的线程池
+     */
+    private final ExecutorService executor;
+
+    public BinanceBaseWSClientManager(
+            RunTypeConfig runType,
+            ExecutorService executor
+    ) {
+
+        this.runType = runType;
+        this.executor = executor;
+        this.envClientMap = new ConcurrentHashMap<>();
+
+        for (KeyValue<RunEnv, TradeType> keyValue : runType.getRunTypeList()) {
+            RunEnv env = keyValue.getKey();
+            TradeType tradeType = keyValue.getValue();
+            envClientMap.put(buildKey(env, tradeType), new BinanceWSEnvClient(env, tradeType, this));
+        }
+    }
+
+
+    public CompletableFuture<AbstractBinanceWSApiClient> getEnvTypedApiClient(
+            RunEnv runEnv,
+            TradeType tradeType,
+            BinanceWSClientType clientType,
+            String mark
+    ) {
+
+        return CompletableFuture.supplyAsync(() -> {
+            // 1 参数校验
+            String key = buildKey(runEnv, tradeType);
+
+            BinanceWSEnvClient binanceWSEnvClient = envClientMap.get(key);
+
+            if (binanceWSEnvClient == null) {
+                log.error("runEnv[{}]-tradeType[{}] 并未在环境注册, 不能创建此类api客户端, 请检查设置", runEnv, tradeType);
+                return null;
+            }
+
+            // 2 获取或创建客户端
+            AbstractBinanceWSApiClient client = null;
+            try {
+                client = binanceWSEnvClient.getOrCreateTypedClient(clientType, mark);
+            } catch (Exception e) {
+                throw new RuntimeException(String.format("创建runEnv[%s]-tradeType[%s]-type[%s]客户端发生错误", runEnv, tradeType, clientType.name()), e);
+            }
+
+            try {
+                // 3 启动客户端
+                client.connect().get();
+            } catch (Exception e) {
+                throw new RuntimeException(String.format("启动runEnv[%s]-tradeType[%s]-type[%s]客户端发生错误", runEnv, tradeType, clientType.name()), e);
+            }
+
+            return client;
+        }, executor);
+    }
+
+
+    /**
+     * 构建key
+     *
+     * @param runEnv    运行环境
+     * @param tradeType 交易类型
+     * @return key
+     */
+    private static String buildKey(RunEnv runEnv, TradeType tradeType) {
+        return runEnv.name() + "-" + tradeType.name();
+    }
+}
+
+
+
+
+package com.helei.cexapi;
+
+
+import com.helei.binanceapi.api.rest.BinanceUContractMarketRestApi;
+import com.helei.binanceapi.supporter.IpWeightSupporter;
+import lombok.extern.slf4j.Slf4j;
+
+import javax.net.ssl.SSLException;
+import java.net.InetSocketAddress;
+import java.net.URISyntaxException;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+
+@Slf4j
+public class CEXApiFactory {
+
+    private static final String CLIENT_CONNECT_KEY_SPACER = "<@>?";
+    //TODO 配置化
+//    private static InetSocketAddress proxy = new InetSocketAddress("127.0.0.1", 7897);
+    private static InetSocketAddress proxy = new InetSocketAddress("127.0.0.1", 7890);
+//    private static InetSocketAddress proxy = null;
+
+    private static IpWeightSupporter ipWeightSupporter = new IpWeightSupporter("localIp");
+
+    private static final ConcurrentMap<String, BinanceWSApiClient> CLIENT_CONNECTION_MAP = new ConcurrentHashMap<>();
+
+    public static BinanceWSApiClient binanceApiClient(
+            String url,
+            String name
+    ) {
+        String clientKey = buildClientConnectKey(url, name);
+
+        BinanceWSApiClient binanceWSApiClient = CLIENT_CONNECTION_MAP.get(clientKey);
+        if (binanceWSApiClient != null) {
+            log.info("已存在链接客户端 [{}] - [{}]", name, url);
+            return binanceWSApiClient;
+        }
+
+        BinanceWSApiClient client;
+        synchronized (CEXApiFactory.class) {
+            try {
+                log.info("创建链接客户端 [{}] - [{}]", name, url);
+
+                client = binanceApiClient(url);
+                client.setName(name);
+                CLIENT_CONNECTION_MAP.put(clientKey, client);
+
+                log.info("创建链接客户端 [{}] - [{}] 成功", name, url);
+            } catch (Exception e) {
+                log.error("创建链接客户端 [{}] - [{}] 失败", name, url, e);
+                throw new RuntimeException("创建连接客户端失败", e);
+            }
+        }
+        return client;
+    }
+
+    public static BinanceWSApiClient binanceApiClient(
+            String url
+    ) throws URISyntaxException, SSLException {
+
+        BinanceWSApiClientHandler handler = new BinanceWSApiClientHandler();
+
+        BinanceWSApiClient client = new BinanceWSApiClient(
+                url,
+                ipWeightSupporter,
+                handler
+        );
+        client.setProxy(proxy);
+        client.setName("binance-api-client-" + UUID.randomUUID().toString().substring(0, 8));
+
+        return client;
+    }
+
+    public static BinanceUContractMarketRestApi binanceUContractMarketRestApi(String baseUrl,
+                                                                              ExecutorService executor) {
+        return new BinanceUContractMarketRestApi(executor, baseUrl, ipWeightSupporter);
+    }
+
+
+    /**
+     * 创建客户端链接的key，保证同一个名和url只有一个链接
+     *
+     * @param url  url
+     * @param name name
+     * @return String
+     */
+    private static String buildClientConnectKey(String url, String name) {
+        return name + CLIENT_CONNECT_KEY_SPACER + url;
+    }
+}
+
+
+package com.helei.cexapi;
+
+import com.helei.binanceapi.BinanceWSApiClient;
+import com.helei.constants.WebSocketStreamParamKey;
+import com.helei.binanceapi.constants.WebSocketStreamType;
+import com.helei.binanceapi.dto.StreamSubscribeEntity;
+import com.helei.binanceapi.constants.BinanceApiUrl;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+
+import java.util.concurrent.TimeUnit;
+
+
+class BinanceWSApiClientTest {
+    private static BinanceWSApiClient binanceWSApiClient = null;
+
+    @BeforeAll
+    public static void before() {
+        try {
+            binanceWSApiClient = CEXApiFactory.binanceApiClient(BinanceApiUrl.WS_SPOT_STREAM_URL);
+            binanceWSApiClient.connect().get();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Test
+    public void testAGG_TRADE() throws InterruptedException {
+        binanceWSApiClient
+                .getStreamApi()
+                .builder()
+                .symbol("btcusdt")
+                .addSubscribeEntity(
+                        WebSocketStreamType.AGG_TRADE,
+                        (streamName, params, result) -> {
+                            System.out.println(streamName);
+                        }
+                )
+                .subscribe();
+
+        TimeUnit.SECONDS.sleep(100);
+    }
+
+    @Test
+    public void testKLine() throws InterruptedException {
+        binanceWSApiClient
+                .getStreamApi()
+                .builder()
+                .symbol("btcusdt")
+                .addSubscribeEntity(
+                        StreamSubscribeEntity
+                                .builder()
+                                .symbol("btcusdt")
+                                .subscribeType(WebSocketStreamType.KLINE)
+                                .invocationHandler((streamName, params, result) -> {
+                                    System.out.println("<<<<<<======================");
+                                    System.out.println(streamName);
+                                    System.out.println(result);
+                                    System.out.println("======================>>>>>>");
+                                })
+                                .build()
+                                .addParam(WebSocketStreamParamKey.KLINE_INTERVAL, "1m")
+                                .addParam(WebSocketStreamParamKey.SECRET_KEY, "123")
+                                .addParam(WebSocketStreamParamKey.API_KEY, "123")
+                )
+                .subscribe();
+
+        TimeUnit.SECONDS.sleep(100);
+    }
+}
+
+
+
+
+package com.helei.reaktimedatacenter.manager;
+
+import com.helei.binanceapi.BinanceWSAccountStreamClient;
+import com.helei.binanceapi.BinanceWSApiClient;
+import com.helei.binanceapi.config.BinanceApiConfig;
+import com.helei.binanceapi.dto.accountevent.AccountEvent;
+import com.helei.cexapi.CEXApiFactory;
+import com.helei.cexapi.client.BinanceAccountMergeClient;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.ASKey;
+import com.helei.dto.base.KeyValue;
+import com.helei.dto.account.UserAccountInfo;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.net.InetSocketAddress;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiConsumer;
+
+
+@Slf4j
+@Component
+public class BinanceAccountClientManager implements InitializingBean {
+
+    private final static long REFRESH_TASK_SLEEP_TIME = 60000;
+
+    private final static long REFRESH_INTERVAL = 1000 * 60 * 10;
+
+    private final static int REFRESH_CONCURRENT_LIMIT = 10;
+
+    private static final int ACCOUNT_STREAM_START_TIMES_LIMIT = 1;
+
+
+    private final ExecutorService executor;
+
+
+    private final static ConcurrentMap<String, BinanceAccountMergeClient> mergeClientMap = new ConcurrentHashMap<>();
+
+
+    private final static ConcurrentMap<Long, KeyValue<BinanceWSAccountStreamClient, Long>> accountIdMapClientAndExpireMap = new ConcurrentHashMap<>();
+
+
+    private final BinanceApiConfig binanceApiConfig = BinanceApiConfig.INSTANCE;
+
+
+    private final AtomicBoolean streamRefreshTaskState = new AtomicBoolean(true);
+
+
+    @Autowired
+    public BinanceAccountClientManager(ExecutorServiceManager executorServiceManager) {
+        this.executor = executorServiceManager.getAccountRTDataExecutor();
+    }
+
+    /**
+     * 创建 BinanceWSAccountStreamClient，用来获取账户事件推送流
+     *
+     * @param accountInfo accountInfo
+     * @return BinanceWSAccountStreamClient
+     * @throws Exception Exception
+     */
+    public BinanceWSAccountStreamClient getAccountEventStreamClient(final UserAccountInfo accountInfo, BiConsumer<UserAccountInfo, AccountEvent> whenReceiveAccountEvent) throws Exception {
+
+        RunEnv runEnv = accountInfo.getRunEnv();
+        TradeType tradeType = accountInfo.getTradeType();
+        ASKey asKey = accountInfo.getAsKey();
+
+
+        BinanceApiConfig.BinanceTypedUrl envUrlSet = binanceApiConfig.getEnvUrlSet(runEnv, tradeType);
+
+
+        // 1. 创建用于获取 listenKey 的客户端
+        BinanceWSApiClient requestClient = CEXApiFactory.binanceApiClient(envUrlSet.getWs_market_url(), "账户事件请求链接");
+
+        // 2, 获取 merge 客户端
+        String key = generateMergeClientKey(runEnv, tradeType);
+        String streamUrl = envUrlSet.getWs_account_info_stream_url();
+
+        BinanceAccountMergeClient accountMergeClient = mergeClientMap.compute(key, (k, v) -> {
+            if (v == null) {
+                try {
+                    v = new BinanceAccountMergeClient(requestClient, streamUrl, executor);
+
+                    InetSocketAddress proxy = binanceApiConfig.getProxy();
+                    if (proxy != null) {
+                        v.setProxy(proxy);
+                    }
+                } catch (Exception e) {
+                    log.error("创建BinanceAccountMergeClient发生错误, url[{}}", streamUrl, e);
+                    throw new RuntimeException(e);
+                }
+            }
+
+            return v;
+        });
+
+
+        // 3. 开始根据 merge 客户端，获取该账户的推送流链接
+        KeyValue<BinanceWSAccountStreamClient, Long> clientLongKeyValue = accountIdMapClientAndExpireMap.compute(accountInfo.getId(), (k, v) -> {
+            if (v == null) {
+                try {
+                    BinanceWSAccountStreamClient binanceWSAccountStreamClient = accountMergeClient.getAccountStream(asKey, accountEvent -> whenReceiveAccountEvent.accept(accountInfo, accountEvent));
+
+                    //刷新时间ddl设置为特殊值0代表没有启动
+                    v = new KeyValue<>(binanceWSAccountStreamClient, 0L);
+                } catch (Exception e) {
+                    throw new RuntimeException("创建币按账户推送流失", e);
+                }
+            }
+
+            return v;
+        });
+
+        return clientLongKeyValue.getKey();
+    }
+
+
+    /**
+     * 根据accountId删除accountIdMapClientAndExpireMap里缓存的client
+     *
+     * @param accountId accountId
+     */
+    public void removeAccountStreamClient(long accountId) {
+        KeyValue<BinanceWSAccountStreamClient, Long> remove = accountIdMapClientAndExpireMap.remove(accountId);
+        if (remove != null) {
+            log.warn("已移除AccountStreamClient [{}]", remove.getKey().getName());
+        }
+    }
+
+    /**
+     * 开始账户事件流，通过 binanceWSAccountStreamClient 进行获取
+     * <p>带重试次数，未达到重试限制之前，都会一直重试</p>
+     *
+     * @param accountId accountId
+     */
+    public boolean startAccountEventStream(long accountId) {
+        KeyValue<BinanceWSAccountStreamClient, Long> pair = accountIdMapClientAndExpireMap.get(accountId);
+
+        if (pair == null) return false;
+
+        return startAccountEventStream(accountId, pair.getKey());
+    }
+
+
+    /**
+     * 开始账户事件流，通过 binanceWSAccountStreamClient 进行获取
+     * <p>带重试次数，未达到重试限制之前，都会一直重试</p>
+     *
+     * @param accountId                    accountId
+     * @param binanceWSAccountStreamClient binanceWSAccountStreamClient
+     */
+    public boolean startAccountEventStream(long accountId,
+                                           BinanceWSAccountStreamClient binanceWSAccountStreamClient) {
+
+        for (int i = 0; i < ACCOUNT_STREAM_START_TIMES_LIMIT; i++) {
+            try {
+                Boolean success = binanceWSAccountStreamClient.startAccountInfoStream().get();
+
+                if (success) {
+
+                    //设置刷新时间
+                    accountIdMapClientAndExpireMap.compute(accountId, (k, v) -> {
+                        if (v == null)
+                            v = new KeyValue<>(binanceWSAccountStreamClient, System.currentTimeMillis() + REFRESH_INTERVAL);
+                        return v;
+                    });
+
+                    return true;
+                } else {
+                    log.error("开启账户事件流失败[{}/{}], accountId[{}]", i, ACCOUNT_STREAM_START_TIMES_LIMIT, accountId);
+                }
+            } catch (InterruptedException | ExecutionException e) {
+                log.error("开启账户事件流发生错误[{}/{}], accountId[{}]", i, ACCOUNT_STREAM_START_TIMES_LIMIT, accountId, e);
+            }
+
+            log.warn("开始账户事件流重试 [{}/{}], accountId[{}]", i, ACCOUNT_STREAM_START_TIMES_LIMIT, accountId);
+
+        }
+
+        log.error("accountId[{}] 重试次数[{}]超过限制[{}],", accountId, ACCOUNT_STREAM_START_TIMES_LIMIT, ACCOUNT_STREAM_START_TIMES_LIMIT);
+        return false;
+    }
+
+
+    /**
+     * 定期刷新账户流的ListenKey
+     */
+    private void refreshAccountStreamListenKey() {
+        while (streamRefreshTaskState.get()) {
+            long startTime = System.currentTimeMillis();
+            Semaphore semaphore = new Semaphore(REFRESH_CONCURRENT_LIMIT);
+            try {
+
+
+                // 1. 去除失效的
+                List<Long> expireIdList = accountIdMapClientAndExpireMap.entrySet().stream().filter(e -> e.getValue().getValue() == -1L).map(Map.Entry::getKey).toList();
+
+                if (!expireIdList.isEmpty()) {
+                    log.warn("去除失效的客户端链接 accountIds [{}]", expireIdList);
+                    expireIdList.forEach(accountIdMapClientAndExpireMap::remove);
+                }
+
+                // 2.尝试刷新listenKey
+                for (Map.Entry<Long, KeyValue<BinanceWSAccountStreamClient, Long>> entry : accountIdMapClientAndExpireMap.entrySet()) {
+                    Long accountId = entry.getKey();
+                    KeyValue<BinanceWSAccountStreamClient, Long> keyValue = entry.getValue();
+                    BinanceWSAccountStreamClient client = keyValue.getKey();
+                    Long expireTime = keyValue.getValue();
+
+                    //没启动的，特殊特殊处理，跳过刷新listenKey
+                    if (expireTime == 0L) continue;
+
+                    semaphore.acquire();
+
+                    if (System.currentTimeMillis() <= expireTime) {
+                        log.info("accountId[{}]的事件流到了刷新时间，开始延长listenKey[{}]", accountId, client.getListenKey());
+
+                        client.lengthenListenKey().whenCompleteAsync((listenKey, e) -> {
+                            try {
+                                if (e != null) {
+                                    log.error("延长accountId[{}]的listenKey[{}]发生错误, 重新启动account链接", accountId, client.getListenKey(), e);
+
+                                    //重新获取listenKey启动
+                                    boolean result = startAccountEventStream(accountId, client);
+                                    if (!result) {
+                                        // TODO 错误日志上传
+                                        log.error("accountId[{}}重新获取推送链接失败", accountId);
+
+                                        //特殊标记，下一次刷新时删掉
+                                        keyValue.setValue(-1L);
+                                    } else {
+                                        log.info("accountId[{}]重新获取推送链接成功, listenKey[{}]", accountId, client.getListenKey());
+                                        keyValue.setValue(System.currentTimeMillis() + REFRESH_INTERVAL);
+                                    }
+                                }
+                            } finally {
+                                semaphore.release();
+
+                            }
+                        }, executor);
+                    }
+                }
+            } catch (InterruptedException e) {
+                log.error("定时刷新账户流ListenKey失败");
+            }
+
+            try {
+                TimeUnit.MILLISECONDS.sleep(REFRESH_TASK_SLEEP_TIME - System.currentTimeMillis() + startTime);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+
+    /**
+     * 初始化，开始刷新链接任务
+     *
+     * @throws Exception Exception
+     */
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        executor.execute(this::refreshAccountStreamListenKey);
+    }
+
+
+    /**
+     * 获取 MergeClientKey
+     *
+     * @param runEnv    runEnv
+     * @param tradeType tradeType
+     * @return key
+     */
+    private String generateMergeClientKey(RunEnv runEnv, TradeType tradeType) {
+        return runEnv + "." + tradeType;
+    }
+
+
+    public void close() {
+        streamRefreshTaskState.set(false);
+        executor.shutdown();
+    }
+}
+
+
+package com.helei.reaktimedatacenter.realtime.impl;
+
+import cn.hutool.core.lang.Pair;
+import com.helei.binanceapi.BinanceWSApiClient;
+import com.helei.binanceapi.api.ws.BinanceWSStreamApi;
+import com.helei.binanceapi.base.SubscribeResultInvocationHandler;
+import com.helei.binanceapi.constants.WebSocketStreamType;
+import com.helei.binanceapi.dto.StreamSubscribeEntity;
+import com.helei.cexapi.CEXApiFactory;
+import com.helei.constants.trade.KLineInterval;
+import com.helei.constants.WebSocketStreamParamKey;
+import com.helei.reaktimedatacenter.realtime.KLineRTDataSyncTask;
+import lombok.extern.slf4j.Slf4j;
+
+import javax.net.ssl.SSLException;
+import java.net.URISyntaxException;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+
+@Slf4j
+public class BinanceKLineRTDataSyncTask extends KLineRTDataSyncTask {
+
+    /**
+     * 流api 获取流实时数据
+     */
+    private final BinanceWSApiClient streamApiClient;
+
+    /**
+     * 订阅的url
+     */
+    private final String url;
+
+
+    /**
+     * 币安k线数据同步任务
+     *
+     * @param listenKLines 监听的k线列表
+     * @param url          url
+     */
+    public BinanceKLineRTDataSyncTask(
+            List<Pair<String, KLineInterval>> listenKLines,
+            String url
+    ) {
+        super(listenKLines);
+        this.url = url;
+        streamApiClient = CEXApiFactory.binanceApiClient(url, "币安k线实时获取任务-" + UUID.randomUUID().toString().substring(0, 8));
+    }
+
+
+    /**
+     * 开始同步
+     *
+     * @param whenReceiveKLineData 当websocket收到消息时的回调，
+     * @param taskExecutor         执行的线程池，回调也会通过这个线程池执行
+     * @return CompletableFuture<Void>
+     */
+    public CompletableFuture<Void> startSync(
+            SubscribeResultInvocationHandler whenReceiveKLineData,
+            ExecutorService taskExecutor
+    ) {
+        return CompletableFuture.runAsync(() -> {
+            CompletableFuture<Void> connect = null;
+            try {
+
+                // 1 连接
+                connect = streamApiClient.connect();
+                connect.get();
+                log.info("连接[{}]成功，开始获取请求实时k线数据", url);
+
+                // 2 构建请求
+                BinanceWSStreamApi.StreamCommandBuilder streamCommandBuilder = streamApiClient.getStreamApi().builder();
+                for (Pair<String, KLineInterval> kLine : listenKLines) {
+                    streamCommandBuilder.addSubscribeEntity(
+                            StreamSubscribeEntity
+                                    .builder()
+                                    .symbol(kLine.getKey().toLowerCase())
+                                    .subscribeType(WebSocketStreamType.KLINE)
+                                    .invocationHandler(whenReceiveKLineData)
+                                    .callbackExecutor(taskExecutor)
+                                    .build()
+                                    .addParam(WebSocketStreamParamKey.KLINE_INTERVAL, kLine.getValue().getDescribe())
+                    );
+                }
+
+                // 3 请求订阅
+                streamCommandBuilder.subscribe();
+
+                log.info("已发送k线获取请求到api [{}] ", url);
+
+            } catch (SSLException | URISyntaxException | ExecutionException | InterruptedException e) {
+                log.error("开始同步k线数据发生错误，连接api[{}]错误", url);
+                throw new RuntimeException(String.format("同步k线数据发生错误，连接api[%s]错误", url), e);
+            }
+        }, taskExecutor);
+    }
+}
+
+
+
+package com.helei.reaktimedatacenter.service.impl.account;
+
+
+import com.helei.binanceapi.dto.accountevent.*;
+import com.helei.dto.trade.BalanceInfo;
+import com.helei.dto.account.AccountBalanceInfo;
+import com.helei.dto.account.AccountPositionInfo;
+import com.helei.dto.account.PositionInfo;
+import com.helei.dto.account.UserAccountInfo;
+import com.helei.reaktimedatacenter.manager.BinanceAccountClientManager;
+import com.helei.reaktimedatacenter.manager.ExecutorServiceManager;
+import com.helei.reaktimedatacenter.mapper.BalanceInfoMapper;
+import com.helei.reaktimedatacenter.mapper.PositionInfoMapper;
+import com.helei.reaktimedatacenter.service.AccountEventResolveService;
+import com.helei.reaktimedatacenter.service.UserService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+
+@Slf4j
+@Service
+public class BinanceAccountEventResolveService implements AccountEventResolveService {
+
+
+    private ExecutorService eventExecutor = null;
+
+    @Autowired
+    private BinanceAccountClientManager binanceAccountClientManager;
+
+    @Autowired
+    private UserService userService;
+
+
+    @Autowired
+    public BinanceAccountEventResolveService(ExecutorServiceManager executorServiceManager) {
+        this.eventExecutor = executorServiceManager.getAccountEventExecutor();
+    }
+
+
+    @Override
+    public void resolveAccountEvent(UserAccountInfo accountInfo, AccountEvent accountEvent) {
+        CompletableFuture<Void> future = null;
+
+        switch (accountEvent) {
+            case ListenKeyExpireEvent listenKeyExpireEvent ->
+                    future = resolveListenKeyExpireEvent(accountInfo, listenKeyExpireEvent);
+            case BailNeedEvent bailNeedEvent -> future = resolveBailNeedEvent(accountInfo, bailNeedEvent);
+            case BalancePositionUpdateEvent balancePositionUpdateEvent ->
+                    future = resolveBalancePositionUpdateEvent(accountInfo, balancePositionUpdateEvent);
+            case OrderTradeUpdateLiteEvent orderTradeUpdateEvent ->
+                    future = resolveOrderTradeUpdateEvent(orderTradeUpdateEvent);
+            case AccountConfigUpdateEvent accountConfigUpdateEvent ->
+                    future = resolveAccountConfigUpdateEvent(accountConfigUpdateEvent);
+            case StrategyUpdateEvent strategyUpdateEvent -> future = resolveStrategyUpdateEvent(strategyUpdateEvent);
+            case GridUpdateEvent gridUpdateEvent -> future = resolveGridUpdateEvent(gridUpdateEvent);
+            case ConditionalOrderTriggerRejectEvent conditionalOrderTriggerRejectEvent ->
+                    future = resolveConditionalOrderTriggerRejectEvent(conditionalOrderTriggerRejectEvent);
+            case null, default ->
+                    log.warn("userId[{}]-accountId[{}]-未知事件 [{}]", accountInfo.getUserId(), accountInfo.getId(), accountEvent);
+        }
+
+
+        if (future == null) return;
+
+
+        future.whenCompleteAsync((unused, throwable) -> {
+            if (throwable != null) {
+                log.error("处理accountId[{}]事件[{}}发生错误", accountInfo.getId(), accountEvent, throwable);
+            }
+        }, eventExecutor);
+    }
+
+    /**
+     * 条件订单(TP/SL)触发后拒绝更新推送
+     *
+     * @param conditionalOrderTriggerRejectEvent conditionalOrderTriggerRejectEvent
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Void> resolveConditionalOrderTriggerRejectEvent(ConditionalOrderTriggerRejectEvent conditionalOrderTriggerRejectEvent) {
+        return null;
+    }
+
+
+    /**
+     * 网格更新推送
+     *
+     * @param gridUpdateEvent gridUpdateEvent
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Void> resolveGridUpdateEvent(GridUpdateEvent gridUpdateEvent) {
+        return null;
+    }
+
+    /**
+     * 策略交易更新推送
+     *
+     * @param strategyUpdateEvent strategyUpdateEvent
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Void> resolveStrategyUpdateEvent(StrategyUpdateEvent strategyUpdateEvent) {
+        return null;
+    }
+
+
+    /**
+     * 杠杆倍数等账户配置 更新推送
+     *
+     * @param accountConfigUpdateEvent accountConfigUpdateEvent
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Void> resolveAccountConfigUpdateEvent(AccountConfigUpdateEvent accountConfigUpdateEvent) {
+        return CompletableFuture.runAsync(() -> {
+            //TODO
+
+        }, eventExecutor);
+    }
+
+    /**
+     * 精简交易推送
+     *
+     * @param orderTradeUpdateLiteEvent orderTradeUpdateLiteEvent
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Void> resolveOrderTradeUpdateLiteEvent(OrderTradeUpdateLiteEvent orderTradeUpdateLiteEvent) {
+        return CompletableFuture.runAsync(() -> {
+            //TODO
+
+        }, eventExecutor);
+    }
+
+    /**
+     * 订单交易更新推送
+     *
+     * @param orderTradeUpdateEvent orderTradeUpdateEvent
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Void> resolveOrderTradeUpdateEvent(OrderTradeUpdateLiteEvent orderTradeUpdateEvent) {
+        return CompletableFuture.runAsync(() -> {
+            //TODO
+
+        }, eventExecutor);
+    }
+
+
+    /**
+     * 处理账户仓位更新事件
+     *
+     * @param accountInfo                accountInfo
+     * @param balancePositionUpdateEvent balancePositionUpdateEvent
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Void> resolveBalancePositionUpdateEvent(UserAccountInfo accountInfo, BalancePositionUpdateEvent balancePositionUpdateEvent) {
+
+        return CompletableFuture.runAsync(() -> {
+            // 1.更新仓位信息
+            AccountPositionInfo accountPositionInfo = accountInfo.getAccountPositionInfo();
+            accountPositionInfo.lock();
+            try {
+                List<BalancePositionUpdateEvent.PositionChangeInfo> positionChangeInfos = balancePositionUpdateEvent.getPositionChangeInfos();
+                List<PositionInfo> positionInfos = PositionInfoMapper.INSTANCE.convertFromPositionChangeInfoList(positionChangeInfos);
+
+                accountPositionInfo.updatePositionInfos(positionInfos);
+                accountPositionInfo.setUpdateTime(System.currentTimeMillis());
+            } finally {
+                accountPositionInfo.unlock();
+            }
+
+
+            // 2.更新资金信息
+            AccountBalanceInfo accountBalanceInfo = accountInfo.getAccountBalanceInfo();
+            accountBalanceInfo.lock();
+            try {
+                List<BalancePositionUpdateEvent.BalanceChangeInfo> balanceChangeInfos = balancePositionUpdateEvent.getBalanceChangeInfos();
+                List<BalanceInfo> balanceInfos = BalanceInfoMapper.INSTANCE.convertFromBalanceChangeInfoList(balanceChangeInfos);
+
+                accountBalanceInfo.updateBalanceInfos(balanceInfos);
+                accountPositionInfo.setUpdateTime(System.currentTimeMillis());
+            } finally {
+                accountBalanceInfo.unlock();
+            }
+
+            // 3.更新数据库和redis中的信息
+            userService.updateUserAccountInfo(accountInfo);
+
+            log.info("accountId[{}]信息更新成功，[{}]", accountInfo.getId(), accountInfo);
+        }, eventExecutor);
+    }
+
+
+    /**
+     * 处理追加保证金事件
+     *
+     * @param accountInfo   accountInfo
+     * @param bailNeedEvent bailNeedEvent
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Void> resolveBailNeedEvent(UserAccountInfo accountInfo, BailNeedEvent bailNeedEvent) {
+        return CompletableFuture.runAsync(() -> {
+            log.warn("账户userId[{}]-accountId[{}]追加保证金事件, 详情:[{}]", accountInfo.getUserId(), accountInfo.getId(), bailNeedEvent);
+
+        }, eventExecutor);
+    }
+
+
+    /**
+     * listenKey过期了，要重新获取
+     *
+     * @param listenKeyExpireEvent listenKeyExpireEvent
+     * @return CompletableFuture<Void>
+     */
+    public CompletableFuture<Void> resolveListenKeyExpireEvent(UserAccountInfo userAccountInfo, ListenKeyExpireEvent listenKeyExpireEvent) {
+        long accountId = userAccountInfo.getId();
+        log.info("收到accountId[{}]的账户listenKey过期事件，尝试重新连接", accountId);
+
+        return CompletableFuture.runAsync(() -> {
+            boolean result = binanceAccountClientManager.startAccountEventStream(accountId);
+            if (result) {
+                log.info("accountId[{}]的账户重新获取listenKey成功", accountId);
+            } else {
+                // TODO 日志上传
+                log.error("accountId[{}]的账户重新获取listenKey失败", accountId);
+            }
+        }, eventExecutor);
+    }
+}
+
+
+
+package com.helei.reaktimedatacenter.service.impl.account;
+
+import com.helei.binanceapi.BinanceWSAccountStreamClient;
+import com.helei.binanceapi.dto.accountevent.AccountEvent;
 import com.helei.constants.RunEnv;
 import com.helei.constants.trade.TradeType;
 import com.helei.dto.account.UserAccountInfo;
-import com.helei.tradeapplication.dto.GroupOrder;
-import com.helei.dto.trade.TradeSignal;
-import com.helei.interfaces.CompleteInvocation;
-import com.helei.tradeapplication.manager.ExecutorServiceManager;
-import com.helei.tradeapplication.service.OrderService;
-import com.helei.tradeapplication.service.TradeSignalService;
-import com.helei.tradeapplication.service.UserAccountInfoService;
+import com.helei.dto.account.UserInfo;
+import com.helei.reaktimedatacenter.manager.BinanceAccountClientManager;
+import com.helei.reaktimedatacenter.service.AccountEventResolveService;
+import com.helei.reaktimedatacenter.service.AccountEventStreamService;
+import com.helei.reaktimedatacenter.service.UserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -19,1312 +1478,854 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-
+import java.util.concurrent.Executors;
 
 /**
- * 处理交易信号
+ * 币安账户事件流服务
  */
 @Slf4j
 @Service
-public class KafkaTradeSignalService implements TradeSignalService {
+public class BinanceAccountEventStreamService implements AccountEventStreamService {
 
-    private final ExecutorService executor;
+    private static final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+
+    private static final int ACCOUNT_STREAM_START_TIMES_LIMIT = 3;
+
 
     @Autowired
-    private UserAccountInfoService userAccountInfoService;
+    private UserService userService;
 
     @Autowired
-    private OrderService orderService;
+    private AccountEventResolveService accountEventResolveService;
 
 
-    public KafkaTradeSignalService(ExecutorServiceManager executorServiceManager) {
-        this.executor = executorServiceManager.getTradeExecutor();
+    @Autowired
+    private BinanceAccountClientManager binanceAccountClientManager;
+
+
+    /**
+     * 开启所有用户事件流
+     */
+    @Override
+    public void startAllUserInfoEventStream() {
+        log.info("开始获取所有用户的账户事件流");
+
+        List<CompletableFuture<Void>> list = userService.queryAll().stream()
+                .map(userInfo -> CompletableFuture.runAsync(() -> startUserInfoEventStream(userInfo), executor)).toList();
+
+        CompletableFuture.allOf(list.toArray(new CompletableFuture[0]))
+                .whenCompleteAsync((unused, throwable) -> {
+                    if (throwable != null) {
+                        log.error("获取账户事件流发送错误", throwable);
+                    } else {
+                        log.info("所有用户账户事件流获取完毕，共[{}]个用户", list.size());
+                    }
+                }, executor);
     }
 
 
     /**
-     * 处理交易信号
+     * 开启用户信息事件，会开启用户名下所有账户的事件流
      *
-     * @param runEnv    运行环境
-     * @param tradeType 交易类型
-     * @param signal    信号
-     * @return true 无论处理结果如何都忽略到改信号
+     * @param userInfo userInfo
      */
-    public boolean resolveTradeSignal(RunEnv runEnv, TradeType tradeType, TradeSignal signal) {
+    @Override
+    public void startUserInfoEventStream(UserInfo userInfo) {
+        log.info("开始获取用户id[{}]-name[{}]拥有账户事件流", userInfo.getId(), userInfo.getUsername());
 
-        try {
-            userAccountInfoService
-                    // 1 查询环境下的账户
-                    .queryEnvAccountInfo(runEnv, tradeType)
-                    // 2 生成订单并交易
-                    .thenApplyAsync(accounts -> makeOrdersAndSend2Trade(runEnv, tradeType, signal, accounts), executor);
-        } catch (Exception e) {
-            log.error("处理信号[{}]时发生错误", signal, e);
+        List<UserAccountInfo> accountInfos = userInfo.getAccountInfos();
+
+        if (accountInfos == null || accountInfos.isEmpty()) {
+            log.warn("用户[{}]-id[{}]没有注册交易账户事件", userInfo.getUsername(), userInfo.getId());
+            return;
         }
 
-        return true;
-    }
-
-
-    /**
-     * 构建订单，符合条件的提交到交易.
-     * <p>并不会真正把订单提交到交易所，而是写入数据库后，再写入kafka的topic里</p>
-     *
-     * @param runEnv       runEnv
-     * @param tradeType    tradeType
-     * @param signal       signal
-     * @param accountInfos accountInfos
-     * @return List<BaseOrder>
-     */
-    private List<GroupOrder> makeOrdersAndSend2Trade(RunEnv runEnv, TradeType tradeType, TradeSignal signal, List<UserAccountInfo> accountInfos) {
-
-        List<CompletableFuture<GroupOrder>> futures = new ArrayList<>();
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
 
         for (UserAccountInfo accountInfo : accountInfos) {
-
-            //Step 1 过滤掉账户设置不接受此信号的
-            if (filterAccount(signal, accountInfo)) {
-                log.warn("accountId[{}]不能执行信号 [{}]", accountInfo.getId(), signal);
-            }
-
-            CompletableFuture<GroupOrder> future = userAccountInfoService
-                    //Step 2 查询实时的账户数据
-                    .queryAccountRTInfo(runEnv, tradeType, accountInfo.getId())
-                    //Step 3 生产订单
-                    .thenApplyAsync(accountRTData -> {
-                        final GroupOrder[] groupOrder = {null};
-
-                        try {
-                            CountDownLatch latch = new CountDownLatch(1);
-
-                            orderService.makeOrder(accountInfo, accountRTData, signal, new CompleteInvocation<>() {
-                                @Override
-                                public void success(GroupOrder order) {
-                                    groupOrder[0] = order;
-                                    log.info("创建订单[{}]成功", order);
-                                }
-
-                                @Override
-                                public void fail(GroupOrder order, String errorMsg) {
-                                    groupOrder[0] = order;
-                                    log.info("创建订单失败[{}],错误原因[{}]", order, errorMsg);
-                                }
-
-                                @Override
-                                public void finish() {
-                                    latch.countDown();
-                                }
-                            });
-
-                            //等待订单创建完成
-                            latch.await();
-
-                        } catch (Exception e) {
-                            log.error("为accountId[{}]创建订单时出错, signal[{}]", accountInfo.getId(), signal, e);
-                        }
-                        return groupOrder[0];
-                    })
-                    .exceptionallyAsync(throwable -> {
-                        if (throwable != null) {
-                            log.error("创建订单时发生错误", throwable);
-                        }
-                        return null;
-                    });
-
+            CompletableFuture<Void> future = buildAndStartAccountEventStream(accountInfo);
             futures.add(future);
         }
 
-
-        //等待执行完成
-        List<GroupOrder> groupOrders = new ArrayList<>();
-        for (CompletableFuture<GroupOrder> future : futures) {
-            try {
-                GroupOrder order = future.get();
-                groupOrders.add(order);
-            } catch (ExecutionException | InterruptedException e) {
-                log.error("获取订单结果处理订单结果出错", e);
-                throw new RuntimeException(e);
-            }
+        try {
+            CompletableFuture
+                    .allOf(futures.toArray(new CompletableFuture[0]))
+                    .whenCompleteAsync((unused, throwable) -> {
+                        if (throwable != null) {
+                            log.error("用户id[{}]-name[{}]所有账户事件流开启时发生错误", userInfo.getId(), userInfo.getUsername(), throwable);
+                        } else {
+                            log.info("用户id[{}]-name[{}]所有账户事件流[共{}个]开启成功", userInfo.getId(), userInfo.getUsername(), futures.size());
+                        }
+                    })
+                    .get();
+        } catch (InterruptedException | ExecutionException e) {
+            throw new RuntimeException(e);
         }
-        return groupOrders;
+    }
+
+    /**
+     * 构建并启动账户事件流，
+     *
+     * @param accountInfo accountInfo
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Void> buildAndStartAccountEventStream(UserAccountInfo accountInfo) {
+        long userId = accountInfo.getUserId();
+        long accountId = accountInfo.getId();
+
+        RunEnv runEnv = accountInfo.getRunEnv();
+        TradeType tradeType = accountInfo.getTradeType();
+
+
+        log.info("开始获取账户事件流, userId[{}], accountId[{}], runEvn[{}], tradeType[{}]", userId, accountId, runEnv, tradeType);
+
+        CompletableFuture<Void> future = CompletableFuture
+                //1 获取流客户端
+                .supplyAsync(() -> {
+                    BinanceWSAccountStreamClient binanceWSAccountStreamClient = null;
+
+                    //1.1 带重试
+                    for (int i = 0; i < ACCOUNT_STREAM_START_TIMES_LIMIT; i++) {
+                        try {
+                            log.info("第 [{}] 次获取账户事件流, userId[{}], accountId[{}]", i, userId, accountId);
+
+                            //1.2 创建 binanceWSAccountStreamClient 用于开启事件流
+                            binanceWSAccountStreamClient = binanceAccountClientManager.getAccountEventStreamClient(accountInfo, this::resolveAccountEvent);
+
+                            log.info("第 [{}] 次获取账户事件流成功, userId[{}], accountId[{}], listenKey[{}]", i, userId, accountId, binanceWSAccountStreamClient.getListenKey());
+
+                            return binanceWSAccountStreamClient;
+                        } catch (Exception e) {
+                            log.error("第 [{}] 次获取账户事件流失败， userId[{}], accountId[{}]", i, userId, accountId, e);
+
+                            binanceAccountClientManager.removeAccountStreamClient(accountId);
+
+                            if (i == ACCOUNT_STREAM_START_TIMES_LIMIT - 1) {
+                                log.error("重试次数 [{}] 超过了限制[{}], 不再继续重试, userId[{}], accountId[{}]", i, ACCOUNT_STREAM_START_TIMES_LIMIT, userId, accountId);
+                            }
+                        }
+                    }
+
+                    return binanceWSAccountStreamClient;
+                }, executor)
+                //2 开启流客户端
+                .thenAcceptAsync(binanceWSAccountStreamClient -> {
+                    // 开启事件流
+                    startAccountEventStream(accountInfo, binanceWSAccountStreamClient);
+                }, executor);
+
+        return future;
     }
 
 
     /**
-     * 根据账户设置过滤
+     * 开始账户事件流，通过 binanceWSAccountStreamClient 进行获取
      *
-     * @param signal  信号
-     * @param account 账户
-     * @return List<UserAccountInfo>
+     * @param accountInfo                  accountInfo
+     * @param binanceWSAccountStreamClient binanceWSAccountStreamClient
      */
-    private boolean filterAccount(TradeSignal signal, UserAccountInfo account) {
-        return !account.getUsable().get() || !account.getSubscribeSymbol().contains(signal.getSymbol());
+    private void startAccountEventStream(UserAccountInfo accountInfo,
+                                         BinanceWSAccountStreamClient binanceWSAccountStreamClient) {
+        long accountId = accountInfo.getId();
+
+        boolean success = binanceAccountClientManager.startAccountEventStream(accountId, binanceWSAccountStreamClient);
+
+        if (success) {
+            log.info("开启账户事件流成功, accountId[{}], listenKey [{}]", accountId, binanceWSAccountStreamClient.getListenKey());
+        } else {
+            // TODO 错误日志上传
+            log.error("开启账户事件流失败, accountId[{}]", accountId);
+            throw new RuntimeException(String.format("开启账户事件流失败，accountId[%s], listenKey [%s]", accountId, binanceWSAccountStreamClient.getListenKey()));
+        }
     }
+
+
+    @Override
+    public void resolveAccountEvent(final UserAccountInfo accountInfo, AccountEvent accountEvent) {
+        log.info("账户[{}]-[{}]收到事件 [{}]", accountInfo.getUserId(), accountInfo.getId(), accountEvent);
+        accountEventResolveService.resolveAccountEvent(accountInfo, accountEvent);
+    }
+
 }
 
 
 
 
+package com.helei.reaktimedatacenter.service.impl.market;
 
-package com.helei.tradeapplication.service.impl;
-
+import cn.hutool.core.collection.ListUtil;
+import cn.hutool.core.lang.Pair;
 import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.base.SubscribeResultInvocationHandler;
+import com.helei.binanceapi.config.BinanceApiConfig;
 import com.helei.constants.CEXType;
-import com.helei.constants.order.GroupOrderStatus;
-import com.helei.constants.order.OrderEvent;
-import com.helei.constants.order.OrderStatus;
-import com.helei.constants.order.OrderType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.WebSocketStreamParamKey;
+import com.helei.constants.trade.KLineInterval;
 import com.helei.constants.trade.TradeType;
-import com.helei.dto.account.AccountPositionConfig;
-import com.helei.dto.order.BaseOrder;
-import com.helei.dto.order.CEXTradeOrder;
-import com.helei.dto.order.CEXTradeOrderWrap;
-import com.helei.tradeapplication.dto.GroupOrder;
-import com.helei.dto.account.AccountRTData;
-import com.helei.dto.account.UserAccountInfo;
-import com.helei.dto.trade.TradeSignal;
-import com.helei.interfaces.CompleteInvocation;
-import com.helei.tradeapplication.manager.ExecutorServiceManager;
-import com.helei.tradeapplication.service.IBinanceContractOrderService;
-import com.helei.tradeapplication.service.OrderEventProcessService;
-import com.helei.tradeapplication.supporter.TradeOrderBuildSupporter;
+import com.helei.dto.base.KeyValue;
+import com.helei.reaktimedatacenter.config.RealtimeConfig;
+import com.helei.reaktimedatacenter.dto.SymbolKLineInfo;
+import com.helei.reaktimedatacenter.service.MarketRealtimeDataService;
+import com.helei.reaktimedatacenter.service.impl.KafkaProducerService;
 import com.helei.util.KafkaUtil;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+
+
+/**
+ * 市场实时数据服务的抽象类
+ * <P>能够将市场数据推送至kafka，会根据配置文件中的run_type来加载需要使用的环境。只需关注实现registryKLineDataLoader(*)方法</P>
+ */
+@Slf4j
+public abstract class AbstractKafkaMarketRTDataService implements MarketRealtimeDataService {
+    protected final ExecutorService taskExecutor;
+
+    public final KafkaProducerService kafkaProducerService;
+
+    protected final RealtimeConfig realtimeConfig;
+
+    protected final BinanceApiConfig binanceApiConfig;
+
+    public AbstractKafkaMarketRTDataService(ExecutorService taskExecutor, KafkaProducerService kafkaProducerService) {
+        this.taskExecutor = taskExecutor;
+        this.kafkaProducerService = kafkaProducerService;
+        this.realtimeConfig = RealtimeConfig.INSTANCE;
+        this.binanceApiConfig = BinanceApiConfig.INSTANCE;
+    }
+
+    @Override
+    public Integer startSyncRealTimeKLine() {
+        int all = 0;
+        List<CompletableFuture<Integer>> futures = new ArrayList<>();
+
+        for (KeyValue<RunEnv, TradeType> keyValue : realtimeConfig.getRun_type().getRunTypeList()) {
+            futures.add(CompletableFuture.supplyAsync(() -> startSyncRealTimeKLine(keyValue.getKey(), keyValue.getValue()), taskExecutor));
+        }
+
+        for (CompletableFuture<Integer> future : futures) {
+            try {
+                all += future.get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        return all;
+    }
+
+    @Override
+    public Integer startSyncRealTimeKLine(RunEnv runEnv, TradeType tradeType) {
+        log.info("开始同步env[{}]-tradeType[{}]的实时k线", runEnv, tradeType);
+
+        RealtimeConfig.RealtimeKLineDataConfig realtimeKLineDataConfig = realtimeConfig.getEnvKLineDataConfig(runEnv, tradeType);
+
+        //Step 1: 解析k线
+        List<SymbolKLineInfo> realtimeKLineList = realtimeKLineDataConfig.getRealtimeKLineList();
+
+        if (realtimeKLineList == null || realtimeKLineList.isEmpty()) {
+            log.warn("runEnv[{}]-tradeType[{}] 没有设置要实时获取的k线", runEnv, tradeType);
+            return 0;
+        }
+
+        List<Pair<String, KLineInterval>> intervals = new ArrayList<>();
+
+        for (SymbolKLineInfo symbolKLineInfo : realtimeKLineList) {
+            symbolKLineInfo.getIntervals().forEach(interval -> {
+                intervals.add(new Pair<>(symbolKLineInfo.getSymbol(), interval));
+            });
+        }
+
+        //Step 2: 创建topic
+        log.info("开始检查并创建所需topic");
+        createTopic(intervals, runEnv, tradeType);
+        log.info("topic创建完毕");
+
+
+        //Step 3: 分片执行
+        List<List<Pair<String, KLineInterval>>> partition = ListUtil.partition(intervals, realtimeKLineDataConfig.getClient_listen_kline_max_count());
+
+
+        try {
+            List<CompletableFuture<Void>> futures = new ArrayList<>();
+            for (List<Pair<String, KLineInterval>> list : partition) {
+
+                //Step 4: 创建task执行获取
+                CompletableFuture<Void> future = registryKLineDataLoader(
+                        runEnv,
+                        tradeType,
+                        list,
+                        (s, p, k) -> klineDataSyncToKafka(s, (KLineInterval) p.get(WebSocketStreamParamKey.KLINE_INTERVAL), k, runEnv, tradeType),
+                        taskExecutor);
+
+                futures.add(future);
+            }
+
+            CompletableFuture
+                    .allOf(futures.toArray(new CompletableFuture[0]))
+                    .get();
+
+            log.info("所有k线开始实时同步");
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        return realtimeKLineList.size();
+    }
+
+
+    /**
+     * 注册k线数据加载器
+     *
+     * @param runEnv               运行环境
+     * @param tradeType            交易类型
+     * @param listenKLines         k线
+     * @param whenReceiveKLineData 回调，需要在whenReceiveKLineData.invoke()时传入symbol、interval、json格式的k线数据
+     * @param executorService      执行的线程池
+     * @return CompletableFuture
+     */
+    protected abstract CompletableFuture<Void> registryKLineDataLoader(
+            RunEnv runEnv,
+            TradeType tradeType,
+            List<Pair<String, KLineInterval>> listenKLines,
+            SubscribeResultInvocationHandler whenReceiveKLineData,
+            ExecutorService executorService
+    );
+
+    /**
+     * 把k线发到kafka
+     *
+     * @param symbol symbol
+     * @param data   data
+     */
+    public void klineDataSyncToKafka(String symbol, KLineInterval kLineInterval, JSONObject data, RunEnv runEnv, TradeType tradeType) {
+        String topic = KafkaUtil.resolveKafkaTopic(CEXType.BINANCE, KafkaUtil.getKLineStreamName(symbol, kLineInterval), runEnv, tradeType);
+
+        log.info("收到k线信息 - {}, - {} - {} - {} send to topic[{}]", symbol, data, runEnv, tradeType, topic);
+        try {
+            kafkaProducerService.sendMessage(
+                    topic,
+                    data.toJSONString()
+            ).get();
+        } catch (InterruptedException | ExecutionException e) {
+            log.error("保持k线信息到kafka出错，symbol[{}]", symbol, e);
+        }
+    }
+
+    /**
+     * 创建topic
+     *
+     * @param kLines    k线list
+     * @param runEnv    运行环境
+     * @param tradeType 交易类型
+     */
+    private void createTopic(List<Pair<String, KLineInterval>> kLines, RunEnv runEnv, TradeType tradeType) {
+        for (Pair<String, KLineInterval> kLine : kLines) {
+            String topic = KafkaUtil.resolveKafkaTopic(CEXType.BINANCE, KafkaUtil.getKLineStreamName(kLine.getKey(), kLine.getValue()), runEnv, tradeType);
+
+            kafkaProducerService.checkAndCreateTopic(
+                    topic,
+                    realtimeConfig.getKafka().getKafka_num_partitions(),
+                    realtimeConfig.getKafka().getKafka_replication_factor()
+            );
+        }
+    }
+}
+
+
+package com.helei.reaktimedatacenter.service.impl.market;
+
+import cn.hutool.core.lang.Pair;
+import com.helei.binanceapi.base.SubscribeResultInvocationHandler;
+import com.helei.constants.trade.KLineInterval;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.reaktimedatacenter.manager.ExecutorServiceManager;
+import com.helei.reaktimedatacenter.realtime.impl.BinanceKLineRTDataSyncTask;
+import com.helei.reaktimedatacenter.service.impl.KafkaProducerService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+
+
+/**
+ * 币安市场数据服务
+ */
+@Slf4j
+@Service
+public class BinanceMarketRTDataService extends AbstractKafkaMarketRTDataService {
+
+
+    @Autowired
+    public BinanceMarketRTDataService(ExecutorServiceManager executorServiceManager, KafkaProducerService kafkaProducerService) {
+        super(executorServiceManager.getKlineTaskExecutor(), kafkaProducerService);
+    }
+
+    @Override
+    protected CompletableFuture<Void> registryKLineDataLoader(
+            RunEnv runEnv,
+            TradeType tradeType,
+            List<Pair<String, KLineInterval>> listenKLines,
+            SubscribeResultInvocationHandler whenReceiveKLineData,
+            ExecutorService executorService
+    ) {
+        String url = binanceApiConfig.getEnvUrlSet(runEnv, tradeType).getWs_market_stream_url();
+        return new BinanceKLineRTDataSyncTask(
+                listenKLines,
+                url
+        ).startSync(whenReceiveKLineData, taskExecutor);
+    }
+
+}
+
+
+package com.helei.reaktimedatacenter.service.impl.market;
+
+import cn.hutool.core.lang.Pair;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.base.SubscribeResultInvocationHandler;
+import com.helei.constants.RunEnv;
+import com.helei.constants.WebSocketStreamParamKey;
+import com.helei.constants.trade.KLineInterval;
+import com.helei.constants.trade.TradeType;
+import com.helei.reaktimedatacenter.manager.ExecutorServiceManager;
+import com.helei.reaktimedatacenter.service.impl.KafkaProducerService;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.concurrent.*;
+
+
+/**
+ * 随机市场数据服务
+ */
+@Service
+public class RandomMarketRTDataService extends AbstractKafkaMarketRTDataService {
+
+    private final Random random = new Random();
+
+    private final Double maxPrice = 99999.09;
+
+    private final Double minPrice = 111.229;
+
+    private final ConcurrentHashMap<String, ConcurrentHashMap<KLineInterval, Long>> startTimeStampMap;
+
+    private final ConcurrentHashMap<String, ConcurrentHashMap<KLineInterval, Long>> realTimerMap;
+
+    private final LocalDateTime startTimeStamp = LocalDateTime.of(2022, 1, 1, 1, 1);
+
+    private long epochMilli;
+
+
+    public RandomMarketRTDataService(
+            ExecutorServiceManager executorServiceManager, KafkaProducerService kafkaProducerService
+    ) {
+        super(executorServiceManager.getKlineTaskExecutor(), kafkaProducerService);
+
+        epochMilli = startTimeStamp.toInstant(ZoneOffset.UTC).toEpochMilli();
+
+        if (epochMilli > System.currentTimeMillis()) {
+            epochMilli = System.currentTimeMillis();
+        }
+        this.startTimeStampMap = new ConcurrentHashMap<>();
+        this.realTimerMap = new ConcurrentHashMap<>();
+    }
+
+    @Override
+    protected CompletableFuture<Void> registryKLineDataLoader(
+            RunEnv runEnv,
+            TradeType tradeType,
+            List<Pair<String, KLineInterval>> listenKLines,
+            SubscribeResultInvocationHandler whenReceiveKLineData,
+            ExecutorService executorService
+    ) {
+        return CompletableFuture.runAsync(() -> {
+            String key = getKey(runEnv, tradeType);
+            for (Pair<String, KLineInterval> listenKLine : listenKLines) {
+                String symbol = listenKLine.getKey();
+                KLineInterval interval = listenKLine.getValue();
+
+                startTimeStampMap.putIfAbsent(key, new ConcurrentHashMap<>());
+                realTimerMap.putIfAbsent(key, new ConcurrentHashMap<>());
+
+                startTimeStampMap.get(key).putIfAbsent(interval, epochMilli);
+                realTimerMap.get(key).putIfAbsent(interval, epochMilli);
+
+                executorService.execute(() -> {
+                    Map<String, Object> map = new HashMap<>();
+                    map.put(WebSocketStreamParamKey.KLINE_INTERVAL, interval);
+                    while (true) {
+                        try {
+                            JSONObject kLine = loadKLine(runEnv, tradeType, symbol, interval);
+                            whenReceiveKLineData.invoke(symbol, map, kLine);
+                            TimeUnit.SECONDS.sleep(10);
+                        } catch (InterruptedException e) {
+                            throw new RuntimeException(e);
+                        }
+                    }
+                });
+            }
+
+        }, executorService);
+    }
+
+
+    protected JSONObject loadKLine(
+            RunEnv runEnv,
+            TradeType tradeType,
+            String symbol,
+            KLineInterval kLineInterval
+    ) {
+
+        double nextLow = minPrice + (maxPrice - minPrice) * random.nextDouble();
+        double nextHigh = nextLow + (maxPrice - nextLow) * random.nextDouble();
+        double nextOpen = nextLow + (nextHigh - nextLow) * random.nextDouble();
+        double nextClose = nextLow + (nextHigh - nextLow) * random.nextDouble();
+
+        double volume = 10 + (Double.MAX_VALUE / 2 - 10) * random.nextDouble();
+        long plus = kLineInterval.getSecond() * 1000;
+        String key = getKey(runEnv, tradeType);
+        long openTime = startTimeStampMap.get(key).get(kLineInterval);
+
+        realTimerMap.get(key).computeIfPresent(kLineInterval, (k, v) -> v + 200);
+        long curTime = realTimerMap.get(key).get(kLineInterval);
+
+        boolean isRealTime = curTime > System.currentTimeMillis() - kLineInterval.getSecond() * 1000;
+        if (isRealTime) {
+            if (curTime >= openTime + plus) {
+                openTime += plus;
+                startTimeStampMap.get(key).put(kLineInterval, openTime);
+            }
+        } else {
+            openTime += plus;
+            startTimeStampMap.get(key).put(kLineInterval, openTime);
+        }
+
+        JSONObject jb = new JSONObject();
+        jb.put("t", openTime);
+        jb.put("T", openTime + plus - 1000);
+        jb.put("s", symbol);
+        jb.put("h", nextHigh);
+        jb.put("l", nextLow);
+        jb.put("o", nextOpen);
+        jb.put("c", nextClose);
+        jb.put("v", volume);
+        jb.put("x", !isRealTime);
+        jb.put("i", kLineInterval.name());
+
+        return jb;
+    }
+
+    private String getKey(RunEnv runEnv, TradeType tradeType) {
+        return runEnv.name() + " - " + tradeType.name();
+    }
+}
+
+
+
+package com.helei.reaktimedatacenter.service.impl;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.BinanceWSApiClient;
+import com.helei.binanceapi.config.BinanceApiConfig;
+import com.helei.cexapi.CEXApiFactory;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.ASKey;
+import com.helei.dto.account.AccountPositionConfig;
+import com.helei.dto.account.AccountRTData;
+import com.helei.dto.account.UserAccountInfo;
+import com.helei.dto.account.UserInfo;
+import com.helei.dto.base.KeyValue;
+import com.helei.reaktimedatacenter.config.RealtimeConfig;
+import com.helei.reaktimedatacenter.service.UserService;
+import com.helei.reaktimedatacenter.supporter.BatchWriteSupporter;
+import com.helei.util.RedisKeyUtil;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.List;
 
 
 @Slf4j
 @Service
-public class OrderServiceImpl extends OrderEventProcessService {
+public class UserServiceImpl implements UserService, InitializingBean {
 
+    private final RealtimeConfig realtimeConfig = RealtimeConfig.INSTANCE;
 
-    @Autowired
-    private KafkaProducerService kafkaProducerService;
-
-
-    @Autowired
-    private IBinanceContractOrderService binanceContractOrderService;
-
+    private final BinanceApiConfig binanceApiConfig = BinanceApiConfig.INSTANCE;
 
     @Autowired
-    private TradeOrderBuildSupporter tradeOrderBuildSupporter;
-
-
-    @Autowired
-    public OrderServiceImpl(ExecutorServiceManager executorServiceManager) {
-        super(executorServiceManager.getOrderExecutor());
-        super.startProcessEvents();
-    }
-
-
-    /**
-     * 生成订单
-     *
-     * @param accountInfo   账户信息
-     * @param accountRTData 账户实时数据
-     * @param signal        信号
-     */
-    @Override
-    public void makeOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, TradeSignal signal, CompleteInvocation<GroupOrder> invocation) {
-
-        AccountPositionConfig accountPositionConfig = accountInfo.getAccountPositionConfig();
-        OrderType orderType = accountPositionConfig.getOrderType();
-
-        GroupOrder groupOrder = new GroupOrder();
-
-        //Step 1 创建主单
-        CEXTradeOrderWrap orderWrapper = switch (orderType) {
-            case LIMIT -> tradeOrderBuildSupporter.buildLimitOrder(accountInfo, accountRTData, signal);
-            case MARKET -> tradeOrderBuildSupporter.buildMarketOrder(accountInfo, accountRTData, signal);
-            default -> null;
-        };
-
-
-        long userId = accountInfo.getId();
-        long accountId = accountRTData.getAccountId();
-
-        if (orderWrapper == null) {
-            log.warn("userId[{}]-accountId[{}]创建主订单结果为null, signalId[{}]", userId, accountId, signal.getId());
-            return;
-        }
-
-        //获取订单
-        CEXTradeOrder order = orderWrapper.getFullFieldOrder();
-
-        // 资金不足
-        if (order.getQuantity().doubleValue() <= 0) {
-            order.setStatus(OrderStatus.BALANCE_INSUFFICIENT);
-        }
-        groupOrder.setMainOrder(order);
-
-
-        // 满足资金不足的标记，给group order也打上，不继续创建止盈止损单了
-        if (OrderStatus.BALANCE_INSUFFICIENT.equals(order.getStatus())) {
-            log.warn("userId[{}]-account[{}] 资金不足，将不会提交订单[{}]到交易所, signalId[{}]", userId, accountId, order.getOrderId(), signal.getId());
-            groupOrder.setGroupOrderStatus(GroupOrderStatus.BALANCE_INSUFFICIENT);
-
-            super.submitOrderEvent(groupOrder, OrderEvent.BALANCE_INSUFFICIENT, invocation);
-            return;
-        }
-
-        //Step 2 根据策略创建止损、止盈单
-
-
-        log.info("订单[{}]创建成功", order);
-        //Step 3 提交订单创建事件
-        super.submitOrderEvent(groupOrder, OrderEvent.CREATED_ORDER, invocation);
-    }
+    private BatchWriteSupporter batchWriteSupporter;
 
 
     @Override
-    public GroupOrder writeOrder2Kafka(GroupOrder order) throws ExecutionException, InterruptedException {
-        //Step 1 从主单中取出环境信息，生成topic
-        BaseOrder mainOrder = order.getMainOrder();
+    public List<UserInfo> queryAll() {
 
-        String topic = KafkaUtil.getOrderSymbolTopic(mainOrder.getRunEnv(), mainOrder.getTradeType(), mainOrder.getSymbol());
+        for (KeyValue<RunEnv, TradeType> keyValue : realtimeConfig.getRun_type().getRunTypeList()) {
+            //TODO 查数据库, 只取这些环境里的
 
-        //Step 2 获取交易所订单列表发送
-        List<CEXTradeOrder> cexTradeOrders = order.getCexTradeOrders();
-
-        kafkaProducerService.sendMessage(topic, JSONObject.toJSONString(cexTradeOrders)).get();
-
-        log.debug("订单order[{}]写入kafka成功", order);
-
-        return order;
-    }
-
-
-    @Override
-    public GroupOrder writeOrder2DB(GroupOrder order) {
-
-        BaseOrder mainOrder = order.getMainOrder();
-        CEXType cexType = mainOrder.getCexType();
-        TradeType tradeType = mainOrder.getTradeType();
-
-
-        if (CEXType.BINANCE.equals(cexType) && TradeType.CONTRACT.equals(tradeType)) {
-            List<CEXTradeOrder> cexTradeOrders = binanceContractOrderService.saveGroupOrder(order);
-            order.setCexTradeOrders(cexTradeOrders);
-            return order;
         }
-
-        return null;
-    }
-
-
-}
-
-
-
-
-
-package com.helei.tradeapplication.service.impl;
-
-import com.helei.constants.RunEnv;
-import com.helei.constants.trade.TradeType;
-import com.helei.dto.account.AccountRTData;
-import com.helei.dto.account.UserAccountInfo;
-import com.helei.tradeapplication.cache.UserInfoCache;
-import com.helei.tradeapplication.manager.ExecutorServiceManager;
-import com.helei.tradeapplication.service.UserAccountInfoService;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
-
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-
-@Component
-public class UserAccountInfoServiceImpl implements UserAccountInfoService {
-
-    private final ExecutorService executor;
-
-    @Autowired
-    private UserInfoCache userInfoCache;
-
-    public UserAccountInfoServiceImpl(ExecutorServiceManager executorServiceManager) {
-        this.executor = executorServiceManager.getQueryExecutor();
-    }
-
-    @Override
-    public CompletableFuture<List<UserAccountInfo>> queryEnvAccountInfo(RunEnv env, TradeType tradeType) {
-
-
-        return null;
-    }
-
-    @Override
-    public CompletableFuture<AccountRTData> queryAccountRTInfo(RunEnv env, TradeType tradeType, long accountId) {
-        return CompletableFuture.supplyAsync(()->userInfoCache.queryAccountRTData(env, tradeType, accountId), executor);
-    }
-
-}
-
-
-package com.helei.tradeapplication.service;
-
-
-import com.baomidou.mybatisplus.extension.service.IService;
-import com.helei.tradeapplication.dto.GroupOrder;
-import com.helei.dto.order.CEXTradeOrder;
-
-import java.util.List;
-
-/**
- * <p>
- * 币安合约交易订单表 服务类
- * </p>
- *
- * @author com.helei
- * @since 2024-11-05
- */
-public interface IBinanceContractOrderService extends IService<CEXTradeOrder> {
-
-
-    /**
-     * 保存订单
-     * @param order 订单
-     */
-    List<CEXTradeOrder> saveGroupOrder(GroupOrder order);
-
-}
-
-
-
-package com.helei.tradeapplication.service;
-
-import com.helei.constants.order.OrderEvent;
-import com.helei.constants.order.GroupOrderStatus;
-import com.helei.tradeapplication.dto.GroupOrder;
-import com.helei.interfaces.CompleteInvocation;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.concurrent.*;
-
-
-@Slf4j
-public abstract class OrderEventProcessService implements OrderService {
-
-
-    /**
-     * 写入db的重试次数
-     */
-    private static final int WRITE_DB_RETRY_TIMES = 3;
-
-    /**
-     * 写入kafka的重试次数
-     */
-    private static final int WRITE_KAFKA_RETRY_TIMES = 3;
-
-
-    /**
-     * 阻塞队列， 用于存放订单和当前订单的事件
-     */
-    private final BlockingQueue<OrderProcessTask> eventQueue = new LinkedBlockingQueue<>();
-
-
-    /**
-     * 存放订单回调的map
-     */
-    private final ConcurrentMap<GroupOrder, CompleteInvocation<GroupOrder>> invocationMap = new ConcurrentHashMap<>();
-
-
-    /**
-     * 记录重试次数的map
-     */
-    private final ConcurrentMap<GroupOrder, Integer> retryMap = new ConcurrentHashMap<>();
-
-
-    /**
-     * 执行的线程池
-     */
-    private final ExecutorService executor;
-
-
-    public OrderEventProcessService(ExecutorService executor) {
-        this.executor = executor;
-    }
-
-
-    /**
-     * 提交订单事件
-     *
-     * @param order              订单
-     * @param event              订单事件
-     * @param completeInvocation 完成的回调函数
-     */
-    public void submitOrderEvent(GroupOrder order, OrderEvent event, CompleteInvocation<GroupOrder> completeInvocation) {
-        invocationMap.compute(order, (k, v) -> {
-            submitOrderEvent(order, event);
-            return completeInvocation;
-        });
-    }
-
-    /**
-     * 提交订单事件
-     *
-     * @param order 订单
-     * @param event 订单事件
-     */
-    public void submitOrderEvent(GroupOrder order, OrderEvent event) {
-        try {
-            eventQueue.put(new OrderProcessTask(order, event));
-        } catch (InterruptedException e) {
-            log.error("提交订单[{}]事件[{}]失败", order, event, e);
-            throw new RuntimeException("提交订单事件失败", e);
-        }
-    }
-
-    /**
-     * 事件处理
-     *
-     * @param order 订单
-     * @param event 事件
-     */
-    public void processOrderEvent(GroupOrder order, OrderEvent event) {
-        log.debug("开始处理订单[{}]的事件[{}]", order, event);
-
-        OrderEvent next = switch (event) {
-            case CREATED_ORDER -> createdOrderProcess(order);
-
-            case SEND_TO_DB -> sendToDBProcess(order);
-            case SEND_TO_KAFKA -> sendToKafkaProcess(order);
-
-            case SEND_TO_DB_RETRY -> sendToDBRetryProcess(order);
-            case SEND_TO_KAFKA_RETRY -> sendToKafkaRetryProcess(order);
-
-            case SEND_TO_DB_FINAL_ERROR -> errorProcess(order, OrderEvent.SEND_TO_DB_FINAL_ERROR);
-            case SEND_TO_KAFKA_FINAL_ERROR -> errorProcess(order, OrderEvent.SEND_TO_KAFKA_FINAL_ERROR);
-            case UN_SUPPORT_EVENT_ERROR -> errorProcess(order, OrderEvent.UN_SUPPORT_EVENT_ERROR);
-
-            case BALANCE_INSUFFICIENT -> balanceInsufficientProcess(order);
-
-            case COMPLETE -> successProcess(order);
-            case ERROR -> errorProcess(order, OrderEvent.ERROR);
-            case CANCEL -> cancelProcess(order);
-        };
-
-        if (next != null) {
-            submitOrderEvent(order, next);
-        }
-
-        log.debug("订单[{}]的事件[{}]处理完毕", order, event);
-    }
-
-
-    /**
-     * 资金不足的订单处理
-     *
-     * @param order groupOrder
-     * @return 下一个事件
-     */
-    private OrderEvent balanceInsufficientProcess(GroupOrder order) {
-        if (GroupOrderStatus.BALANCE_INSUFFICIENT.equals(order.getGroupOrderStatus())) {
-            try {
-                //写入数据库
-                writeOrder2DB(order);
-            } catch (Exception e) {
-                //重试
-                return OrderEvent.SEND_TO_DB_RETRY;
-            }
-            //错误事件
-            errorProcess(order, OrderEvent.BALANCE_INSUFFICIENT);
-        }
-        return OrderEvent.UN_SUPPORT_EVENT_ERROR;
-    }
-
-
-    /**
-     * 取消订单
-     *
-     * @param order order
-     * @return 下一个事件
-     */
-    private OrderEvent cancelProcess(GroupOrder order) {
-        //TODO 取消订单逻辑，未写入kafka的标记就好，写入kafka的还需要向另外的kafka里写上取消的消息，订单提交服务收到后进行取消
-        return null;
-    }
-
-
-    /**
-     * 执行成功的事件处理
-     *
-     * @param order order
-     * @return 下一个事件
-     */
-    private OrderEvent successProcess(GroupOrder order) {
-
-        CompleteInvocation<GroupOrder> invocation = invocationMap.remove(order);
-
-        if (invocation != null) {
-            invocation.success(order);
-            invocation.finish();
-        }
-
-        return null;
-    }
-
-
-    /**
-     * 错误事件处理
-     *
-     * @param order order
-     * @param event 时间
-     * @return 下一个事件
-     */
-    private OrderEvent errorProcess(GroupOrder order, OrderEvent event) {
-
-        CompleteInvocation<GroupOrder> invocation = invocationMap.remove(order);
-
-        if (invocation != null) {
-            invocation.fail(order, event.name());
-            invocation.finish();
-        }
-
-        return null;
-    }
-
-
-    /**
-     * 发送到kafka错误重试事件处理
-     *
-     * @param order order
-     * @return 下一个事件
-     */
-    private OrderEvent sendToKafkaRetryProcess(GroupOrder order) {
-        if (GroupOrderStatus.WRITE_IN_KAFKA.equals(order.getGroupOrderStatus())) {
-            Integer times = retryMap.remove(order);
-            times = times == null ? 0 : times;
-
-            //超过重试次数
-            if (times > WRITE_KAFKA_RETRY_TIMES) {
-                return OrderEvent.SEND_TO_KAFKA_FINAL_ERROR;
-            }
-
-
-            try {
-                GroupOrder result = writeOrder2Kafka(order);
-
-                if (result == null) return OrderEvent.CANCEL;
-
-                return OrderEvent.COMPLETE;
-            } catch (Exception e) {
-                log.error("写入Order[{}]到kafka发生错误,重试次数[{}]", order, times, e);
-                retryMap.put(order, times + 1);
-                return OrderEvent.SEND_TO_KAFKA_RETRY;
-            }
-        }
-
-        return OrderEvent.UN_SUPPORT_EVENT_ERROR;
-    }
-
-
-    /**
-     * 发送到kafka事件处理
-     *
-     * @param order order
-     * @return 下一个事件
-     */
-    private OrderEvent sendToKafkaProcess(GroupOrder order) {
-        if (GroupOrderStatus.WRITE_IN_DB.equals(order.getGroupOrderStatus())) {
-            // 发送kafka
-            try {
-                order.setGroupOrderStatus(GroupOrderStatus.WRITE_IN_KAFKA);
-
-                GroupOrder result = writeOrder2Kafka(order);
-
-                if (result == null) return OrderEvent.CANCEL;
-            } catch (Exception e) {
-                log.error("写入Order[{}]到kafka发生错误", order, e);
-                return OrderEvent.SEND_TO_KAFKA_RETRY;
-            }
-            return OrderEvent.COMPLETE;
-        }
-        return OrderEvent.UN_SUPPORT_EVENT_ERROR;
-    }
-
-
-    /**
-     * 发送到DB错误重试事件处理
-     *
-     * @param order order
-     * @return 下一个事件
-     */
-    private OrderEvent sendToDBRetryProcess(GroupOrder order) {
-        GroupOrderStatus groupOrderStatus = order.getGroupOrderStatus();
-        if (GroupOrderStatus.WRITE_IN_DB.equals(groupOrderStatus) || GroupOrderStatus.BALANCE_INSUFFICIENT.equals(groupOrderStatus)) {
-            Integer times = retryMap.remove(order);
-            times = times == null ? 0 : times;
-
-            //超过重试次数
-            if (times > WRITE_DB_RETRY_TIMES) {
-                return OrderEvent.SEND_TO_DB_FINAL_ERROR;
-            }
-
-            try {
-                GroupOrder result = writeOrder2DB(order);
-
-                if (result == null) return OrderEvent.CANCEL;
-
-                //资金不足，只写入数据库记录
-                if (GroupOrderStatus.BALANCE_INSUFFICIENT.equals(groupOrderStatus)) return OrderEvent.ERROR;
-
-                return OrderEvent.SEND_TO_KAFKA;
-            } catch (Exception e) {
-                log.error("写入Order[{}]到数据库发生错误, 重试次数[{}]", order, times, e);
-                retryMap.put(order, times + 1);
-                return OrderEvent.SEND_TO_DB_RETRY;
-            }
-        }
-
-        return OrderEvent.UN_SUPPORT_EVENT_ERROR;
-    }
-
-
-    /**
-     * 发送到DB事件处理
-     *
-     * @param order order
-     * @return 下一个事件
-     */
-    private OrderEvent sendToDBProcess(GroupOrder order) {
-        if (GroupOrderStatus.CREATED.equals(order.getGroupOrderStatus())) {
-            // 写数据库
-            try {
-                order.setGroupOrderStatus(GroupOrderStatus.WRITE_IN_DB);
-
-                GroupOrder result = writeOrder2DB(order);
-
-                if (result == null) return OrderEvent.CANCEL;
-            } catch (Exception e) {
-                log.error("写入Order[{}]到数据库发生错误", order, e);
-                return OrderEvent.SEND_TO_DB_RETRY;
-            }
-            return OrderEvent.SEND_TO_KAFKA;
-        }
-        return OrderEvent.UN_SUPPORT_EVENT_ERROR;
-    }
-
-    /**
-     * 创建订单事件处理
-     *
-     * @param order order
-     * @return 下一个事件
-     */
-    private OrderEvent createdOrderProcess(GroupOrder order) {
-        //订单创建事件
-        order.setGroupOrderStatus(GroupOrderStatus.CREATED);
-        return OrderEvent.SEND_TO_DB;
-    }
-
-
-    /**
-     * 开始处理事件
-     */
-    public void startProcessEvents() {
-        while (!eventQueue.isEmpty()) {
-            try {
-                OrderProcessTask task = eventQueue.take();
-
-                executor.execute(() -> processOrderEvent(task.getOrder(), task.getOrderEvent()));
-            } catch (InterruptedException e) {
-                log.error("处理事件时发生错误", e);
-            }
-        }
-    }
-
-
-    /**
-     * 订单处理任务，包含订单信息和订单事件
-     */
-    @Data
-    @AllArgsConstructor
-    @NoArgsConstructor
-    public static class OrderProcessTask {
-
-        /**
-         * 订单信息
-         */
-        private GroupOrder order;
-
-        /**
-         * 订单事件
-         */
-        private OrderEvent orderEvent;
-    }
-
-
-}
-
-
-package com.helei.tradeapplication.service;
-
-import com.helei.dto.account.AccountRTData;
-import com.helei.dto.account.UserAccountInfo;
-import com.helei.tradeapplication.dto.GroupOrder;
-import com.helei.dto.trade.TradeSignal;
-import com.helei.interfaces.CompleteInvocation;
-
-import java.util.concurrent.ExecutionException;
-
-public interface OrderService {
-
-
-    /**
-     * 生成订单
-     *
-     * @param accountInfo   账户信息
-     * @param accountRTData 账户实时数据
-     * @param signal        信号
-     * @param invocation    生成订单结果的回调
-     */
-    void makeOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, TradeSignal signal, CompleteInvocation<GroupOrder> invocation);
-
-
-    /**
-     * 将订单写到kafka
-     *
-     * @param order 订单数据
-     * @return 订单数据
-     */
-    GroupOrder writeOrder2Kafka(GroupOrder order) throws ExecutionException, InterruptedException;
-
-
-    /**
-     * 将订单写入数据库
-     *
-     * @param order order
-     * @return 订单数据
-     */
-    GroupOrder writeOrder2DB(GroupOrder order);
-}
-
-
-package com.helei.tradeapplication.supporter;
-
-import com.helei.constants.order.OrderType;
-import com.helei.constants.order.TimeInForce;
-import com.helei.dto.account.AccountPositionConfig;
-import com.helei.dto.account.AccountRTData;
-import com.helei.dto.account.PositionInfo;
-import com.helei.dto.account.UserAccountInfo;
-import com.helei.dto.order.BaseOrder;
-import com.helei.dto.order.CEXTradeOrder;
-import com.helei.dto.order.type.*;
-import com.helei.dto.trade.BalanceInfo;
-import com.helei.dto.trade.TradeSignal;
-import com.helei.snowflack.BRStyle;
-import com.helei.snowflack.SnowFlakeFactory;
-import com.helei.util.OrderQuantityCalUtil;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
-
-import java.math.BigDecimal;
-
-
-/**
- * 构建用于交易的订单，自带id
- */
-@Component
-public class TradeOrderBuildSupporter {
-
-    @Autowired
-    private SnowFlakeFactory snowFlakeFactory;
-
-    /**
-     * 构建限价单
-     *
-     * @param accountInfo   账户信息
-     * @param accountRTData 账户实时数据
-     * @param signal        信号
-     * @return 限价单
-     */
-    public LimitOrder buildLimitOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, TradeSignal signal) {
-        // Step 1 参数检验
-        BigDecimal enterPrice = signal.getEnterPrice();
-        if (enterPrice == null) return null;
-
-        AccountPositionConfig positionConfig = accountInfo.getAccountPositionConfig();
-
-        // Step 2 创建订单
-        String symbol = signal.getSymbol();
-
-
-        // Step 2.1 基础订单信息
-        BaseOrder baseOrder = BaseOrder.builder()
-                .orderId(nextId(OrderType.LIMIT))
-                .runEnv(accountInfo.getRunEnv())
-                .tradeType(accountInfo.getTradeType())
-                .cexType(accountInfo.getCexType())
-                .symbol(symbol)
-                .side(signal.getTradeSide())
-                .positionSide(positionConfig.getPositionSide())
-                .userId(accountInfo.getUserId())
-                .accountId(accountRTData.getAccountId())
+        List<UserInfo> list = new ArrayList<>();
+
+        UserInfo u_contract_test_net_account = UserInfo.builder()
+                .id(1)
+                .username("合约测试网账号")
+                .password("123456")
+                .accountInfos(List.of(
+                        UserAccountInfo
+                                .builder()
+                                .id(1)
+                                .userId(1)
+                                .accountPositionConfig(AccountPositionConfig
+                                        .builder()
+                                        .riskPercent(0.5)
+                                        .leverage(10)
+                                        .build()
+                                )
+                                .asKey(new ASKey("b252246c6c6e81b64b8ff52caf6b8f37471187b1b9086399e27f6911242cbc66", "a4ed1b1addad2a49d13e08644f0cc8fc02a5c14c3511d374eac4e37763cadf5f"))
+                                .subscribeSymbol(List.of("btcusdt", "ethusdt", "solusdt"))
+                                .runEnv(RunEnv.TEST_NET)
+                                .tradeType(TradeType.CONTRACT)
+                                .build()
+                ))
                 .build();
-        LimitOrder limitOrder = new LimitOrder(baseOrder);
+        UserInfo spot_test_net_account = UserInfo.builder()
+                .id(2)
+                .username("现货测试网账号")
+                .password("123456")
+                .accountInfos(List.of(
+                        UserAccountInfo
+                                .builder()
+                                .id(1)
+                                .userId(2)
+                                .accountPositionConfig(AccountPositionConfig
+                                        .builder()
+                                        .riskPercent(0.5)
+                                        .leverage(10)
+                                        .build()
+                                )
+                                .subscribeSymbol(List.of("btcusdt", "ethusdt", "solusdt"))
+                                .asKey(new ASKey("1JIhkPyK07xadG9x8hIwqitN95MgpypPzA4b6TLraTonRnJ8BBJQlaO2iL9tPH0Y", "t84TYFR1zieMGncbw3kYq4zAPLxIJHJeMdD8V0FMKxij9fApojV6bhbDpyyjNDWt"))
+                                .runEnv(RunEnv.TEST_NET)
+                                .tradeType(TradeType.SPOT)
+                                .build()
+                ))
+                .build();
 
-        // Step 2.2 订单价格、数量等 LimitOrder 信息
-        BalanceInfo balanceInfo = accountRTData.getAccountBalanceInfo().getBalances().get(symbol);
-        PositionInfo positionInfo = accountRTData.getAccountPositionInfo().getPositions().get(symbol);
+        UserInfo binance_account = UserInfo.builder()
+                .id(3)
+                .username("正式网账号")
+                .password("123456")
+                .accountInfos(List.of(
+                        UserAccountInfo
+                                .builder()
+                                .id(1)
+                                .userId(3)
+                                .accountPositionConfig(AccountPositionConfig
+                                        .builder()
+                                        .riskPercent(0.5)
+                                        .leverage(10)
+                                        .build()
+                                )
+                                .subscribeSymbol(List.of("btcusdt", "ethusdt", "solusdt"))
+                                .asKey(new ASKey("TUFsFL4YrBsR4fnBqgewxiGfL3Su5L9plcjZuyRO3cq6M1yuwV3eiNX1LcMamYxz", "YsLzVacYo8eOGlZZ7RjznyWVjPHltIXzZJz2BrggCmCUDcW75FyFEv0uKyLBVAuU"))
+                                .runEnv(RunEnv.NORMAL)
+                                .tradeType(TradeType.SPOT)
+                                .build()
+                ))
+                .build();
 
 
-        double quantity = OrderQuantityCalUtil.riskPercentBasedQuantityCalculate(
-                balanceInfo.getFree(),
-                positionConfig.getRiskPercent(),
-                enterPrice.doubleValue(),
-                positionInfo.getEnterPosition(),
-                positionInfo.getPosition(),
-                signal.getStopPrice().doubleValue()
-        );
-
-        limitOrder.setTimeInForce(TimeInForce.GTC);
-        limitOrder.setPrice(enterPrice);
-        limitOrder.setQuantity(BigDecimal.valueOf(quantity));
-
-        return limitOrder;
+        list.add(u_contract_test_net_account);
+//        list.add(spot_test_net_account);
+//        list.add(binance_account);
+        return list;
     }
 
 
     /**
-     * 构建市价单
+     * 更新用户账户信息
      *
-     * @param accountInfo   账户信息
-     * @param accountRTData 账户实时数据
-     * @param signal        信号
-     * @return 限价单
+     * @param userAccountInfo userAccountInfo
      */
-    public MarketOrder buildMarketOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, TradeSignal signal) {
-        return null;
+    @Override
+    public void updateUserAccountInfo(UserAccountInfo userAccountInfo) {
+
+        long accountId = userAccountInfo.getId();
+        long userId = userAccountInfo.getUserId();
+
+        String key = RedisKeyUtil.getUserAccountEnvRTDataKey(userAccountInfo.getRunEnv(), userAccountInfo.getTradeType());
+        String hashKey = String.valueOf(accountId);
+
+        //只发实时的部分数据
+        String value = JSONObject.toJSONString(new AccountRTData(userId, accountId, userAccountInfo.getAccountBalanceInfo(), userAccountInfo.getAccountPositionInfo()));
+
+        log.info("更新账户信息，key[{}], value[{}]", key, value);
+//        batchWriteSupporter.writeToRedis(key, value);
+        batchWriteSupporter.writeToRedisHash(key, hashKey, value);
     }
 
     /**
-     * 构建市价止损单
+     * 更新UserInfo到Redis，包括User名下的账户信息
      *
-     * @param accountInfo   账户信息
-     * @param accountRTData 账户实时数据
-     * @param symbol        交易对
-     * @return 限价单
+     * @param env       运行环境
+     * @param tradeType 交易类型
      */
-    public StopLossMarketOrder buildStopMarketOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
-        return null;
-    }
+    public void updateUserInfoToRedis(RunEnv env, TradeType tradeType) {
+        List<UserInfo> userInfos = queryAll();
+        for (UserInfo userInfo : userInfos) {
+            String url = binanceApiConfig.getEnvUrlSet(env, tradeType).getWs_market_url();
+            CEXApiFactory.binanceApiClient(url, "");
 
-
-    /**
-     * 构建限价止损单
-     *
-     * @param accountInfo   账户信息
-     * @param accountRTData 账户实时数据
-     * @param symbol        交易对
-     * @return 限价单
-     */
-    public StopLossLimitOrder buildStopLimitOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
-        return null;
-    }
-
-    /**
-     * 构建市价止盈单
-     *
-     * @param accountInfo   账户信息
-     * @param accountRTData 账户实时数据
-     * @param symbol        交易对
-     * @return 限价单
-     */
-    public TakeProfitMarketOrder buildTakeProfitMarketOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
-        return null;
-    }
-
-    /**
-     * 构建限价止盈单
-     *
-     * @param accountInfo   账户信息
-     * @param accountRTData 账户实时数据
-     * @param symbol        交易对
-     * @return 限价单
-     */
-    public TakeProfitLimitOrder buildTakeProfitLimitOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
-        return null;
-    }
-
-    /**
-     * buildTrailingSTIDMarketOrder
-     *
-     * @param accountInfo   账户信息
-     * @param accountRTData 账户实时数据
-     * @param symbol        交易对
-     * @return 限价单
-     */
-    public CEXTradeOrder buildTrailingSTIDMarketOrder(UserAccountInfo accountInfo, AccountRTData accountRTData, String symbol) {
-        return null;
-    }
-
-
-    /**
-     * 获取下一id
-     * @param orderType 订单类型
-     * @return 订单id
-     */
-    private String nextId(OrderType orderType) {
-        return snowFlakeFactory.nextId(BRStyle.TRADE_SIGNAL, orderType.name());
-    }
-}
-
-
-shinano:
-  quantity:
-    trade_app:
-      run_type: # 运行环境配置
-        configs:
-          - env: NORMAL
-            trade_type:
-              - SPOT
-        snow_flow: # 雪花算法配置
-          datacenter_id: 0 # 数据中心id
-          machine_id: 1 # 机器id
-
-      kafka:
-        bootstrap_servers: 127.0.0.1:9092 # Kafka服务器地址
-#        bootstrap_servers: 192.168.1.3:9092 # Kafka服务器地址
-        group_id: trade_app_test_group
-        kafka_num_partitions: 1
-        kafka_replication_factor: 1
-
-      redis:
-        # 如果需要密码，格式为 redis://:password@localhost:6379
-        #        url: redis://127.0.0.1:6379
-        url: redis://192.168.1.3:6379
-
-      signal: # 信号设置
-        normal: # 运行环境
-          spot: # 交易类型
-            - symbol: btcusdt # 交易对名称
-              signal_names: # 信号名list
-                - test1
-                - test2
-                - test3
-            - symbol: ethusdt
-              signal_names:
-                - test1
-                - test2
-                - test3
-          contract:
-            - symbol: btcusdt
-              signal_names:
-                - test1
-                - test2
-                - test3
-            - symbol: ethusdt
-              signal_names:
-                - test1
-                - test2
-                - test3
-        test_net: { }
-
-
-package com.helei.tradesignalprocess.config;
-
-import com.helei.constants.trade.TradeType;
-import com.helei.constants.RunEnv;
-import com.helei.dto.config.RunTypeConfig;
-import com.helei.dto.kafka.TradeSignalTopic;
-import lombok.Data;
-import org.yaml.snakeyaml.Yaml;
-
-import java.io.InputStream;
-import java.io.Serializable;
-import java.util.Map;
-
-@Data
-public class TradeSignalConfig implements Serializable {
-    private static final String CONFIG_FILE = "trade-signal-config.yaml";
-
-    public static final TradeSignalConfig TRADE_SIGNAL_CONFIG;
-
-    /**
-     * 信号名
-     */
-    private String name;
-
-    /**
-     * 信号交易对
-     */
-    private String symbol;
-
-    /**
-     * 运行环境设置
-     */
-    private RunTypeConfig run_type;
-
-    /**
-     * 历史k线加载批大小
-     */
-    private int historyKLineBatchSize;
-
-    /**
-     * 批加载并发度
-     */
-    private int batchLoadConcurrent;
-
-    /**
-     * 实时数据配置
-     */
-    private RealtimeConfig realtime;
-
-    static {
-        Yaml yaml = new Yaml();
-        try (InputStream inputStream = TradeSignalConfig.class.getClassLoader().getResourceAsStream(CONFIG_FILE)) {
-            if (inputStream == null) {
-                throw new IllegalArgumentException("File not found: " + CONFIG_FILE);
-            }
-            Map<String, Object> yamlData = yaml.load(inputStream);
-            Map<String, Object> shinano = (Map<String, Object>) yamlData.get("shinano");
-            Map<String, Object> quantity = (Map<String, Object>) shinano.get("quantity");
-            Map<String, Object> trade_signal_maker = (Map<String, Object>) quantity.get("trade_signal_maker");
-
-
-            TRADE_SIGNAL_CONFIG = yaml.loadAs(yaml.dump(trade_signal_maker), TradeSignalConfig.class);
-
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to load YAML file: " + CONFIG_FILE, e);
+            String key = RedisKeyUtil.getUserInfoKeyPrefix(env, tradeType) + userInfo.getId();
+            batchWriteSupporter.writeToRedis(key, JSONObject.toJSONString(userInfo));
         }
     }
 
-    private TradeSignalConfig() {}
-
-    /**
-     * 获取最终交易信号写入到kafka到topic
-     * @return topic
-     */
-    public TradeSignalTopic getSinkTopic() {
-        return new TradeSignalTopic(getRun_env(), getTrade_type(), symbol, name);
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        for (KeyValue<RunEnv, TradeType> keyValue : realtimeConfig.getRun_type().getRunTypeList()) {
+            updateUserInfoToRedis(keyValue.getKey(), keyValue.getValue());
+        }
     }
-
-    public TradeType getTrade_type() {
-        return run_type.getConfigs().getFirst().getTrade_type().getFirst();
-    }
-
-    public RunEnv getRun_env() {
-        return run_type.getConfigs().getFirst().getEnv();
-    }
+}
 
 
-    @Data
-    public static class RealtimeConfig  implements Serializable  {
+package com.helei;
 
-        private RealtimeKafkaConfig kafka;
+import com.helei.reaktimedatacenter.service.AccountEventStreamService;
+import com.helei.reaktimedatacenter.service.MarketRealtimeDataService;
+import com.helei.reaktimedatacenter.service.impl.market.RandomMarketRTDataService;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.ConfigurableApplicationContext;
 
-        private RealtimeFlinkConfig flink;
-
-    }
-
-
-    @Data
-    public static class RealtimeKafkaConfig  implements Serializable  {
-
-        /**
-         * 输入的配置
-         */
-        private KafkaServerConfig input;
-
-        /**
-         * 输出的配置
-         */
-        private KafkaServerConfig output;
-
-    }
-
-    @Data
-    public static class KafkaServerConfig  implements Serializable  {
-        /**
-         * kafka集群连接地址
-         */
-        private String bootstrapServer;
-
-        /**
-         * 消费者组名
-         */
-        private String groupId;
-
-        /**
-         * 事务超时时间，需要比kafka broker 中设置的小
-         */
-        private String transaction_timeout_ms;
-    }
-
-    @Data
-    public static class RealtimeFlinkConfig  implements Serializable  {
-
-        /**
-         * flink job manager host
-         */
-        private String jobManagerHost;
-        /**
-         * flink job manager port
-         */
-        private Integer jobManagerPort;
-    }
-
+/**
+ * 实时数据中心
+ */
+@SpringBootApplication
+public class RealtimeDataCenter {
     public static void main(String[] args) {
-        System.out.println(TRADE_SIGNAL_CONFIG);
+        ConfigurableApplicationContext applicationContext = SpringApplication.run(RealtimeDataCenter.class, args);
+
+
+        startRTDataStream(applicationContext);
+
+//        startAccountEventStream(applicationContext);
     }
 
+    private static void startAccountEventStream(ConfigurableApplicationContext applicationContext) {
+        AccountEventStreamService accountEventStreamService = applicationContext.getBean(AccountEventStreamService.class);
+        accountEventStreamService.startAllUserInfoEventStream();
+    }
+
+    private static void startRTDataStream(ConfigurableApplicationContext applicationContext) {
+        MarketRealtimeDataService marketRealtimeDataService = applicationContext.getBean(RandomMarketRTDataService.class);
+        marketRealtimeDataService.startSyncRealTimeKLine();
+    }
 }
 
 
 
 
 
+package com.helei.reaktimedatacenter.service.impl;
 
-
-
-package com.helei.tradesignalprocess.stream.d_decision;
-
-import com.helei.dto.config.SnowFlowConfig;
-import com.helei.dto.trade.IndicatorMap;
-import com.helei.dto.trade.IndicatorSignal;
-import com.helei.dto.trade.SignalGroupKey;
-import com.helei.snowflack.BRStyle;
-import com.helei.snowflack.SnowFlakeFactory;
-import com.helei.tradesignalprocess.config.TradeSignalConfig;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.flink.api.common.state.MapState;
-import org.apache.flink.api.common.state.MapStateDescriptor;
-import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
-import org.apache.flink.api.common.typeinfo.TypeHint;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
-import org.apache.flink.util.Collector;
+import com.helei.dto.account.UserInfo;
+import com.helei.reaktimedatacenter.service.impl.account.BinanceAccountEventStreamService;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
 
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
+@SpringBootTest
+class BinanceAccountEventStreamServiceTest {
 
-@Slf4j
-@Getter
-@Setter
-public abstract class AbstractDecisionMaker<T> extends KeyedProcessFunction<String, Tuple2<SignalGroupKey, List<IndicatorSignal>>, T> {
+    @Autowired
+    private UserServiceImpl userService;
 
-    private transient SnowFlakeFactory snowFlakeFactory;
+    @Autowired
+    private BinanceAccountEventStreamService binanceAccountEventStreamService;
 
-    private final String name;
-
-    /**
-     * 存放历史信号
-     */
-    private MapState<String, Tuple2<SignalGroupKey, List<IndicatorSignal>>> historySignalMapState;
-
-    protected AbstractDecisionMaker(String name) {
-        this.name = name;
+    @BeforeEach
+    void setUp() {
     }
 
-    @Override
-    public void open(Configuration parameters) throws Exception {
-        historySignalMapState = getRuntimeContext().getMapState(new MapStateDescriptor<>("historySignalMapState", BasicTypeInfo.STRING_TYPE_INFO, TypeInformation.of(new TypeHint<>() {
-        })));
-        SnowFlowConfig snowFlow = TradeSignalConfig.TRADE_SIGNAL_CONFIG.getRun_type().getSnow_flow();
-        snowFlakeFactory = new SnowFlakeFactory(snowFlow);
+    @AfterEach
+    void tearDown() {
     }
 
-    @Override
-    public void processElement(Tuple2<SignalGroupKey, List<IndicatorSignal>> kLineListTuple2, KeyedProcessFunction<String, Tuple2<SignalGroupKey, List<IndicatorSignal>>, T>.Context context, Collector<T> collector) throws Exception {
+    @Test
+    void startAllUserInfoEventStream() {
+        binanceAccountEventStreamService.startAllUserInfoEventStream();
 
-        SignalGroupKey key = kLineListTuple2.getField(0);
-        String symbol = key.getSymbol();
-        List<IndicatorSignal> signals = kLineListTuple2.getField(1);
-
-        if (signals.isEmpty()) {
-            log.debug("[{}] - symbol[{}]时间窗口内没有信号", symbol, name);
-        } else {
-            log.debug("[{}] - symbol[{}]当前时间窗口，产生[{}]个信号", name, signals, signals.size());
-            T out = decisionAndBuilderOrder(symbol, signals, null);
-
-            //更新历史信号
-            historySignalMapState.put(key.getStreamKey(), kLineListTuple2);
-
-            if (out != null) {
-                log.info("[{}] - symbol[{}]窗口内信号满足决策下单条件，下单[{}}", name, symbol, out);
-                collector.collect(out);
-            }
-        }
     }
 
-    protected abstract T decisionAndBuilderOrder(String symbol, List<IndicatorSignal> windowSignal, IndicatorMap indicatorMap);
+    @Test
+    void startUserInfoEventStream() throws InterruptedException {
 
+        List<UserInfo> userInfos = userService.queryAll();
 
-    /**
-     * 下一个信号id，采用雪花算法
-     *
-     * @return id
-     */
-    protected String nextSignalId() {
-        return snowFlakeFactory.nextId(BRStyle.TRADE_SIGNAL);
-    }
+        UserInfo first = userInfos.getFirst();
+        UserInfo two = userInfos.get(1);
+        UserInfo three = userInfos.get(2);
 
-    /**
-     * 取历史信号
-     *
-     * @param kLineStreamKey kLine的key，symbol + interval
-     * @return 历史信号
-     * @throws Exception 异常
-     */
-    private Tuple2<SignalGroupKey, List<IndicatorSignal>> getHistorySignal(String kLineStreamKey) throws Exception {
-        return historySignalMapState.get(kLineStreamKey);
+        binanceAccountEventStreamService.startUserInfoEventStream(three);
+
+        TimeUnit.MINUTES.sleep(1000);
     }
 }
 
 
-shinano:
-  quantity:
-    # 信号生成服务配置
-    trade_signal_maker:
-      # name
-      name: test
-      # symbol
-      symbol: btcusdt
 
-      run_type:
-        configs:
-          - env: NORMAL  # 运行环境
-            trade_type:  # 交易类型
-              - SPOT
-        snow_flow: # 雪花算法配置
-          datacenter_id: 0 # 数据中心id
-          machine_id: 1 # 机器id
+package com.helei.service.impl;
 
-      # 历史k线加载批大小
-      historyKLineBatchSize: 200
-      # 批加载的网络并发度
-      batchLoadConcurrent: 10
-      # 实时数据配置
-      realtime:
-        # kafka配置
-        kafka:
-          input:
-            bootstrapServer: 192.168.1.2:9092
-            groupId: trade_signal_app_test
-            transaction_timeout_ms: 900000
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.reaktimedatacenter.service.impl.market.BinanceMarketRTDataService;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
 
-          output:
-            bootstrapServer: 192.168.1.2:9092
-            groupId: trade_signal_app_test
-            transaction_timeout_ms: 900000
+import java.util.concurrent.TimeUnit;
 
-        # flink配置
-        flink:
-          jobManagerHost: 192.168.1.2
-          jobManagerPort: 8081
+@SpringBootTest
+class BinanceMarketRTDataServiceTest {
+
+    @Autowired
+    private BinanceMarketRTDataService binanceMarketRTDataService;
+
+
+
+    @Test
+    void startSyncRealTimeKLine() throws InterruptedException {
+        binanceMarketRTDataService.startSyncRealTimeKLine(RunEnv.TEST_NET, TradeType.SPOT);
+
+        TimeUnit.MINUTES.sleep(1000);
+    }
+}
+
 
