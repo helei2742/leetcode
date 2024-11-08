@@ -1,3 +1,152 @@
+package com.helei.constants.api;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.constants.trade.TradeType;
+import lombok.Data;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+
+@Data
+public abstract class AbstractRestApiSchema {
+
+    private static final Map<String, AbstractRestApiSchema> TYPE_MAP = new HashMap<>();
+
+
+    /**
+     * 交易类型
+     */
+    private final TradeType tradeType;
+
+    /**
+     * api类型
+     */
+    private final RestApiType restApiType;
+
+
+    /**
+     * 请求方法
+     */
+    private String method;
+
+    /**
+     * 请求的路径
+     */
+    private String path;
+
+    /**
+     * 请求的query参数的Key
+     */
+    private List<String> queryKey;
+
+    /**
+     * 请求body参数的key
+     */
+    private List<String> bodyKey;
+
+
+    protected AbstractRestApiSchema(TradeType tradeType, RestApiType restApiType) {
+        this.tradeType = tradeType;
+        this.restApiType = restApiType;
+        TYPE_MAP.put(generateKey(tradeType, restApiType), this);
+
+        initSchema(this);
+    }
+
+    public abstract void initSchema(AbstractRestApiSchema restApiSchema);
+
+
+    public abstract int calculateIpWeight(JSONObject allParams);
+
+    public abstract <R> R requestResultHandler(String result);
+
+    /**
+     * 构造Key
+     *
+     * @param tradeType   交易类型
+     * @param restApiType restApi类型
+     * @return key
+     */
+    private static String generateKey(TradeType tradeType, RestApiType restApiType) {
+        return tradeType.name() + ":" + restApiType.name();
+    }
+
+
+    @Override
+    public String toString() {
+        return method + " " + path + " query [" + queryKey + "] body [" + bodyKey + "]";
+    }
+}
+
+package com.helei.constants.api;
+
+public class RestApiParamKey {
+
+    public static final String symbol = "symbol";
+
+    public static final String interval = "interval";
+
+    public static final String startTime = "startTime";
+
+    public static final String endTime = "endTime";
+
+    public static final String limit = "limit";
+
+    public static final String timeZone = "timeZone";
+}
+
+package com.helei.constants.api;
+
+
+
+/**
+ * RestApi 类型
+ */
+public enum RestApiType {
+
+    KLINE,
+    QUERY_LISTEN_KEY, LENGTH_LISTEN_KEY, REMOVE_LISTEN_KEY,
+
+}
+
+package com.helei.constants;
+
+
+/**
+ * WS客户端状态
+ */
+public enum WebsocketClientStatus {
+
+    /**
+     * 新建
+     */
+    NEW,
+
+    /**
+     * 正在启动
+     */
+    STARTING,
+
+    /**
+     * 正在运行
+     */
+    RUNNING,
+
+    /**
+     * 已暂停
+     */
+    STOP,
+
+    /**
+     * 已禁止使用
+     */
+    SHUTDOWN
+}
+
+
+
 package com.helei.dto.account;
 
 
@@ -87,6 +236,7 @@ public class UserAccountInfo implements Serializable {
         this.accountPositionInfo.setAccountId(id);
     }
 }
+
 
 package com.helei.dto.account;
 
@@ -196,6 +346,7 @@ public class UserAccountTradeDetail implements Serializable {
 }
 
 
+
 package com.helei.dto.base;
 
 import lombok.AllArgsConstructor;
@@ -215,11 +366,84 @@ public class HandlerEntity<T> {
     private Consumer<T> callback;
 }
 
+package com.helei.dto.config;
+
+
+import com.alibaba.fastjson.annotation.JSONField;
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.base.KeyValue;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * 运行类型设置
+ */
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+public class RunTypeConfig {
+
+    public static final RunTypeConfig DEFAULT_RUN_TYPE_CONFIG;
+
+    private List<RunEnvTradeTypeConfig> configs;
+
+    private SnowFlowConfig snow_flow;
+
+    static {
+        DEFAULT_RUN_TYPE_CONFIG = new RunTypeConfig();
+        List<RunEnvTradeTypeConfig> list = new ArrayList<>();
+        list.add(new RunEnvTradeTypeConfig(RunEnv.NORMAL, CEXType.BINANCE, List.of(TradeType.SPOT, TradeType.CONTRACT)));
+        list.add(new RunEnvTradeTypeConfig(RunEnv.NORMAL, CEXType.BINANCE, List.of(TradeType.CONTRACT, TradeType.CONTRACT)));
+        list.add(new RunEnvTradeTypeConfig(RunEnv.TEST_NET, CEXType.BINANCE, List.of(TradeType.SPOT, TradeType.CONTRACT)));
+        list.add(new RunEnvTradeTypeConfig(RunEnv.TEST_NET, CEXType.BINANCE, List.of(TradeType.CONTRACT, TradeType.CONTRACT)));
+
+        DEFAULT_RUN_TYPE_CONFIG.setConfigs(list);
+        DEFAULT_RUN_TYPE_CONFIG.setSnow_flow(new SnowFlowConfig());
+    }
+
+    /**
+     * 获取运行类型列表
+     *
+     * @return 类型列表
+     */
+    @JSONField(serialize = false)
+    public List<KeyValue<RunEnv, TradeType>> getRunTypeList() {
+        List<KeyValue<RunEnv, TradeType>> list = new ArrayList<>();
+        for (RunEnvTradeTypeConfig runEnvTradeTypeConfig : configs) {
+            list.addAll(runEnvTradeTypeConfig.getRunTypeList());
+        }
+        return list;
+    }
+
+
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    public static class RunEnvTradeTypeConfig {
+        private RunEnv env;
+
+        private CEXType cexType = CEXType.BINANCE;
+
+        private List<TradeType> trade_type;
+
+        @JSONField(serialize = false)
+        public List<KeyValue<RunEnv, TradeType>> getRunTypeList() {
+            return trade_type.stream().map(e -> new KeyValue<>(env, e)).toList();
+        }
+    }
+}
 
 package com.helei.netty.base;
 
 
 import com.alibaba.fastjson.JSON;
+import com.helei.constants.WebsocketClientStatus;
 import com.helei.netty.NettyConstants;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.*;
@@ -247,6 +471,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
@@ -294,10 +519,16 @@ public abstract class AbstractWebsocketClient<P, T> {
     private final ReentrantLock reconnectLock = new ReentrantLock();
 
     /**
-     * 当前是否在允许
+     * 启动中阻塞的condition
+     */
+    private final Condition startingWaitCondition = reconnectLock.newCondition();
+
+    /**
+     * 客户端当前状态
      */
     @Getter
-    private final AtomicBoolean isRunning = new AtomicBoolean(false);
+    private volatile WebsocketClientStatus clientStatus = WebsocketClientStatus.NEW;
+
 
     @Setter
     @Getter
@@ -386,18 +617,17 @@ public abstract class AbstractWebsocketClient<P, T> {
      *
      * @throws SSLException Exception
      */
-    public CompletableFuture<Void> connect() throws SSLException, URISyntaxException {
-        if (isRunning.get()) {
-            log.warn("WS客户端[{}}已链接", url);
-            return CompletableFuture.runAsync(() -> {
-            });
-        }
+    public CompletableFuture<Boolean> connect() throws SSLException, URISyntaxException {
 
-        log.info("开始初始化WS客户端");
-        init();
-        log.info("初始化WS客户端完成，开始链接服务器 [{}]", url);
-
-        return reconnect();
+        return switch (clientStatus) {
+            case NEW, STOP -> reconnect();
+            case STARTING -> waitForStarting();
+            case RUNNING -> {
+                log.warn("WS客户端[{}}正在运行, clientStatus[{}]", url, clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN -> throw new RuntimeException("client already shutdown");
+        };
     }
 
 
@@ -406,12 +636,40 @@ public abstract class AbstractWebsocketClient<P, T> {
      *
      * @return CompletableFuture<Void>
      */
-    public CompletableFuture<Void> reconnect() {
-        return CompletableFuture.runAsync(() -> {
+    public CompletableFuture<Boolean> reconnect() {
+        return switch (clientStatus) {
+            case NEW, STOP -> doReconnect();
+            case STARTING -> waitForStarting();
+            case RUNNING -> {
+                log.warn("WS客户端[{}}正在启动或运行, 不能reconnect. clientStatus[{}]", url, clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN -> throw new RuntimeException("client already shutdown");
+        };
+    }
+
+    /**
+     * 执行重连接，带重试逻辑
+     *
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Boolean> doReconnect() {
+        return CompletableFuture.supplyAsync(() -> {
+            log.info("开始初始化WS客户端");
+            clientStatus = WebsocketClientStatus.STARTING;
+
+            try {
+                init();
+            } catch (SSLException | URISyntaxException e) {
+                throw new RuntimeException("初始化WS客户端发生错误", e);
+            }
+            log.info("初始化WS客户端完成，开始链接服务器 [{}]", url);
+
+
             if (reconnectTimes.get() > NettyConstants.RECONNECT_LIMIT) {
                 log.error("reconnect times out of limit [{}], close websocket client", NettyConstants.RECONNECT_LIMIT);
                 close();
-                return;
+                return false;
             }
 
             AtomicBoolean isSuccess = new AtomicBoolean(false);
@@ -421,7 +679,7 @@ public abstract class AbstractWebsocketClient<P, T> {
                 while (reconnectTimes.incrementAndGet() <= NettyConstants.RECONNECT_LIMIT) {
                     eventLoopGroup.schedule(() -> {
                         reconnectTimes.decrementAndGet();
-                    }, 60, TimeUnit.SECONDS);
+                    }, 180, TimeUnit.SECONDS);
 
                     log.info("start connect client [{}], url[{}], current times [{}]", name, url, reconnectTimes.get());
                     CountDownLatch latch = new CountDownLatch(1);
@@ -450,42 +708,88 @@ public abstract class AbstractWebsocketClient<P, T> {
 
                     if (isSuccess.get()) {
                         log.info("connect client [{}], url[{}] success, current times [{}]", name, url, reconnectTimes.get());
-                        isRunning.set(true);
+
+                        clientStatus = WebsocketClientStatus.RUNNING;
+
                         reconnectTimes.set(0);
                         break;
                     }
                 }
+            } catch (Exception e) {
+                close();
+                throw new RuntimeException(String.format("connect client [%s] appear unknown error", name), e);
             } finally {
+                startingWaitCondition.signalAll();
                 reconnectLock.unlock();
             }
 
             if (!isSuccess.get()) {
-                isRunning.set(false);
                 log.error("reconnect times out of limit [{}], close websocket client", NettyConstants.RECONNECT_LIMIT);
                 close();
-
                 throw new RuntimeException("reconnect times out of limit");
             }
+
+            return true;
         }, callbackInvoker);
     }
 
 
     /**
-     * 关闭WebSocketClient
+     * 停止WebSocketClient
      */
     public void close() {
-        log.info("start close websocket client [{}]", name);
+        log.info("closing websocket client [{}]", name);
         if (channel != null) {
             channel.close();
         }
+
         if (eventLoopGroup != null) {
             eventLoopGroup.shutdownGracefully();
         }
-
         reconnectTimes.set(0);
-        isRunning.set(false);
-        log.info("web socket client [{}] closed", name);
+
+        clientStatus = WebsocketClientStatus.STOP;
+
+        log.warn("web socket client [{}] closed", name);
     }
+
+    /**
+     * 彻底关闭客户端
+     */
+    public void shutdown() {
+        close();
+        clientStatus = WebsocketClientStatus.SHUTDOWN;
+        log.warn("web socket client [{}] already shutdown !", name);
+    }
+
+    /**
+     * 等待启动完成
+     *
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Boolean> waitForStarting() {
+        return CompletableFuture.supplyAsync(() -> {
+            log.warn("client [{}] is starting, waiting for complete", name);
+            reconnectLock.lock();
+            try {
+                while (clientStatus.equals(WebsocketClientStatus.RUNNING)) {
+                    startingWaitCondition.await();
+                }
+
+                if (clientStatus.equals(WebsocketClientStatus.STOP) || clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+                    log.error("启动WS客户端[{}]失败, ClientStatus [{}}", name, clientStatus);
+                    return false;
+                }
+                return true;
+            } catch (InterruptedException e) {
+                log.error("waiting for start client [{}] error", name);
+                throw new RuntimeException(e);
+            } finally {
+                reconnectLock.unlock();
+            }
+        }, callbackInvoker);
+    }
+
 
     /**
      * 发送请求, 注册响应监听
@@ -611,6 +915,8 @@ public abstract class AbstractWebsocketClient<P, T> {
     }
 }
 
+
+
 package com.helei.netty.base;
 
 import cn.hutool.core.util.StrUtil;
@@ -735,6 +1041,9 @@ public abstract class AbstractWebSocketClientHandler<P, T> extends BaseWebSocket
 }
 
 
+
+
+
 package com.helei.netty.base;
 
 import com.helei.netty.NettyConstants;
@@ -789,13 +1098,14 @@ public abstract class BaseWebSocketClientHandler<P, T> extends SimpleChannelInbo
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-        log.info("WebSocket Client [{}] disconnected!", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
-        websocketClient.getIsRunning().set(false);
+        log.warn("WebSocket Client [{}] disconnected!", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
+
+        websocketClient.close();
     }
 
     @Override
     public void channelUnregistered(ChannelHandlerContext ctx) throws Exception {
-        log.info("WebSocket Client [{}] unregistered!, start reconnect", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
+        log.warn("WebSocket Client [{}] unregistered!, start reconnect", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
 
         websocketClient.reconnect();
     }
@@ -901,6 +1211,207 @@ public abstract class BaseWebSocketClientHandler<P, T> extends SimpleChannelInbo
         return handshakeFuture;
     }
 }
+
+package com.helei.binanceapi.api.rest;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.config.BinanceApiConfig;
+import com.helei.binanceapi.constants.api.BinanceRestApiType;
+import com.helei.binanceapi.supporter.IpWeightSupporter;
+import com.helei.binanceapi.util.SignatureUtil;
+import com.helei.constants.RunEnv;
+import com.helei.constants.api.AbstractRestApiSchema;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.ASKey;
+import lombok.extern.slf4j.Slf4j;
+import okhttp3.FormBody;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+
+import java.io.IOException;
+import java.net.Proxy;
+import java.net.SocketTimeoutException;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+
+@Slf4j
+public class BinanceRestHttpApiClient {
+
+    private static final int RETRY_TIMES = 1;
+
+    private final OkHttpClient okHttpClient;
+
+    private final ExecutorService executor;
+
+    private final IpWeightSupporter ipWeightSupporter;
+
+    private final BinanceApiConfig binanceApiConfig;
+
+
+    public BinanceRestHttpApiClient(
+            BinanceApiConfig binanceApiConfig,
+            ExecutorService executor
+    ) {
+        this.executor = executor;
+        this.binanceApiConfig = binanceApiConfig;
+        this.ipWeightSupporter = new IpWeightSupporter("123");
+
+        OkHttpClient.Builder builder = new OkHttpClient.Builder();
+        if (binanceApiConfig.getProxy() != null) {
+            builder.proxy(new Proxy(Proxy.Type.HTTP, binanceApiConfig.getProxy()));
+        }
+        this.okHttpClient = builder.build();
+    }
+
+    /**
+     * 发送请求
+     *
+     * @param runEnv             runEnv
+     * @param binanceRestApiType rest接口类型
+     * @param allParam           所有的参数
+     * @param asKey              用于签名
+     * @return result 的future
+     */
+    public <R> CompletableFuture<R> queryBinanceApi(
+            RunEnv runEnv,
+            BinanceRestApiType binanceRestApiType,
+            JSONObject allParam,
+            ASKey asKey
+    ) {
+        AbstractRestApiSchema restApiSchema = binanceRestApiType.getRestApiSchema();
+        TradeType tradeType = restApiSchema.getTradeType();
+
+        int ipWeight = restApiSchema.calculateIpWeight(allParam);
+
+        BinanceApiConfig.BinanceTypedUrl envUrlSet = binanceApiConfig.getEnvUrlSet(runEnv, tradeType);
+
+        String baseUrl = envUrlSet.getRest_api_url();
+
+        return request(
+                baseUrl,
+                restApiSchema.getMethod(),
+                restApiSchema.getPath(),
+                ipWeight,
+                restApiSchema.getQueryKey() == null ? Collections.emptySet() : new HashSet<>(restApiSchema.getQueryKey()),
+                restApiSchema.getBodyKey() == null ? Collections.emptySet() : new HashSet<>(restApiSchema.getBodyKey()),
+                allParam,
+                asKey
+        ).thenApplyAsync(restApiSchema::requestResultHandler, executor);
+    }
+
+
+    /**
+     * 发送请求
+     *
+     * @param baseUrl   baseUrl
+     * @param method    方法
+     * @param path      path
+     * @param ipWeight  ipWeight
+     * @param paramsKey query参数的Key
+     * @param bodyKey   body参数的Key
+     * @param allParam  所有参数
+     * @param asKey     ASKey
+     * @return future
+     */
+    private CompletableFuture<String> request(
+            String baseUrl,
+            String method,
+            String path,
+            int ipWeight,
+            Set<String> paramsKey,
+            Set<String> bodyKey,
+            JSONObject allParam,
+            ASKey asKey
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+
+            if (!ipWeightSupporter.submitIpWeight(ipWeight)) {
+                log.error("ip 请求受到限制，取消发送");
+                return null;
+            }
+
+            // 创建表单数据
+            StringBuilder queryString = new StringBuilder();
+            StringBuilder payload = new StringBuilder();
+
+            FormBody.Builder bodyBuilder = new FormBody.Builder();
+
+            allParam.keySet().stream().sorted().forEach(key -> {
+                Object value = allParam.get(key);
+                if (paramsKey.contains(key)) {
+                    queryString.append(key).append("=").append(value).append("&");
+                } else if (bodyKey.contains(key)) {
+                    bodyBuilder.add(key, String.valueOf(value));
+                } else {
+                    return;
+                }
+
+                payload.append(key).append("=").append(value).append("&");
+            });
+
+            if (!queryString.isEmpty()) {
+                queryString.deleteCharAt(queryString.length() - 1);
+            }
+            if (!payload.isEmpty()) {
+                payload.deleteCharAt(payload.length() - 1);
+            }
+
+            String url = baseUrl + path + "?" + queryString;
+
+            Request.Builder builder = new Request.Builder();
+
+            if (asKey != null) {
+                try {
+                    url += "&signature=" + SignatureUtil.hmac256(asKey.getSecretKey(), payload.toString());
+                    builder.addHeader("X-MBX-APIKEY", asKey.getApiKey());
+                } catch (Exception e) {
+                    throw new RuntimeException("计算签名失败", e);
+                }
+            }
+
+
+            // 创建 POST 请求
+            builder.url(url);
+            String upperCase = method.toUpperCase();
+
+            if (upperCase.equals("GET")) {
+                builder.get();
+            } else {
+                builder.method(upperCase, bodyBuilder.build());
+            }
+
+            Request request = builder.build();
+
+            log.info("创建请求 url[{}], method[{}], is signature[{}] 成功，开始请求服务器", url, method, asKey != null);
+
+            Exception lastException = null;
+
+            for (int i = 0; i < RETRY_TIMES; i++) {
+                // 发送请求并获取响应
+                try (Response response = okHttpClient.newCall(request).execute()) {
+                    if (response.isSuccessful()) {
+                        return response.body() == null ? "" : response.body().string();
+                    } else {
+                        log.error("请求url [{}] 失败， code [{}]， {}", url, response.code(), response.body());
+                        break;
+                    }
+                } catch (SocketTimeoutException e) {
+                    log.warn("请求[{}]超时，尝试重新请求 [{}/{}]", url, i, RETRY_TIMES);
+                    lastException = e;
+                } catch (IOException e) {
+                    log.error("请求url [{}] 失败", url, e);
+                    lastException = e;
+                    throw new RuntimeException(e);
+                }
+            }
+
+            throw new RuntimeException(String.format("请求[%s]重试次数超过限制", url), lastException);
+        }, executor);
+    }
+}
+
 
 
 package com.helei.binanceapi.api.ws;
@@ -1179,6 +1690,7 @@ public class BinanceWSContractAccountApi extends AbstractBinanceWSApi {
     }
 
 }
+
 
 package com.helei.binanceapi.api.ws;
 
@@ -1475,6 +1987,8 @@ public class BinanceWSSpotAccountApi extends AbstractBinanceWSApi {
         return binanceWSApiClient.sendRequest(20, command, asKey);
     }
 }
+
+
 
 package com.helei.binanceapi.api.ws;
 
@@ -1806,345 +2320,4 @@ public class BinanceWSTradeApi extends AbstractBinanceWSApi {
 }
 
 
-
-
-
-
-package com.helei.binanceapi.base;
-
-
-import java.net.URISyntaxException;
-
-/**
- * 币安接口基础类
- */
-public class AbstractBinanceWSApi {
-    protected final AbstractBinanceWSApiClient binanceWSApiClient;
-
-    public AbstractBinanceWSApi(
-            AbstractBinanceWSApiClient binanceWSApiClient
-    ) throws URISyntaxException {
-        this.binanceWSApiClient = binanceWSApiClient;
-    }
-
-
-}
-
-
-
-
-
-package com.helei.binanceapi.base;
-
-import cn.hutool.core.util.StrUtil;
-import com.alibaba.fastjson.JSONObject;
-import com.helei.binanceapi.constants.BinanceWSClientType;
-import com.helei.dto.ASKey;
-import com.helei.binanceapi.dto.StreamSubscribeEntity;
-import com.helei.dto.WebSocketCommandBuilder;
-import com.helei.binanceapi.supporter.IpWeightSupporter;
-import com.helei.binanceapi.util.SignatureUtil;
-import com.helei.binanceapi.constants.command.BaseCommandType;
-import com.helei.netty.base.AbstractWebsocketClient;
-import lombok.extern.slf4j.Slf4j;
-
-import java.net.URISyntaxException;
-import java.security.InvalidKeyException;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.function.Consumer;
-
-/**
- * 币按ws接口客户端抽象类
- */
-@Slf4j
-public class AbstractBinanceWSApiClient extends AbstractWebsocketClient<JSONObject, JSONObject> {
-    /**
-     * 币安客户端类型
-     */
-    private final BinanceWSClientType clientType;
-
-    /**
-     * 处理ip限制相关
-     */
-    private final IpWeightSupporter ipWeightSupporter;
-
-    private final AbstractBinanceWSApiClientHandler handler;
-
-
-    public AbstractBinanceWSApiClient(
-            BinanceWSClientType clientType,
-            String url,
-            IpWeightSupporter ipWeightSupporter,
-            AbstractBinanceWSApiClientHandler handler
-    ) throws URISyntaxException {
-        super(url, handler);
-        this.clientType = clientType;
-        this.ipWeightSupporter = ipWeightSupporter;
-        this.handler = handler;
-    }
-
-    /**
-     * 发生请求
-     *
-     * @param ipWeight ip weight
-     * @param request  请求体
-     * @param callback 回调
-     */
-    public void sendRequest(
-            int ipWeight,
-            JSONObject request,
-            Consumer<JSONObject> callback
-    ) {
-        sendRequest(ipWeight, request, null, callback);
-    }
-
-    /**
-     * 发生请求
-     *
-     * @param ipWeight ip weight
-     * @param request  请求体
-     * @param asKey    签名参数
-     * @param callback 回调
-     */
-    public void sendRequest(
-            int ipWeight,
-            JSONObject request,
-            ASKey asKey,
-            Consumer<JSONObject> callback
-    ) {
-        try {
-            if (ipWeightSupporter.submitIpWeight(ipWeight)) {
-                String id = handler.getRequestId(request);
-
-                //需要签名
-                if (asKey != null) {
-                    JSONObject params = request.getJSONObject("params");
-                    params.put("timestamp", System.currentTimeMillis());
-                    try {
-                        params.put("signature", SignatureUtil.signatureHMAC(asKey.getSecretKey(), params));
-                    } catch (InvalidKeyException e) {
-                        throw new IllegalArgumentException("signature params error");
-                    }
-                    params.put("apiKey", asKey.getApiKey());
-                }
-
-                super.sendRequest(request, response -> {
-                    if (response != null) {
-
-                        if (response.getInteger("status") != null && response.getInteger("status") != 200) {
-                            log.error("receive error response [{}]", response);
-                        }
-                        log.debug("send request id[{}] success, response[{}]", id, response);
-                        callback.accept(response);
-                    } else {
-                        callback.accept(null);
-                        log.error("send request id[{}] fail", id);
-                    }
-                });
-            } else {
-                log.warn("current ipWeight[{}] not support send request", ipWeightSupporter.currentWeight());
-            }
-        } catch (Exception e) {
-            log.error("send request error", e);
-        }
-    }
-
-    /**
-     * 发生请求
-     *
-     * @param ipWeight ip weight
-     * @param request  请求体
-     * @param asKey    签名
-     */
-    public CompletableFuture<JSONObject> sendRequest(
-            int ipWeight,
-            JSONObject request,
-            ASKey asKey
-    ) {
-        if (!ipWeightSupporter.submitIpWeight(ipWeight)) {
-            log.error("ipWeight[{}] not support send request", ipWeightSupporter.currentWeight());
-            return null;
-        }
-        return super.sendRequest(trySignatureRequest(request, asKey))
-                .thenApplyAsync(
-                        jb -> {
-                            if (jb == null || jb.getInteger("status") != 200) {
-                                log.error("请求不成功，响应为 [{}]", jb);
-                                throw new RuntimeException("请求不成功");
-                            }
-                            return jb;
-                        }
-                );
-    }
-
-
-    /**
-     * 如果askey不为空，则对请求进行签名
-     *
-     * @param request request
-     * @param asKey   asKey
-     * @return JSONObject 签名后的请求
-     */
-    private JSONObject trySignatureRequest(JSONObject request, ASKey asKey) {
-        //需要签名
-        if (asKey != null && StrUtil.isNotBlank(asKey.getApiKey()) && StrUtil.isNotBlank(asKey.getSecretKey())) {
-            JSONObject params = request.getJSONObject("params");
-            params.put("timestamp", System.currentTimeMillis());
-            params.put("apiKey", asKey.getApiKey());
-            try {
-                params.put("signature", SignatureUtil.signatureHMAC(asKey.getSecretKey(), params));
-            } catch (Exception e) {
-                log.error("signature params error", e);
-                return null;
-            }
-        }
-        return request;
-    }
-
-
-    /**
-     * 订阅stream
-     *
-     * @param subList 需订阅的类型
-     */
-    public void subscribeStream(List<StreamSubscribeEntity> subList) {
-
-        WebSocketCommandBuilder builder = WebSocketCommandBuilder.builder().setCommandType(BaseCommandType.SUBSCRIBE);
-
-        /*
-         * 由于StreamSubscribeEntity中可能存在鉴权的ASKey，需要每个单独发请求
-         */
-        for (StreamSubscribeEntity subscribeEntity : subList) {
-            builder.clear();
-            builder.addArrayParam(subscribeEntity.getStreamName());
-            JSONObject command = builder.build();
-
-            log.info("subscribe stream command: {}", command);
-
-            String id = command.getString("id");
-
-            sendRequest(1, command, subscribeEntity.getAsKey(), response -> {
-                if (response != null) {
-                    log.debug("get subscribe response: {}", response);
-                    handler.addSubscribe(List.of(subscribeEntity));
-                } else {
-                    log.error("get subscribe response error, requestId[{}]", id);
-                }
-            });
-        }
-    }
-}
-
-
-
-
-
-
-package com.helei.binanceapi.base;
-
-import cn.hutool.core.util.StrUtil;
-import com.alibaba.fastjson.JSONObject;
-import com.helei.binanceapi.dto.StreamSubscribeEntity;
-import com.helei.netty.base.AbstractWebSocketClientHandler;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-
-
-/**
- * 能够处理推送的消息，只要消息体的 e 字段为已注册的名
- */
-@Slf4j
-public abstract class AbstractBinanceWSApiClientHandler extends AbstractWebSocketClientHandler<JSONObject, JSONObject> {
-    /**
-     * 存储订阅流的信息，包含有收到流消息的回调。
-     */
-    protected final ConcurrentMap<String, StreamSubscribeEntity> subscribeMap;
-
-
-    public AbstractBinanceWSApiClientHandler() {
-        this.subscribeMap = new ConcurrentHashMap<>();
-    }
-
-    @Override
-    public JSONObject convertMessageToRespType(String message) {
-        return JSONObject.parseObject(message);
-    }
-
-    @Override
-    public String getRequestId(JSONObject request) {
-        return request.getString("id");
-    }
-
-    @Override
-    public String getResponseId(JSONObject response) {
-        return response.getString("id");
-    }
-
-    @Override
-    protected void handleOtherMessage(JSONObject message) {
-        String streamName = message.getString("e");
-
-        if (!StrUtil.isBlank(streamName)) {
-            handleStreamMessage(streamName, message);
-        }
-    }
-
-
-
-
-    /**
-     * 处理stream流推送消息
-     *
-     * @param streamName stream 流名称
-     * @param content    推送消息
-     */
-    protected abstract void handleStreamMessage(String streamName, JSONObject content);
-
-    /**
-     * 创建订阅
-     *
-     * @param subList stream订阅类型列表
-     */
-    public void addSubscribe(List<StreamSubscribeEntity> subList) {
-        for (StreamSubscribeEntity subscribeEntity : subList) {
-            subscribeMap.putIfAbsent(subscribeEntity.getStreamName(), subscribeEntity);
-        }
-    }
-
-}
-
-
-package com.helei.binanceapi.base;
-
-import com.helei.binanceapi.dto.accountevent.AccountEvent;
-
-public interface AccountEventInvocation {
-
-    void whenReceiveEvent(AccountEvent event);
-
-    String lengthListenKey(String oldListenKey);
-}
-
-
-
-package com.helei.binanceapi.base;
-
-
-import com.alibaba.fastjson.JSONObject;
-
-import java.util.Map;
-
-
-/**
- * 订阅流消息结果处理
- */
-public interface SubscribeResultInvocationHandler {
-
-    void invoke(String streamName, Map<String, Object> params, JSONObject result);
-
-}
 
