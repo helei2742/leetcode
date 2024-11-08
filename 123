@@ -1,3 +1,555 @@
+package com.helei.binanceapi.base;
+
+
+import java.net.URISyntaxException;
+
+/**
+ * 币安接口基础类
+ */
+public class AbstractBinanceWSApi {
+    protected final AbstractBinanceWSApiClient binanceWSApiClient;
+
+    public AbstractBinanceWSApi(
+            AbstractBinanceWSApiClient binanceWSApiClient
+    ) throws URISyntaxException {
+        this.binanceWSApiClient = binanceWSApiClient;
+    }
+
+
+}
+
+
+package com.helei.binanceapi.base;
+
+import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.constants.BinanceWSClientType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.ASKey;
+import com.helei.binanceapi.dto.StreamSubscribeEntity;
+import com.helei.dto.WebSocketCommandBuilder;
+import com.helei.binanceapi.supporter.IpWeightSupporter;
+import com.helei.binanceapi.util.SignatureUtil;
+import com.helei.binanceapi.constants.command.BaseCommandType;
+import com.helei.netty.base.AbstractWebsocketClient;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.net.URISyntaxException;
+import java.security.InvalidKeyException;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
+
+/**
+ * 币按ws接口客户端抽象类
+ */
+@Slf4j
+public class AbstractBinanceWSApiClient extends AbstractWebsocketClient<JSONObject, JSONObject> {
+
+    /**
+     * 运行环境
+     */
+    @Getter
+    @Setter
+    private RunEnv runEnv;
+
+    /**
+     * 交易类型
+     */
+    @Getter
+    @Setter
+    private TradeType tradeType;
+
+    /**
+     * 币安客户端类型
+     */
+    @Getter
+    private final BinanceWSClientType clientType;
+
+    /**
+     * 处理ip限制相关
+     */
+    private final IpWeightSupporter ipWeightSupporter;
+
+    protected final AbstractBinanceWSApiClientHandler handler;
+
+    public AbstractBinanceWSApiClient(
+            BinanceWSClientType clientType,
+            String url,
+            IpWeightSupporter ipWeightSupporter,
+            AbstractBinanceWSApiClientHandler handler
+    ) throws URISyntaxException {
+        super(url, handler);
+        this.clientType = clientType;
+        this.ipWeightSupporter = ipWeightSupporter;
+        this.handler = handler;
+    }
+
+    /**
+     * 发生请求
+     *
+     * @param ipWeight ip weight
+     * @param request  请求体
+     * @param callback 回调
+     */
+    public void sendRequest(
+            int ipWeight,
+            JSONObject request,
+            Consumer<JSONObject> callback
+    ) {
+        sendRequest(ipWeight, request, null, callback);
+    }
+
+    /**
+     * 发生请求
+     *
+     * @param ipWeight ip weight
+     * @param request  请求体
+     * @param asKey    签名参数
+     * @param callback 回调
+     */
+    public void sendRequest(
+            int ipWeight,
+            JSONObject request,
+            ASKey asKey,
+            Consumer<JSONObject> callback
+    ) {
+        try {
+            if (ipWeightSupporter.submitIpWeight(ipWeight)) {
+                String id = handler.getRequestId(request);
+
+                //需要签名
+                if (asKey != null) {
+                    JSONObject params = request.getJSONObject("params");
+                    params.put("timestamp", System.currentTimeMillis());
+                    try {
+                        params.put("signature", SignatureUtil.signatureHMAC(asKey.getSecretKey(), params));
+                    } catch (InvalidKeyException e) {
+                        throw new IllegalArgumentException("signature params error");
+                    }
+                    params.put("apiKey", asKey.getApiKey());
+                }
+
+                super.sendRequest(request, response -> {
+                    if (response != null) {
+
+                        if (response.getInteger("status") != null && response.getInteger("status") != 200) {
+                            log.error("receive error response [{}]", response);
+                        }
+                        log.debug("send request id[{}] success, response[{}]", id, response);
+                        callback.accept(response);
+                    } else {
+                        callback.accept(null);
+                        log.error("send request id[{}] fail", id);
+                    }
+                });
+            } else {
+                log.warn("current ipWeight[{}] not support send request", ipWeightSupporter.currentWeight());
+            }
+        } catch (Exception e) {
+            log.error("send request error", e);
+        }
+    }
+
+    /**
+     * 发生请求
+     *
+     * @param ipWeight ip weight
+     * @param request  请求体
+     * @param asKey    签名
+     */
+    public CompletableFuture<JSONObject> sendRequest(
+            int ipWeight,
+            JSONObject request,
+            ASKey asKey
+    ) {
+        if (!ipWeightSupporter.submitIpWeight(ipWeight)) {
+            log.error("ipWeight[{}] not support send request", ipWeightSupporter.currentWeight());
+            return null;
+        }
+        return super.sendRequest(trySignatureRequest(request, asKey))
+                .thenApplyAsync(
+                        jb -> {
+                            if (jb == null || jb.getInteger("status") != 200) {
+                                log.error("请求不成功，响应为 [{}]", jb);
+                                throw new RuntimeException("请求不成功");
+                            }
+                            return jb;
+                        }
+                );
+    }
+
+
+    /**
+     * 如果askey不为空，则对请求进行签名
+     *
+     * @param request request
+     * @param asKey   asKey
+     * @return JSONObject 签名后的请求
+     */
+    private JSONObject trySignatureRequest(JSONObject request, ASKey asKey) {
+        //需要签名
+        if (asKey != null && StrUtil.isNotBlank(asKey.getApiKey()) && StrUtil.isNotBlank(asKey.getSecretKey())) {
+            JSONObject params = request.getJSONObject("params");
+            params.put("timestamp", System.currentTimeMillis());
+            params.put("apiKey", asKey.getApiKey());
+            try {
+                params.put("signature", SignatureUtil.signatureHMAC(asKey.getSecretKey(), params));
+            } catch (Exception e) {
+                log.error("signature params error", e);
+                return null;
+            }
+        }
+        return request;
+    }
+
+
+    /**
+     * 订阅stream
+     *
+     * @param subList 需订阅的类型
+     */
+    public void subscribeStream(List<StreamSubscribeEntity> subList) {
+
+        WebSocketCommandBuilder builder = WebSocketCommandBuilder.builder().setCommandType(BaseCommandType.SUBSCRIBE);
+
+        /*
+         * 由于StreamSubscribeEntity中可能存在鉴权的ASKey，需要每个单独发请求
+         */
+        for (StreamSubscribeEntity subscribeEntity : subList) {
+            builder.clear();
+            builder.addArrayParam(subscribeEntity.getStreamName());
+            JSONObject command = builder.build();
+
+            log.info("subscribe stream command: {}", command);
+
+            String id = command.getString("id");
+
+            sendRequest(1, command, subscribeEntity.getAsKey(), response -> {
+                if (response != null) {
+                    log.debug("get subscribe response: {}", response);
+                    handler.addSubscribe(List.of(subscribeEntity));
+                } else {
+                    log.error("get subscribe response error, requestId[{}]", id);
+                }
+            });
+        }
+    }
+}
+
+
+
+package com.helei.binanceapi.base;
+
+import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.dto.StreamSubscribeEntity;
+import com.helei.netty.base.AbstractWebSocketClientHandler;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+
+/**
+ * 能够处理推送的消息，只要消息体的 e 字段为已注册的名
+ */
+@Slf4j
+public abstract class AbstractBinanceWSApiClientHandler extends AbstractWebSocketClientHandler<JSONObject, JSONObject> {
+    /**
+     * 存储订阅流的信息，包含有收到流消息的回调。
+     */
+    protected final ConcurrentMap<String, StreamSubscribeEntity> subscribeMap;
+
+
+    public AbstractBinanceWSApiClientHandler() {
+        this.subscribeMap = new ConcurrentHashMap<>();
+    }
+
+    @Override
+    public JSONObject convertMessageToRespType(String message) {
+        return JSONObject.parseObject(message);
+    }
+
+    @Override
+    public String getRequestId(JSONObject request) {
+        return request.getString("id");
+    }
+
+    @Override
+    public String getResponseId(JSONObject response) {
+        return response.getString("id");
+    }
+
+    @Override
+    protected void handleOtherMessage(JSONObject message) {
+        String streamName = message.getString("e");
+
+        if (!StrUtil.isBlank(streamName)) {
+            handleStreamMessage(streamName, message);
+        }
+    }
+
+
+
+
+    /**
+     * 处理stream流推送消息
+     *
+     * @param streamName stream 流名称
+     * @param content    推送消息
+     */
+    protected abstract void handleStreamMessage(String streamName, JSONObject content);
+
+    /**
+     * 创建订阅
+     *
+     * @param subList stream订阅类型列表
+     */
+    public void addSubscribe(List<StreamSubscribeEntity> subList) {
+        for (StreamSubscribeEntity subscribeEntity : subList) {
+            subscribeMap.putIfAbsent(subscribeEntity.getStreamName(), subscribeEntity);
+        }
+    }
+
+}
+
+
+package com.helei.binanceapi.base;
+
+import com.helei.binanceapi.dto.accountevent.AccountEvent;
+
+public interface AccountEventInvocation {
+
+    void whenReceiveEvent(AccountEvent event);
+
+    String lengthListenKey(String oldListenKey);
+}
+
+
+
+package com.helei.binanceapi.base;
+
+
+import com.alibaba.fastjson.JSONObject;
+
+import java.util.Map;
+
+
+/**
+ * 订阅流消息结果处理
+ */
+public interface SubscribeResultInvocationHandler {
+
+    void invoke(String streamName, Map<String, Object> params, JSONObject result);
+
+}
+
+
+
+package com.helei.binanceapi.constants.api;
+
+
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.supporter.KLineMapper;
+import com.helei.constants.api.AbstractRestApiSchema;
+import com.helei.constants.api.RestApiParamKey;
+import com.helei.constants.api.RestApiType;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.trade.KLine;
+import lombok.Getter;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@Getter
+public enum BinanceRestApiType {
+
+    /**
+     * 现货k线的rest接口
+     */
+    SPOT_KLINE(new AbstractRestApiSchema(TradeType.SPOT, RestApiType.KLINE) {
+
+        @Override
+        public void initSchema(AbstractRestApiSchema restApiSchema) {
+            restApiSchema.setPath("/api/v3/klines");
+            restApiSchema.setMethod("GET");
+            restApiSchema.setQueryKey(List.of(RestApiParamKey.symbol, RestApiParamKey.interval, RestApiParamKey.startTime, RestApiParamKey.endTime, RestApiParamKey.timeZone, RestApiParamKey.limit));
+        }
+
+        @Override
+        public int calculateIpWeight(JSONObject allParams) {
+            return calculateKLineWeight(allParams);
+        }
+
+        @Override
+        public <R> R requestResultHandler(String result) {
+            return resolveKLineResult(result);
+        }
+    }),
+
+
+    /**
+     * 合约k线的rest接口
+     */
+    U_CONTRACT_KLINE(new AbstractRestApiSchema(TradeType.CONTRACT, RestApiType.KLINE) {
+
+        @Override
+        public void initSchema(AbstractRestApiSchema restApiSchema) {
+            restApiSchema.setPath("/fapi/v1/klines");
+            restApiSchema.setMethod("GET");
+            restApiSchema.setQueryKey(List.of(RestApiParamKey.symbol, RestApiParamKey.interval, RestApiParamKey.startTime, RestApiParamKey.endTime, RestApiParamKey.timeZone, RestApiParamKey.limit));
+        }
+
+        @Override
+        public int calculateIpWeight(JSONObject allParams) {
+            return calculateKLineWeight(allParams);
+        }
+
+        @Override
+        public <R> R requestResultHandler(String result) {
+            return resolveKLineResult(result);
+        }
+    }),
+
+    /**
+     * 获取listenKey
+     */
+    QUERY_LISTEN_KEY(new AbstractRestApiSchema(TradeType.SPOT, RestApiType.QUERY_LISTEN_KEY) {
+        @Override
+        public void initSchema(AbstractRestApiSchema restApiSchema) {
+            restApiSchema.setPath("/fapi/v1/listenKey");
+            restApiSchema.setMethod("POST");
+        }
+
+        @Override
+        public int calculateIpWeight(JSONObject allParams) {
+            return 1;
+        }
+
+        @Override
+        public <R> R requestResultHandler(String result) {
+            JSONObject jb = JSONObject.parseObject(result);
+            if (result != null) {
+                return (R) jb.getString("listenKey");
+            }
+            return null;
+        }
+    }),
+    /**
+     * 延长listenKey
+     */
+    LENGTH_LISTEN_KEY(new AbstractRestApiSchema(TradeType.SPOT, RestApiType.LENGTH_LISTEN_KEY) {
+        @Override
+        public void initSchema(AbstractRestApiSchema restApiSchema) {
+            restApiSchema.setPath("/fapi/v1/listenKey");
+            restApiSchema.setMethod("PUT");
+        }
+
+        @Override
+        public int calculateIpWeight(JSONObject allParams) {
+            return 1;
+        }
+
+        @Override
+        public <R> R requestResultHandler(String result) {
+            JSONObject jb = JSONObject.parseObject(result);
+            if (result != null) {
+                return (R) jb.getString("listenKey");
+            }
+            return null;
+        }
+    }),
+    /**
+     * 注销listenKey
+     */
+    REMOVE_LISTEN_KEY(new AbstractRestApiSchema(TradeType.SPOT, RestApiType.REMOVE_LISTEN_KEY) {
+        @Override
+        public void initSchema(AbstractRestApiSchema restApiSchema) {
+            restApiSchema.setPath("/fapi/v1/listenKey");
+            restApiSchema.setMethod("DELETE+");
+        }
+
+        @Override
+        public int calculateIpWeight(JSONObject allParams) {
+            return 1;
+        }
+
+        @Override
+        public <R> R requestResultHandler(String result) {
+            JSONObject jb = JSONObject.parseObject(result);
+            if (result != null) {
+                return (R) jb.getString("listenKey");
+            }
+            return null;
+        }
+    }),
+
+    ;
+
+
+    /**
+     * 解析k线结果
+     *
+     * @param result http 请求返回的内容
+     * @param <R>    返回值类型
+     * @return R
+     */
+    private static <R> @NotNull R resolveKLineResult(@NotNull String result) {
+        JSONArray data = JSONArray.parseArray(result);
+        List<KLine> kLines = new ArrayList<>();
+        for (int i = 0; i < data.size(); i++) {
+            JSONArray jsonArray = data.getJSONArray(i);
+            KLine kLine = KLineMapper.mapJsonArrToKLine(jsonArray);
+            kLines.add(kLine);
+        }
+        return (R) kLines;
+    }
+
+
+    /**
+     * 计算k获取k线请求的ip weight
+     *
+     * @param allParams 请求的所有参数
+     * @return ip weight
+     */
+    private static int calculateKLineWeight(JSONObject allParams) {
+        Integer limit = allParams.getInteger(RestApiParamKey.limit);
+
+        if (limit == null) {
+            limit = 500;
+        }
+
+        int ipWeight;
+        if (limit >= 1 && limit < 100) {
+            ipWeight = 1;
+        } else if (limit >= 100 && limit < 500) {
+            ipWeight = 2;
+        } else if (limit >= 500 && limit < 1000) {
+            ipWeight = 5;
+        } else {
+            ipWeight = 10;
+        }
+
+        return ipWeight;
+    }
+
+
+    private final AbstractRestApiSchema restApiSchema;
+
+    BinanceRestApiType(AbstractRestApiSchema restApiSchema) {
+        this.restApiSchema = restApiSchema;
+    }
+}
+
+
+
 package com.helei.binanceapi.constants;
 
 
@@ -18,7 +570,6 @@ public enum BinanceWSClientType {
      */
     ACCOUNT_STREAM,
 }
-
 
 
 package com.helei.binanceapi.supporter;
@@ -42,16 +593,19 @@ public class BinanceWSStreamSupporter {
 
 
 
-
 package com.helei.binanceapi;
 
 import com.helei.binanceapi.base.AbstractBinanceWSApiClient;
 import com.helei.binanceapi.constants.BinanceWSClientType;
+import com.helei.binanceapi.dto.accountevent.AccountEvent;
 import com.helei.binanceapi.supporter.IpWeightSupporter;
+import com.helei.dto.account.UserAccountInfo;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 import java.net.URISyntaxException;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 
 @Slf4j
@@ -65,7 +619,14 @@ public class BinanceWSAccountEventStreamClient extends AbstractBinanceWSApiClien
     /**
      * 账户消息流的listenKey
      */
+    @Getter
     private String listenKey;
+
+    /**
+     * 账户的ASKey
+     */
+    @Getter
+    private UserAccountInfo userAccountInfo;
 
 
     public BinanceWSAccountEventStreamClient(
@@ -77,24 +638,39 @@ public class BinanceWSAccountEventStreamClient extends AbstractBinanceWSApiClien
     }
 
     @Override
-    public CompletableFuture<Void> connect() {
-        return CompletableFuture.runAsync(()->{
+    public CompletableFuture<Boolean> connect() {
+        return CompletableFuture.supplyAsync(() -> {
             log.info("账户事件推送流客户端, 调用connect()方法不会启动");
+            return true;
         });
     }
 
-    public void startAccountEventStream(String listenKey) {
+    public void startAccountEventStream(String listenKey, UserAccountInfo userAccountInfo, Consumer<AccountEvent> whenReceive) {
+        this.userAccountInfo = userAccountInfo;
+
         this.listenKey = listenKey;
         super.url = baseUrl + "/" + listenKey;
 
         try {
-            connect().get();
+            //设置回调函数
+            ((BinanceWSAccountStreamClientHandler) super.handler).setWhenReceiveEvent(whenReceive);
 
+            //开始连接
+            connect().get();
             log.info("币安账户信息流已开启，listenKey = [{}]", listenKey);
         } catch (Exception e) {
             log.error("连接币安服务器[{}}发生错误", url, e);
             throw new RuntimeException(String.format("连接币安服务器[%s]发生错误", url), e);
         }
+    }
+
+    /**
+     * 获取得到事件的回调函数
+     *
+     * @return 回调函数
+     */
+    public Consumer<AccountEvent> getEventCallback() {
+        return ((BinanceWSAccountStreamClientHandler) super.handler).getWhenReceiveEvent();
     }
 }
 
@@ -117,6 +693,7 @@ import java.util.function.Consumer;
 /**
  * 币安账户信息流推送客户端
  */
+@Deprecated
 @Slf4j
 public class BinanceWSAccountStreamClient extends AbstractBinanceWSApiClient {
 
@@ -214,6 +791,7 @@ import com.alibaba.fastjson.JSONObject;
 import com.helei.binanceapi.base.AbstractBinanceWSApiClientHandler;
 import com.helei.binanceapi.constants.AccountEventType;
 import com.helei.binanceapi.dto.accountevent.AccountEvent;
+import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -226,7 +804,15 @@ import java.util.function.Consumer;
 @Slf4j
 class BinanceWSAccountStreamClientHandler extends AbstractBinanceWSApiClientHandler {
 
+    @Getter
     private Consumer<AccountEvent> whenReceiveEvent;
+
+
+    public BinanceWSAccountStreamClientHandler(Consumer<AccountEvent> whenReceiveEvent) {
+        this.whenReceiveEvent = whenReceiveEvent;
+    }
+
+    public BinanceWSAccountStreamClientHandler() {}
 
     @Override
     protected void handleResponseMessage(String id, JSONObject response) {
@@ -277,6 +863,9 @@ public class BinanceWSMarketStreamClient  extends AbstractBinanceWSApiClient {
         streamApi = new BinanceWSStreamApi(this);
     }
 }
+
+
+
 
 
 package com.helei.binanceapi;
@@ -339,7 +928,6 @@ public class BinanceWSMarketStreamClientHandler extends AbstractBinanceWSApiClie
         }
     }
 }
-
 
 
 package com.helei.binanceapi;
@@ -415,6 +1003,213 @@ public class BinanceWSReqRespApiClientHandler extends AbstractBinanceWSApiClient
     }
 }
 
+
+package com.helei.binanceapi.api.rest;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.config.BinanceApiConfig;
+import com.helei.binanceapi.constants.api.BinanceRestApiType;
+import com.helei.constants.RunEnv;
+import com.helei.dto.trade.KLine;
+import org.junit.jupiter.api.Test;
+
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class BinanceRestHttpApiClientTest {
+
+    @Test
+    void queryBinanceApi() throws ExecutionException, InterruptedException {
+
+        BinanceRestHttpApiClient binanceRestHttpApiClient = new BinanceRestHttpApiClient(BinanceApiConfig.INSTANCE, Executors.newVirtualThreadPerTaskExecutor());
+
+        CompletableFuture<List<KLine>> stringCompletableFuture = binanceRestHttpApiClient.queryBinanceApi(
+                RunEnv.TEST_NET,
+                BinanceRestApiType.SPOT_KLINE,
+                new JSONObject(),
+                null
+        );
+
+        List<KLine> kLines = stringCompletableFuture.get();
+
+        System.out.println(kLines);
+
+
+        CompletableFuture<String> future = binanceRestHttpApiClient.queryBinanceApi(
+                RunEnv.NORMAL,
+                BinanceRestApiType.QUERY_LISTEN_KEY,
+                new JSONObject(),
+                null
+        );
+
+        System.out.println(future.get());
+    }
+}
+
+
+package com.helei.cexapi.client;
+
+import cn.hutool.core.util.BooleanUtil;
+import cn.hutool.core.util.StrUtil;
+import com.helei.binanceapi.BinanceWSAccountStreamClient;
+import com.helei.binanceapi.BinanceWSReqRespApiClient;
+import com.helei.binanceapi.dto.accountevent.AccountEvent;
+import com.helei.binanceapi.supporter.IpWeightSupporter;
+import com.helei.dto.ASKey;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.net.InetSocketAddress;
+import java.util.UUID;
+import java.util.concurrent.*;
+import java.util.function.Consumer;
+
+
+/**
+ * 币安账户综合客户端
+ * <P>主要由两部分组成</P>
+ * <p>一是用于请求维护listenKey的BinanceWSApiClient</p>
+ * <p>
+ * 二是ConcurrentMap< ASKey, BinanceWSAccountStreamClient>
+ * 里面记录了账户鉴权信息和对应的账户信息推送连接BinanceWSAccountStreamClient
+ * </p>
+ */
+@Deprecated
+@Slf4j
+public class BinanceAccountMergeClient {
+
+    /**
+     * 处理相关异步任务的线程池
+     */
+    @Getter
+    private final ExecutorService executor;
+
+    /**
+     * 用于请求listenKey，更新listenKey等请求的WSClient
+     */
+    private final BinanceWSReqRespApiClient requestClient;
+
+    /**
+     * 账户信息推送的base url
+     */
+    private final String accountStreamUrl;
+
+    /**
+     * 代理
+     */
+    private InetSocketAddress proxy;
+
+
+    public BinanceAccountMergeClient(
+            BinanceWSReqRespApiClient requestClient,
+            String accountStreamUrl,
+            ExecutorService executor
+
+    ) throws Exception {
+        this.requestClient = requestClient;
+        if (StrUtil.isBlank(requestClient.getName())) {
+            this.requestClient.setName("账户信息请求客户端-" + UUID.randomUUID().toString().substring(0, 8));
+        }
+
+        this.accountStreamUrl = accountStreamUrl;
+        this.executor = executor;
+
+        log.info("开始连接请求服务器");
+        requestClient.connect().get();
+    }
+
+
+    public void setProxy(InetSocketAddress proxy) {
+        this.proxy = proxy;
+        requestClient.setProxy(proxy);
+    }
+
+
+    /**
+     * 添加账户流，根据asKey创建BinanceWSAccountStreamClient对象进行连接，并绑定收到事件的回调。
+     *
+     * @param asKey                   asKey
+     * @param whenReceiveAccountEvent channel收到事件消息时的回调
+     * @return this
+     * @throws Exception exception
+     */
+    public BinanceWSAccountStreamClient getAccountStream(ASKey asKey, Consumer<AccountEvent> whenReceiveAccountEvent) throws Exception {
+
+        try {
+            BinanceWSAccountStreamClient client = new BinanceWSAccountStreamClient(
+                    accountStreamUrl,
+                    new IpWeightSupporter("localIp"),
+                    asKey,
+                    whenReceiveAccountEvent,
+                    requestClient.getBaseApi()
+            );
+            client.setProxy(proxy);
+
+            return client;
+        } catch (Exception e) {
+            log.error("创建account连接出错, apiKey[{}]", asKey.getApiKey(), e);
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 刷新BinanceWSAccountStreamClient
+     *
+     * @param streamClient streamClient
+     * @return boolean
+     */
+    private static boolean refreshClient(BinanceWSAccountStreamClient streamClient) {
+        try {
+            String s = streamClient.lengthenListenKey().get();
+            if (s == null) {
+                log.error("延长listenKey[{}]得到结果为null", streamClient.getListenKey());
+                return false;
+            }
+            return true;
+        } catch (InterruptedException | ExecutionException e) {
+            log.error("延长listenKey[{}]发生错误", streamClient.getListenKey(), e);
+            return false;
+        }
+    }
+
+
+    /**
+     * 重连接账户信息推送流
+     *
+     * @param streamClient streamClient
+     * @param retryTimes   retryTimes
+     */
+    private static boolean reConnectStream(BinanceWSAccountStreamClient streamClient, int retryTimes) {
+        for (int i = 1; i <= retryTimes; i++) {
+            log.info("开始重连接account stream， [{}/{}]，旧的listenKey[{}]", i, retryTimes, streamClient.getListenKey());
+            Boolean b = null;
+            try {
+
+                //关闭，重置
+                streamClient.close();
+
+                //开始连接
+                b = streamClient.startAccountInfoStream().get();
+            } catch (InterruptedException | ExecutionException e) {
+                log.error("重新连接account stream发生错误，", e);
+            }
+            if (BooleanUtil.isTrue(b)) {
+                log.info("重连接account stream成功, 新的listenKey[{}]", streamClient.getListenKey());
+                return true;
+            }
+        }
+
+        log.error("重连接失败,apiKey[{}]", streamClient.getAsKey().getApiKey());
+        return false;
+    }
+}
+
+
+
 package com.helei.cexapi.client;
 
 import cn.hutool.core.util.StrUtil;
@@ -424,7 +1219,7 @@ import com.helei.binanceapi.BinanceWSReqRespApiClient;
 import com.helei.binanceapi.base.AbstractBinanceWSApiClient;
 import com.helei.binanceapi.config.BinanceApiConfig;
 import com.helei.binanceapi.constants.BinanceWSClientType;
-import com.helei.cexapi.manager.BinanceBaseWSClientManager;
+import com.helei.cexapi.manager.BinanceBaseClientManager;
 import com.helei.constants.RunEnv;
 import com.helei.constants.trade.TradeType;
 import lombok.extern.slf4j.Slf4j;
@@ -447,11 +1242,11 @@ public class BinanceWSEnvClient {
 
     private final ConcurrentMap<BinanceWSClientType, ConcurrentHashMap<String, AbstractBinanceWSApiClient>> typedApiClient;
 
-    private final BinanceBaseWSClientManager clientManager;
+    private final BinanceBaseClientManager clientManager;
 
     private final InetSocketAddress proxy;
 
-    public BinanceWSEnvClient(RunEnv runEnv, TradeType tradeType, BinanceBaseWSClientManager clientManager) {
+    public BinanceWSEnvClient(RunEnv runEnv, TradeType tradeType, BinanceBaseClientManager clientManager) {
         this.runEnv = runEnv;
         this.tradeType = tradeType;
         this.clientManager = clientManager;
@@ -493,7 +1288,7 @@ public class BinanceWSEnvClient {
             return v;
         });
 
-        log.info("runEnv[{}]-tradeType[{}]获取到客户端[{}]-mark[{}]", runEnv, tradeType, clientType, mark);
+        log.info("runEnv[{}]-tradeType[{}]获取到客户端[{}]-mark[{}]", runEnv, tradeType, clientType, clientType.name() + "[" + mark + "]");
 
         return apiClient;
     }
@@ -514,7 +1309,7 @@ public class BinanceWSEnvClient {
         };
 
 
-        client.setName(mark);
+        client.setName(clientType + "[" + mark + "]");
         client.setProxy(proxy);
 
         return client;
@@ -555,6 +1350,7 @@ public class BinanceWSEnvClient {
 }
 
 
+
 package com.helei.cexapi.manager;
 
 
@@ -576,20 +1372,19 @@ import java.util.concurrent.ExecutorService;
 
 
 @Slf4j
-@Getter
-public class BinanceBaseWSClientManager {
+public class BinanceBaseClientManager {
 
     /**
      * 运行设置a
      */
-    private final RunTypeConfig runType;
+    private final RunTypeConfig runTypeConfig;
 
     /**
      * 不同环境的客户端
      */
     private final ConcurrentMap<String, BinanceWSEnvClient> envClientMap;
 
-
+    @Getter
     private final IpWeightSupporter ipWeightSupporter = new IpWeightSupporter("localIp");
 
     /**
@@ -597,16 +1392,16 @@ public class BinanceBaseWSClientManager {
      */
     private final ExecutorService executor;
 
-    public BinanceBaseWSClientManager(
-            RunTypeConfig runType,
+    public BinanceBaseClientManager(
+            RunTypeConfig runTypeConfig,
             ExecutorService executor
     ) {
 
-        this.runType = runType;
+        this.runTypeConfig = runTypeConfig;
         this.executor = executor;
         this.envClientMap = new ConcurrentHashMap<>();
 
-        for (KeyValue<RunEnv, TradeType> keyValue : runType.getRunTypeList()) {
+        for (KeyValue<RunEnv, TradeType> keyValue : runTypeConfig.getRunTypeList()) {
             RunEnv env = keyValue.getKey();
             TradeType tradeType = keyValue.getValue();
             envClientMap.put(buildKey(env, tradeType), new BinanceWSEnvClient(env, tradeType, this));
@@ -614,6 +1409,32 @@ public class BinanceBaseWSClientManager {
     }
 
 
+    /**
+     * 获取指定环境、指定类型的币安连接客户端
+     *
+     * @param runEnv     运行环境
+     * @param tradeType  交易类型
+     * @param clientType 币安WS客户端类型
+     * @return CompletableFuture<AbstractBinanceWSApiClient>
+     */
+    public CompletableFuture<AbstractBinanceWSApiClient> getEnvTypedApiClient(
+            RunEnv runEnv,
+            TradeType tradeType,
+            BinanceWSClientType clientType
+    ) {
+        return getEnvTypedApiClient(runEnv, tradeType, clientType, null);
+    }
+
+
+    /**
+     * 获取指定环境、指定类型的币安连接客户端
+     *
+     * @param runEnv     运行环境
+     * @param tradeType  交易类型
+     * @param clientType 币安WS客户端类型
+     * @param mark       标记字段，用于标记不同的WS客户端
+     * @return CompletableFuture<AbstractBinanceWSApiClient>
+     */
     public CompletableFuture<AbstractBinanceWSApiClient> getEnvTypedApiClient(
             RunEnv runEnv,
             TradeType tradeType,
@@ -636,6 +1457,9 @@ public class BinanceBaseWSClientManager {
             AbstractBinanceWSApiClient client = null;
             try {
                 client = binanceWSEnvClient.getOrCreateTypedClient(clientType, mark);
+
+                client.setRunEnv(runEnv);
+                client.setTradeType(tradeType);
             } catch (Exception e) {
                 throw new RuntimeException(String.format("创建runEnv[%s]-tradeType[%s]-type[%s]客户端发生错误", runEnv, tradeType, clientType.name()), e);
             }
@@ -659,11 +1483,10 @@ public class BinanceBaseWSClientManager {
      * @param tradeType 交易类型
      * @return key
      */
-    private static String buildKey(RunEnv runEnv, TradeType tradeType) {
+    public static String buildKey(RunEnv runEnv, TradeType tradeType) {
         return runEnv.name() + "-" + tradeType.name();
     }
 }
-
 
 
 
@@ -672,79 +1495,35 @@ package com.helei.cexapi;
 
 import com.helei.binanceapi.api.rest.BinanceUContractMarketRestApi;
 import com.helei.binanceapi.supporter.IpWeightSupporter;
+import com.helei.cexapi.manager.BinanceBaseClientManager;
+import com.helei.dto.config.RunTypeConfig;
 import lombok.extern.slf4j.Slf4j;
 
-import javax.net.ssl.SSLException;
-import java.net.InetSocketAddress;
-import java.net.URISyntaxException;
-import java.util.UUID;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 
 @Slf4j
 public class CEXApiFactory {
 
     private static final String CLIENT_CONNECT_KEY_SPACER = "<@>?";
-    //TODO 配置化
-//    private static InetSocketAddress proxy = new InetSocketAddress("127.0.0.1", 7897);
-    private static InetSocketAddress proxy = new InetSocketAddress("127.0.0.1", 7890);
-//    private static InetSocketAddress proxy = null;
 
-    private static IpWeightSupporter ipWeightSupporter = new IpWeightSupporter("localIp");
+    private static final Map<RunTypeConfig, BinanceBaseClientManager>  MANAGER_MAP = new ConcurrentHashMap<>();
 
-    private static final ConcurrentMap<String, BinanceWSApiClient> CLIENT_CONNECTION_MAP = new ConcurrentHashMap<>();
+    public static BinanceBaseClientManager binanceBaseWSClientManager(RunTypeConfig runTypeConfig, ExecutorService executor){
 
-    public static BinanceWSApiClient binanceApiClient(
-            String url,
-            String name
-    ) {
-        String clientKey = buildClientConnectKey(url, name);
-
-        BinanceWSApiClient binanceWSApiClient = CLIENT_CONNECTION_MAP.get(clientKey);
-        if (binanceWSApiClient != null) {
-            log.info("已存在链接客户端 [{}] - [{}]", name, url);
-            return binanceWSApiClient;
-        }
-
-        BinanceWSApiClient client;
-        synchronized (CEXApiFactory.class) {
-            try {
-                log.info("创建链接客户端 [{}] - [{}]", name, url);
-
-                client = binanceApiClient(url);
-                client.setName(name);
-                CLIENT_CONNECTION_MAP.put(clientKey, client);
-
-                log.info("创建链接客户端 [{}] - [{}] 成功", name, url);
-            } catch (Exception e) {
-                log.error("创建链接客户端 [{}] - [{}] 失败", name, url, e);
-                throw new RuntimeException("创建连接客户端失败", e);
+        return MANAGER_MAP.compute(runTypeConfig, (k, v) -> {
+            if (v == null) {
+                v = new BinanceBaseClientManager(runTypeConfig, executor);
             }
-        }
-        return client;
+            return v;
+        });
     }
 
-    public static BinanceWSApiClient binanceApiClient(
-            String url
-    ) throws URISyntaxException, SSLException {
-
-        BinanceWSApiClientHandler handler = new BinanceWSApiClientHandler();
-
-        BinanceWSApiClient client = new BinanceWSApiClient(
-                url,
-                ipWeightSupporter,
-                handler
-        );
-        client.setProxy(proxy);
-        client.setName("binance-api-client-" + UUID.randomUUID().toString().substring(0, 8));
-
-        return client;
-    }
 
     public static BinanceUContractMarketRestApi binanceUContractMarketRestApi(String baseUrl,
                                                                               ExecutorService executor) {
-        return new BinanceUContractMarketRestApi(executor, baseUrl, ipWeightSupporter);
+        return new BinanceUContractMarketRestApi(executor, baseUrl, new IpWeightSupporter("123123"));
     }
 
 
@@ -761,27 +1540,143 @@ public class CEXApiFactory {
 }
 
 
+
+
+
+package com.helei.cexapi.binanceapi;
+
+import com.helei.binanceapi.BinanceWSAccountEventStreamClient;
+import com.helei.binanceapi.BinanceWSReqRespApiClient;
+import com.helei.binanceapi.constants.BinanceWSClientType;
+import com.helei.cexapi.CEXApiFactory;
+import com.helei.cexapi.manager.BinanceBaseClientManager;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.ASKey;
+import com.helei.dto.account.UserAccountInfo;
+import com.helei.dto.config.RunTypeConfig;
+import lombok.extern.slf4j.Slf4j;
+import org.junit.jupiter.api.*;
+
+import javax.net.ssl.SSLException;
+import java.net.URISyntaxException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
+@Slf4j
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
+class BinanceWSAccountStreamClientTest {
+
+    private static RunEnv runEnv = RunEnv.NORMAL;
+
+    private static TradeType tradeType = TradeType.CONTRACT;
+
+    private static BinanceBaseClientManager clientManager;
+
+    private static BinanceWSReqRespApiClient reqRespApiClient;
+
+    private static ASKey asKey;
+
+    private static BinanceWSAccountEventStreamClient accountEventStreamClient;
+
+
+    private static volatile String listenKey;
+
+    @BeforeAll
+    public static void beforAll() throws URISyntaxException, SSLException, ExecutionException, InterruptedException {
+
+        //        String ak = "TUFsFL4YrBsR4fnBqgewxiGfL3Su5L9plcjZuyRO3cq6M1yuwV3eiNX1LcMamYxz";
+//        String sk = "YsLzVacYo8eOGlZZ7RjznyWVjPHltIXzZJz2BrggCmCUDcW75FyFEv0uKyLBVAuU";
+        //spot test
+//        String ak = "1JIhkPyK07xadG9x8hIwqitN95MgpypPzA4b6TLraTonRnJ8BBJQlaO2iL9tPH0Y";
+//        String sk = "t84TYFR1zieMGncbw3kYq4zAPLxIJHJeMdD8V0FMKxij9fApojV6bhbDpyyjNDWt";
+
+        String ak = "b252246c6c6e81b64b8ff52caf6b8f37471187b1b9086399e27f6911242cbc66";
+        String sk = "a4ed1b1addad2a49d13e08644f0cc8fc02a5c14c3511d374eac4e37763cadf5f";
+        asKey = new ASKey(ak, sk);
+
+        clientManager = CEXApiFactory.binanceBaseWSClientManager(RunTypeConfig.DEFAULT_RUN_TYPE_CONFIG, Executors.newVirtualThreadPerTaskExecutor());
+
+        reqRespApiClient = (BinanceWSReqRespApiClient) clientManager.getEnvTypedApiClient(runEnv, tradeType, BinanceWSClientType.REQUEST_RESPONSE).get();
+
+        accountEventStreamClient = (BinanceWSAccountEventStreamClient) clientManager.getEnvTypedApiClient(runEnv, tradeType, BinanceWSClientType.ACCOUNT_STREAM).get();
+    }
+
+    @Test
+    @Order(1)
+    void requestListenKey() throws ExecutionException, InterruptedException {
+        String s = reqRespApiClient.getBaseApi().requestListenKey(asKey).get();
+        System.out.println("获取listenKey成功 ： ");
+        System.out.println(s);
+        listenKey = s;
+        System.out.println("");
+    }
+
+    @Test
+    @Order(2)
+    void lengthenListenKey() throws ExecutionException, InterruptedException {
+        String s = reqRespApiClient.getBaseApi().lengthenListenKey(listenKey, asKey).get();
+        System.out.println("延长listenKey成功 ： ");
+        System.out.println(s);
+        System.out.println("");
+    }
+
+    @Test
+    @Order(3)
+    void closeListenKey() throws ExecutionException, InterruptedException {
+        Boolean s = reqRespApiClient.getBaseApi().closeListenKey(listenKey, asKey).get();
+        System.out.println("关闭listenKey成功 ： ");
+        System.out.println(s);
+        System.out.println("");
+    }
+
+    @Test
+    void startAccountInfoStream() throws Exception {
+        accountEventStreamClient.startAccountEventStream(listenKey, new UserAccountInfo(), accountEvent -> {
+            System.out.println(accountEvent);
+        });
+
+
+        TimeUnit.MINUTES.sleep(100);
+    }
+}
+
+
 package com.helei.cexapi;
 
-import com.helei.binanceapi.BinanceWSApiClient;
+import com.helei.binanceapi.BinanceWSMarketStreamClient;
+import com.helei.binanceapi.constants.BinanceWSClientType;
+import com.helei.cexapi.manager.BinanceBaseClientManager;
+import com.helei.constants.RunEnv;
 import com.helei.constants.WebSocketStreamParamKey;
 import com.helei.binanceapi.constants.WebSocketStreamType;
 import com.helei.binanceapi.dto.StreamSubscribeEntity;
-import com.helei.binanceapi.constants.BinanceApiUrl;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.config.RunTypeConfig;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 
 class BinanceWSApiClientTest {
-    private static BinanceWSApiClient binanceWSApiClient = null;
+
+    private static RunEnv runEnv;
+
+    private static TradeType tradeType;
+
+    private static BinanceBaseClientManager clientManager = null;
+
+    private static BinanceWSMarketStreamClient marketStreamClient;
 
     @BeforeAll
     public static void before() {
         try {
-            binanceWSApiClient = CEXApiFactory.binanceApiClient(BinanceApiUrl.WS_SPOT_STREAM_URL);
-            binanceWSApiClient.connect().get();
+            clientManager = CEXApiFactory.binanceBaseWSClientManager(new RunTypeConfig(), Executors.newVirtualThreadPerTaskExecutor());
+
+            marketStreamClient = (BinanceWSMarketStreamClient) clientManager.getEnvTypedApiClient(runEnv, tradeType, BinanceWSClientType.MARKET_STREAM).get();
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -789,7 +1684,7 @@ class BinanceWSApiClientTest {
 
     @Test
     public void testAGG_TRADE() throws InterruptedException {
-        binanceWSApiClient
+        marketStreamClient
                 .getStreamApi()
                 .builder()
                 .symbol("btcusdt")
@@ -806,7 +1701,7 @@ class BinanceWSApiClientTest {
 
     @Test
     public void testKLine() throws InterruptedException {
-        binanceWSApiClient
+        marketStreamClient
                 .getStreamApi()
                 .builder()
                 .symbol("btcusdt")
@@ -834,31 +1729,115 @@ class BinanceWSApiClientTest {
 
 
 
+package com.helei.reaktimedatacenter.config;
+
+import com.helei.cexapi.CEXApiFactory;
+import com.helei.cexapi.manager.BinanceBaseClientManager;
+import com.helei.reaktimedatacenter.manager.ExecutorServiceManager;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.redisson.Redisson;
+import org.redisson.api.RedissonClient;
+import org.redisson.config.Config;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.annotation.EnableKafka;
+import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Slf4j
+@EnableKafka
+@Configuration
+public class ApplicationSpringConfig {
+
+
+    private final RealtimeConfig realtimeConfig = RealtimeConfig.INSTANCE;
+
+
+    @Autowired
+    private ExecutorServiceManager executorServiceManager;
+
+
+    @Bean
+    public BinanceBaseClientManager binanceBaseWSClientManager() {
+        return CEXApiFactory.binanceBaseWSClientManager(realtimeConfig.getRun_type(), executorServiceManager.getConnectExecutor());
+    }
+
+    @Bean
+    public Map<String, Object> kafkaConfigs() {
+        Map<String, Object> configProps = new HashMap<>();
+        configProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, realtimeConfig.getKafka().getBootstrap_servers());
+        configProps.put(ConsumerConfig.GROUP_ID_CONFIG, realtimeConfig.getKafka().getGroup_id());  // 消费者组ID
+        configProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        configProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        configProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
+        return configProps;
+    }
+
+    @Bean
+    public ConsumerFactory<String, String> consumerFactory() {
+
+        Map<String, Object> configs = kafkaConfigs();
+
+        return new DefaultKafkaConsumerFactory<>(configs);
+    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory() {
+        ConcurrentKafkaListenerContainerFactory<String, String> factory = new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(consumerFactory());
+        return factory;
+    }
+
+
+    @Bean(name = "kafkaAdminClient")
+    public AdminClient kafkaAdminClient() {
+        return AdminClient.create(kafkaConfigs());
+    }
+
+    @Bean
+    public RedissonClient redissonClient() {
+        Config config = new Config();
+        config.useSingleServer().setAddress(realtimeConfig.getRedis().getUrl());
+        return Redisson.create(config);
+    }
+}
+
+
 
 package com.helei.reaktimedatacenter.manager;
 
-import com.helei.binanceapi.BinanceWSAccountStreamClient;
-import com.helei.binanceapi.BinanceWSApiClient;
-import com.helei.binanceapi.config.BinanceApiConfig;
+import com.helei.binanceapi.BinanceWSAccountEventStreamClient;
+import com.helei.binanceapi.BinanceWSReqRespApiClient;
+import com.helei.binanceapi.base.AbstractBinanceWSApiClient;
+import com.helei.binanceapi.constants.BinanceWSClientType;
 import com.helei.binanceapi.dto.accountevent.AccountEvent;
-import com.helei.cexapi.CEXApiFactory;
-import com.helei.cexapi.client.BinanceAccountMergeClient;
+import com.helei.cexapi.manager.BinanceBaseClientManager;
 import com.helei.constants.RunEnv;
+import com.helei.constants.WebsocketClientStatus;
 import com.helei.constants.trade.TradeType;
 import com.helei.dto.ASKey;
 import com.helei.dto.base.KeyValue;
 import com.helei.dto.account.UserAccountInfo;
+import com.helei.reaktimedatacenter.config.RealtimeConfig;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 
 @Slf4j
@@ -874,19 +1853,16 @@ public class BinanceAccountClientManager implements InitializingBean {
     private static final int ACCOUNT_STREAM_START_TIMES_LIMIT = 1;
 
 
-    private final ExecutorService executor;
+    private final static ConcurrentMap<Long, KeyValue<BinanceWSAccountEventStreamClient, Long>> accountIdMapClientAndExpireMap = new ConcurrentHashMap<>();
 
-
-    private final static ConcurrentMap<String, BinanceAccountMergeClient> mergeClientMap = new ConcurrentHashMap<>();
-
-
-    private final static ConcurrentMap<Long, KeyValue<BinanceWSAccountStreamClient, Long>> accountIdMapClientAndExpireMap = new ConcurrentHashMap<>();
-
-
-    private final BinanceApiConfig binanceApiConfig = BinanceApiConfig.INSTANCE;
-
+    private final RealtimeConfig realtimeConfig = RealtimeConfig.INSTANCE;
 
     private final AtomicBoolean streamRefreshTaskState = new AtomicBoolean(true);
+
+    private final ExecutorService executor;
+
+    @Autowired
+    private BinanceBaseClientManager binanceBaseClientManager;
 
 
     @Autowired
@@ -895,65 +1871,78 @@ public class BinanceAccountClientManager implements InitializingBean {
     }
 
     /**
-     * 创建 BinanceWSAccountStreamClient，用来获取账户事件推送流
+     * 创建 BinanceWSAccountEventStreamClient，用来获取账户事件推送流
+     * <P>创建完毕后会自动启动，并注册延长ListenKey</P>
      *
      * @param accountInfo accountInfo
      * @return BinanceWSAccountStreamClient
      * @throws Exception Exception
      */
-    public BinanceWSAccountStreamClient getAccountEventStreamClient(final UserAccountInfo accountInfo, BiConsumer<UserAccountInfo, AccountEvent> whenReceiveAccountEvent) throws Exception {
+    public BinanceWSAccountEventStreamClient startAccountEventStreamClient(final UserAccountInfo accountInfo, BiConsumer<UserAccountInfo, AccountEvent> whenReceiveAccountEvent) throws Exception {
 
+        doCreateAccountEventStreamClient(accountInfo, accountEvent -> whenReceiveAccountEvent.accept(accountInfo, accountEvent)).get();
+
+        return accountIdMapClientAndExpireMap.get(accountInfo.getId()).getKey();
+    }
+
+
+    private CompletableFuture<Void> doCreateAccountEventStreamClient(UserAccountInfo accountInfo, Consumer<AccountEvent> whenReceiveAccountEvent) {
         RunEnv runEnv = accountInfo.getRunEnv();
         TradeType tradeType = accountInfo.getTradeType();
         ASKey asKey = accountInfo.getAsKey();
+        long accountId = accountInfo.getId();
+        long userId = accountInfo.getUserId();
 
+        // 1. 得到用于获取 listenKey 的客户端
+        CompletableFuture<AbstractBinanceWSApiClient> requestClientFuture = binanceBaseClientManager.getEnvTypedApiClient(runEnv, tradeType, BinanceWSClientType.REQUEST_RESPONSE);
 
-        BinanceApiConfig.BinanceTypedUrl envUrlSet = binanceApiConfig.getEnvUrlSet(runEnv, tradeType);
+        // 2.获取用于账户事件传输的客户端
+        String mark = String.format("账户事件推送客户端[%s]-[%s]", userId, accountId);
+        CompletableFuture<AbstractBinanceWSApiClient> streamClientFuture = binanceBaseClientManager.getEnvTypedApiClient(runEnv, tradeType, BinanceWSClientType.ACCOUNT_STREAM, mark);
 
-
-        // 1. 创建用于获取 listenKey 的客户端
-        BinanceWSApiClient requestClient = CEXApiFactory.binanceApiClient(envUrlSet.getWs_market_url(), "账户事件请求链接");
-
-        // 2, 获取 merge 客户端
-        String key = generateMergeClientKey(runEnv, tradeType);
-        String streamUrl = envUrlSet.getWs_account_info_stream_url();
-
-        BinanceAccountMergeClient accountMergeClient = mergeClientMap.compute(key, (k, v) -> {
-            if (v == null) {
-                try {
-                    v = new BinanceAccountMergeClient(requestClient, streamUrl, executor);
-
-                    InetSocketAddress proxy = binanceApiConfig.getProxy();
-                    if (proxy != null) {
-                        v.setProxy(proxy);
+        // 3,等待两个客户端都获取完成, 调用requestClient获取listenKey后启动账户事件传输客户端
+        return CompletableFuture
+                .allOf(new CompletableFuture[]{requestClientFuture, streamClientFuture})
+                .whenCompleteAsync((unused, throwable) -> {
+                    if (throwable != null) {
+                        throw new RuntimeException("获取" + mark + "发生错误", throwable);
                     }
-                } catch (Exception e) {
-                    log.error("创建BinanceAccountMergeClient发生错误, url[{}}", streamUrl, e);
-                    throw new RuntimeException(e);
-                }
-            }
 
-            return v;
-        });
+                    try {
+                        BinanceWSReqRespApiClient reqRespApiClient = (BinanceWSReqRespApiClient) requestClientFuture.get();
+                        BinanceWSAccountEventStreamClient accountEventStreamClient = (BinanceWSAccountEventStreamClient) streamClientFuture.get();
+
+                        accountIdMapClientAndExpireMap.compute(accountId, (k, v) -> {
+                            if (v == null) {
+                                try {
+                                    //刷新时间ddl设置为特殊值0代表没有启动
+                                    v = new KeyValue<>(accountEventStreamClient, 0L);
+                                } catch (Exception e) {
+                                    throw new RuntimeException("创建币按账户推送流失", e);
+                                }
+                            }
+                            return v;
+                        });
+
+                        if (accountEventStreamClient.getClientStatus().equals(WebsocketClientStatus.RUNNING)) {
+                            log.warn("{}已经在运行，不能重复启动", mark);
+                            return;
+                        }
 
 
-        // 3. 开始根据 merge 客户端，获取该账户的推送流链接
-        KeyValue<BinanceWSAccountStreamClient, Long> clientLongKeyValue = accountIdMapClientAndExpireMap.compute(accountInfo.getId(), (k, v) -> {
-            if (v == null) {
-                try {
-                    BinanceWSAccountStreamClient binanceWSAccountStreamClient = accountMergeClient.getAccountStream(asKey, accountEvent -> whenReceiveAccountEvent.accept(accountInfo, accountEvent));
+                        reqRespApiClient.getBaseApi()
+                                // 3.1 获取listenKey
+                                .requestListenKey(asKey)
+                                // 3.2 启动流
+                                .thenAcceptAsync(listenKey -> accountEventStreamClient.startAccountEventStream(listenKey, accountInfo, whenReceiveAccountEvent), executor)
+                                .get();
 
-                    //刷新时间ddl设置为特殊值0代表没有启动
-                    v = new KeyValue<>(binanceWSAccountStreamClient, 0L);
-                } catch (Exception e) {
-                    throw new RuntimeException("创建币按账户推送流失", e);
-                }
-            }
-
-            return v;
-        });
-
-        return clientLongKeyValue.getKey();
+                        // 3.3 注册到ExpireMap，以完成自动刷新ListenKey
+                        accountIdMapClientAndExpireMap.get(accountId).setValue(System.currentTimeMillis());
+                    } catch (InterruptedException | ExecutionException e) {
+                        throw new RuntimeException(e);
+                    }
+                }, executor);
     }
 
 
@@ -963,7 +1952,7 @@ public class BinanceAccountClientManager implements InitializingBean {
      * @param accountId accountId
      */
     public void removeAccountStreamClient(long accountId) {
-        KeyValue<BinanceWSAccountStreamClient, Long> remove = accountIdMapClientAndExpireMap.remove(accountId);
+        KeyValue<BinanceWSAccountEventStreamClient, Long> remove = accountIdMapClientAndExpireMap.remove(accountId);
         if (remove != null) {
             log.warn("已移除AccountStreamClient [{}]", remove.getKey().getName());
         }
@@ -975,12 +1964,12 @@ public class BinanceAccountClientManager implements InitializingBean {
      *
      * @param accountId accountId
      */
-    public boolean startAccountEventStream(long accountId) {
-        KeyValue<BinanceWSAccountStreamClient, Long> pair = accountIdMapClientAndExpireMap.get(accountId);
+    public boolean restartAccountEventStream(long accountId) {
+        KeyValue<BinanceWSAccountEventStreamClient, Long> pair = accountIdMapClientAndExpireMap.get(accountId);
 
         if (pair == null) return false;
 
-        return startAccountEventStream(accountId, pair.getKey());
+        return restartAccountEventStream(accountId, pair.getKey());
     }
 
 
@@ -991,32 +1980,18 @@ public class BinanceAccountClientManager implements InitializingBean {
      * @param accountId                    accountId
      * @param binanceWSAccountStreamClient binanceWSAccountStreamClient
      */
-    public boolean startAccountEventStream(long accountId,
-                                           BinanceWSAccountStreamClient binanceWSAccountStreamClient) {
+    private boolean restartAccountEventStream(long accountId,
+                                             BinanceWSAccountEventStreamClient binanceWSAccountStreamClient) {
 
-        for (int i = 0; i < ACCOUNT_STREAM_START_TIMES_LIMIT; i++) {
+        for (int i = 1; i <= ACCOUNT_STREAM_START_TIMES_LIMIT; i++) {
             try {
-                Boolean success = binanceWSAccountStreamClient.startAccountInfoStream().get();
-
-                if (success) {
-
-                    //设置刷新时间
-                    accountIdMapClientAndExpireMap.compute(accountId, (k, v) -> {
-                        if (v == null)
-                            v = new KeyValue<>(binanceWSAccountStreamClient, System.currentTimeMillis() + REFRESH_INTERVAL);
-                        return v;
-                    });
-
-                    return true;
-                } else {
-                    log.error("开启账户事件流失败[{}/{}], accountId[{}]", i, ACCOUNT_STREAM_START_TIMES_LIMIT, accountId);
-                }
+                doCreateAccountEventStreamClient(binanceWSAccountStreamClient.getUserAccountInfo(), binanceWSAccountStreamClient.getEventCallback()).get();
+                return true;
             } catch (InterruptedException | ExecutionException e) {
                 log.error("开启账户事件流发生错误[{}/{}], accountId[{}]", i, ACCOUNT_STREAM_START_TIMES_LIMIT, accountId, e);
             }
 
             log.warn("开始账户事件流重试 [{}/{}], accountId[{}]", i, ACCOUNT_STREAM_START_TIMES_LIMIT, accountId);
-
         }
 
         log.error("accountId[{}] 重试次数[{}]超过限制[{}],", accountId, ACCOUNT_STREAM_START_TIMES_LIMIT, ACCOUNT_STREAM_START_TIMES_LIMIT);
@@ -1029,11 +2004,11 @@ public class BinanceAccountClientManager implements InitializingBean {
      */
     private void refreshAccountStreamListenKey() {
         while (streamRefreshTaskState.get()) {
+
+
             long startTime = System.currentTimeMillis();
             Semaphore semaphore = new Semaphore(REFRESH_CONCURRENT_LIMIT);
             try {
-
-
                 // 1. 去除失效的
                 List<Long> expireIdList = accountIdMapClientAndExpireMap.entrySet().stream().filter(e -> e.getValue().getValue() == -1L).map(Map.Entry::getKey).toList();
 
@@ -1043,10 +2018,11 @@ public class BinanceAccountClientManager implements InitializingBean {
                 }
 
                 // 2.尝试刷新listenKey
-                for (Map.Entry<Long, KeyValue<BinanceWSAccountStreamClient, Long>> entry : accountIdMapClientAndExpireMap.entrySet()) {
+                for (Map.Entry<Long, KeyValue<BinanceWSAccountEventStreamClient, Long>> entry : accountIdMapClientAndExpireMap.entrySet()) {
                     Long accountId = entry.getKey();
-                    KeyValue<BinanceWSAccountStreamClient, Long> keyValue = entry.getValue();
-                    BinanceWSAccountStreamClient client = keyValue.getKey();
+
+                    KeyValue<BinanceWSAccountEventStreamClient, Long> keyValue = entry.getValue();
+                    BinanceWSAccountEventStreamClient client = keyValue.getKey();
                     Long expireTime = keyValue.getValue();
 
                     //没启动的，特殊特殊处理，跳过刷新listenKey
@@ -1057,29 +2033,41 @@ public class BinanceAccountClientManager implements InitializingBean {
                     if (System.currentTimeMillis() <= expireTime) {
                         log.info("accountId[{}]的事件流到了刷新时间，开始延长listenKey[{}]", accountId, client.getListenKey());
 
-                        client.lengthenListenKey().whenCompleteAsync((listenKey, e) -> {
-                            try {
-                                if (e != null) {
-                                    log.error("延长accountId[{}]的listenKey[{}]发生错误, 重新启动account链接", accountId, client.getListenKey(), e);
+                        RunEnv runEnv = client.getRunEnv();
+                        TradeType tradeType = client.getTradeType();
 
-                                    //重新获取listenKey启动
-                                    boolean result = startAccountEventStream(accountId, client);
-                                    if (!result) {
-                                        // TODO 错误日志上传
-                                        log.error("accountId[{}}重新获取推送链接失败", accountId);
+                        binanceBaseClientManager
+                                // 1. 得到用于刷新 listenKey 的客户端
+                                .getEnvTypedApiClient(runEnv, tradeType, BinanceWSClientType.REQUEST_RESPONSE)
+                                // 2. 刷新listenKey
+                                .thenAcceptAsync(requestClient -> {
+                                    BinanceWSReqRespApiClient reqRespApiClient = (BinanceWSReqRespApiClient) requestClient;
+                                    reqRespApiClient.getBaseApi()
+                                            // 2.1 请求延长listenKey
+                                            .lengthenListenKey(client.getListenKey(), client.getUserAccountInfo().getAsKey())
+                                            // 2.2 延长listenKey有错误，重新获取
+                                            .whenCompleteAsync((key, throwable) -> {
+                                                try {
+                                                    if (throwable != null) {
+                                                        log.error("延长accountId[{}]的listenKey[{}]发生错误, 重新启动account链接", accountId, client.getListenKey(), throwable);
+                                                        //重新获取listenKey启动
+                                                        boolean result = restartAccountEventStream(accountId, client);
+                                                        if (!result) {
+                                                            // TODO 错误日志上传
+                                                            log.error("accountId[{}}重新获取推送链接失败", accountId);
 
-                                        //特殊标记，下一次刷新时删掉
-                                        keyValue.setValue(-1L);
-                                    } else {
-                                        log.info("accountId[{}]重新获取推送链接成功, listenKey[{}]", accountId, client.getListenKey());
-                                        keyValue.setValue(System.currentTimeMillis() + REFRESH_INTERVAL);
-                                    }
-                                }
-                            } finally {
-                                semaphore.release();
-
-                            }
-                        }, executor);
+                                                            //特殊标记，下一次刷新时删掉
+                                                            keyValue.setValue(-1L);
+                                                        } else {
+                                                            log.info("accountId[{}]重新获取推送链接成功, listenKey[{}]", accountId, client.getListenKey());
+                                                            keyValue.setValue(System.currentTimeMillis() + REFRESH_INTERVAL);
+                                                        }
+                                                    }
+                                                } finally {
+                                                    semaphore.release();
+                                                }
+                                            });
+                                }, executor);
                     }
                 }
             } catch (InterruptedException e) {
@@ -1106,18 +2094,6 @@ public class BinanceAccountClientManager implements InitializingBean {
     }
 
 
-    /**
-     * 获取 MergeClientKey
-     *
-     * @param runEnv    runEnv
-     * @param tradeType tradeType
-     * @return key
-     */
-    private String generateMergeClientKey(RunEnv runEnv, TradeType tradeType) {
-        return runEnv + "." + tradeType;
-    }
-
-
     public void close() {
         streamRefreshTaskState.set(false);
         executor.shutdown();
@@ -1125,15 +2101,57 @@ public class BinanceAccountClientManager implements InitializingBean {
 }
 
 
+
+package com.helei.reaktimedatacenter.manager;
+
+import com.helei.util.NamedThreadFactory;
+import lombok.Getter;
+import org.springframework.stereotype.Component;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+@Getter
+@Component
+public class ExecutorServiceManager {
+
+    /**
+     * 执行连接的线程池
+     */
+    private final ExecutorService connectExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("连接线程池"));
+
+    /**
+     * 同步任务执行的线程池
+     */
+    private final ExecutorService syncTaskExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("同步任务线程池"));
+
+    /**
+     * 处理账户事件的线程池
+     */
+    private final ExecutorService accountEventExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("账户事件处理线程池"));
+
+    /**
+     * 获取账户实时信息推送的线程池
+     */
+    private final ExecutorService accountRTDataExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("账户实时数据流获取线程池"));
+
+    /**
+     * k线加载任务处理的线程池
+     */
+    private final ExecutorService klineTaskExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("k线数据加载线程池"));
+}
+
+
+
 package com.helei.reaktimedatacenter.realtime.impl;
 
 import cn.hutool.core.lang.Pair;
-import com.helei.binanceapi.BinanceWSApiClient;
+import com.helei.binanceapi.BinanceWSMarketStreamClient;
 import com.helei.binanceapi.api.ws.BinanceWSStreamApi;
 import com.helei.binanceapi.base.SubscribeResultInvocationHandler;
 import com.helei.binanceapi.constants.WebSocketStreamType;
 import com.helei.binanceapi.dto.StreamSubscribeEntity;
-import com.helei.cexapi.CEXApiFactory;
+import com.helei.constants.WebsocketClientStatus;
 import com.helei.constants.trade.KLineInterval;
 import com.helei.constants.WebSocketStreamParamKey;
 import com.helei.reaktimedatacenter.realtime.KLineRTDataSyncTask;
@@ -1142,7 +2160,6 @@ import lombok.extern.slf4j.Slf4j;
 import javax.net.ssl.SSLException;
 import java.net.URISyntaxException;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -1153,27 +2170,20 @@ public class BinanceKLineRTDataSyncTask extends KLineRTDataSyncTask {
     /**
      * 流api 获取流实时数据
      */
-    private final BinanceWSApiClient streamApiClient;
-
-    /**
-     * 订阅的url
-     */
-    private final String url;
+    private final BinanceWSMarketStreamClient marketStreamClient;
 
 
     /**
      * 币安k线数据同步任务
      *
-     * @param listenKLines 监听的k线列表
-     * @param url          url
+     * @param marketStreamClient marketStreamClient
+     * @param listenKLines       监听的k线列表
      */
-    public BinanceKLineRTDataSyncTask(
-            List<Pair<String, KLineInterval>> listenKLines,
-            String url
+    public BinanceKLineRTDataSyncTask(BinanceWSMarketStreamClient marketStreamClient,
+                                      List<Pair<String, KLineInterval>> listenKLines
     ) {
         super(listenKLines);
-        this.url = url;
-        streamApiClient = CEXApiFactory.binanceApiClient(url, "币安k线实时获取任务-" + UUID.randomUUID().toString().substring(0, 8));
+        this.marketStreamClient = marketStreamClient;
     }
 
 
@@ -1190,15 +2200,17 @@ public class BinanceKLineRTDataSyncTask extends KLineRTDataSyncTask {
     ) {
         return CompletableFuture.runAsync(() -> {
             CompletableFuture<Void> connect = null;
+            String clientName = marketStreamClient.getName();
             try {
 
                 // 1 连接
-                connect = streamApiClient.connect();
-                connect.get();
-                log.info("连接[{}]成功，开始获取请求实时k线数据", url);
+                if (!WebsocketClientStatus.RUNNING.equals(marketStreamClient.getClientStatus())) {
+
+                    throw new RuntimeException(String.format("ws客户端[%s]未连接", clientName));
+                }
 
                 // 2 构建请求
-                BinanceWSStreamApi.StreamCommandBuilder streamCommandBuilder = streamApiClient.getStreamApi().builder();
+                BinanceWSStreamApi.StreamCommandBuilder streamCommandBuilder = marketStreamClient.getStreamApi().builder();
                 for (Pair<String, KLineInterval> kLine : listenKLines) {
                     streamCommandBuilder.addSubscribeEntity(
                             StreamSubscribeEntity
@@ -1215,11 +2227,10 @@ public class BinanceKLineRTDataSyncTask extends KLineRTDataSyncTask {
                 // 3 请求订阅
                 streamCommandBuilder.subscribe();
 
-                log.info("已发送k线获取请求到api [{}] ", url);
-
-            } catch (SSLException | URISyntaxException | ExecutionException | InterruptedException e) {
-                log.error("开始同步k线数据发生错误，连接api[{}]错误", url);
-                throw new RuntimeException(String.format("同步k线数据发生错误，连接api[%s]错误", url), e);
+                log.info("已发送k线获取请求到api client [{}] ", clientName);
+            } catch (Exception e) {
+                log.error("开始同步k线数据发生错误，连接api client[{}]错误", clientName);
+                throw new RuntimeException(String.format("同步k线数据发生错误，连接api[%s]错误", clientName), e);
             }
         }, taskExecutor);
     }
@@ -1446,7 +2457,7 @@ public class BinanceAccountEventResolveService implements AccountEventResolveSer
         log.info("收到accountId[{}]的账户listenKey过期事件，尝试重新连接", accountId);
 
         return CompletableFuture.runAsync(() -> {
-            boolean result = binanceAccountClientManager.startAccountEventStream(accountId);
+            boolean result = binanceAccountClientManager.restartAccountEventStream(accountId);
             if (result) {
                 log.info("accountId[{}]的账户重新获取listenKey成功", accountId);
             } else {
@@ -1459,9 +2470,14 @@ public class BinanceAccountEventResolveService implements AccountEventResolveSer
 
 
 
+
+
+
+
+
 package com.helei.reaktimedatacenter.service.impl.account;
 
-import com.helei.binanceapi.BinanceWSAccountStreamClient;
+import com.helei.binanceapi.BinanceWSAccountEventStreamClient;
 import com.helei.binanceapi.dto.accountevent.AccountEvent;
 import com.helei.constants.RunEnv;
 import com.helei.constants.trade.TradeType;
@@ -1491,7 +2507,7 @@ public class BinanceAccountEventStreamService implements AccountEventStreamServi
 
     private static final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
-    private static final int ACCOUNT_STREAM_START_TIMES_LIMIT = 3;
+    private static final int ACCOUNT_STREAM_START_TIMES_LIMIT = 1;
 
 
     @Autowired
@@ -1581,64 +2597,32 @@ public class BinanceAccountEventStreamService implements AccountEventStreamServi
 
         log.info("开始获取账户事件流, userId[{}], accountId[{}], runEvn[{}], tradeType[{}]", userId, accountId, runEnv, tradeType);
 
-        CompletableFuture<Void> future = CompletableFuture
+        return CompletableFuture
                 //1 获取流客户端
-                .supplyAsync(() -> {
-                    BinanceWSAccountStreamClient binanceWSAccountStreamClient = null;
+                .runAsync(() -> {
+                    BinanceWSAccountEventStreamClient binanceWSAccountStreamClient = null;
 
                     //1.1 带重试
-                    for (int i = 0; i < ACCOUNT_STREAM_START_TIMES_LIMIT; i++) {
+                    for (int i = 1; i <= ACCOUNT_STREAM_START_TIMES_LIMIT; i++) {
                         try {
                             log.info("第 [{}] 次获取账户事件流, userId[{}], accountId[{}]", i, userId, accountId);
 
                             //1.2 创建 binanceWSAccountStreamClient 用于开启事件流
-                            binanceWSAccountStreamClient = binanceAccountClientManager.getAccountEventStreamClient(accountInfo, this::resolveAccountEvent);
+                            binanceWSAccountStreamClient = binanceAccountClientManager.startAccountEventStreamClient(accountInfo, this::resolveAccountEvent);
 
                             log.info("第 [{}] 次获取账户事件流成功, userId[{}], accountId[{}], listenKey[{}]", i, userId, accountId, binanceWSAccountStreamClient.getListenKey());
 
-                            return binanceWSAccountStreamClient;
                         } catch (Exception e) {
                             log.error("第 [{}] 次获取账户事件流失败， userId[{}], accountId[{}]", i, userId, accountId, e);
 
                             binanceAccountClientManager.removeAccountStreamClient(accountId);
 
-                            if (i == ACCOUNT_STREAM_START_TIMES_LIMIT - 1) {
+                            if (i == ACCOUNT_STREAM_START_TIMES_LIMIT) {
                                 log.error("重试次数 [{}] 超过了限制[{}], 不再继续重试, userId[{}], accountId[{}]", i, ACCOUNT_STREAM_START_TIMES_LIMIT, userId, accountId);
                             }
                         }
                     }
-
-                    return binanceWSAccountStreamClient;
-                }, executor)
-                //2 开启流客户端
-                .thenAcceptAsync(binanceWSAccountStreamClient -> {
-                    // 开启事件流
-                    startAccountEventStream(accountInfo, binanceWSAccountStreamClient);
                 }, executor);
-
-        return future;
-    }
-
-
-    /**
-     * 开始账户事件流，通过 binanceWSAccountStreamClient 进行获取
-     *
-     * @param accountInfo                  accountInfo
-     * @param binanceWSAccountStreamClient binanceWSAccountStreamClient
-     */
-    private void startAccountEventStream(UserAccountInfo accountInfo,
-                                         BinanceWSAccountStreamClient binanceWSAccountStreamClient) {
-        long accountId = accountInfo.getId();
-
-        boolean success = binanceAccountClientManager.startAccountEventStream(accountId, binanceWSAccountStreamClient);
-
-        if (success) {
-            log.info("开启账户事件流成功, accountId[{}], listenKey [{}]", accountId, binanceWSAccountStreamClient.getListenKey());
-        } else {
-            // TODO 错误日志上传
-            log.error("开启账户事件流失败, accountId[{}]", accountId);
-            throw new RuntimeException(String.format("开启账户事件流失败，accountId[%s], listenKey [%s]", accountId, binanceWSAccountStreamClient.getListenKey()));
-        }
     }
 
 
@@ -1648,684 +2632,6 @@ public class BinanceAccountEventStreamService implements AccountEventStreamServi
         accountEventResolveService.resolveAccountEvent(accountInfo, accountEvent);
     }
 
-}
-
-
-
-
-package com.helei.reaktimedatacenter.service.impl.market;
-
-import cn.hutool.core.collection.ListUtil;
-import cn.hutool.core.lang.Pair;
-import com.alibaba.fastjson.JSONObject;
-import com.helei.binanceapi.base.SubscribeResultInvocationHandler;
-import com.helei.binanceapi.config.BinanceApiConfig;
-import com.helei.constants.CEXType;
-import com.helei.constants.RunEnv;
-import com.helei.constants.WebSocketStreamParamKey;
-import com.helei.constants.trade.KLineInterval;
-import com.helei.constants.trade.TradeType;
-import com.helei.dto.base.KeyValue;
-import com.helei.reaktimedatacenter.config.RealtimeConfig;
-import com.helei.reaktimedatacenter.dto.SymbolKLineInfo;
-import com.helei.reaktimedatacenter.service.MarketRealtimeDataService;
-import com.helei.reaktimedatacenter.service.impl.KafkaProducerService;
-import com.helei.util.KafkaUtil;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-
-
-/**
- * 市场实时数据服务的抽象类
- * <P>能够将市场数据推送至kafka，会根据配置文件中的run_type来加载需要使用的环境。只需关注实现registryKLineDataLoader(*)方法</P>
- */
-@Slf4j
-public abstract class AbstractKafkaMarketRTDataService implements MarketRealtimeDataService {
-    protected final ExecutorService taskExecutor;
-
-    public final KafkaProducerService kafkaProducerService;
-
-    protected final RealtimeConfig realtimeConfig;
-
-    protected final BinanceApiConfig binanceApiConfig;
-
-    public AbstractKafkaMarketRTDataService(ExecutorService taskExecutor, KafkaProducerService kafkaProducerService) {
-        this.taskExecutor = taskExecutor;
-        this.kafkaProducerService = kafkaProducerService;
-        this.realtimeConfig = RealtimeConfig.INSTANCE;
-        this.binanceApiConfig = BinanceApiConfig.INSTANCE;
-    }
-
-    @Override
-    public Integer startSyncRealTimeKLine() {
-        int all = 0;
-        List<CompletableFuture<Integer>> futures = new ArrayList<>();
-
-        for (KeyValue<RunEnv, TradeType> keyValue : realtimeConfig.getRun_type().getRunTypeList()) {
-            futures.add(CompletableFuture.supplyAsync(() -> startSyncRealTimeKLine(keyValue.getKey(), keyValue.getValue()), taskExecutor));
-        }
-
-        for (CompletableFuture<Integer> future : futures) {
-            try {
-                all += future.get();
-            } catch (InterruptedException | ExecutionException e) {
-                throw new RuntimeException(e);
-            }
-        }
-        return all;
-    }
-
-    @Override
-    public Integer startSyncRealTimeKLine(RunEnv runEnv, TradeType tradeType) {
-        log.info("开始同步env[{}]-tradeType[{}]的实时k线", runEnv, tradeType);
-
-        RealtimeConfig.RealtimeKLineDataConfig realtimeKLineDataConfig = realtimeConfig.getEnvKLineDataConfig(runEnv, tradeType);
-
-        //Step 1: 解析k线
-        List<SymbolKLineInfo> realtimeKLineList = realtimeKLineDataConfig.getRealtimeKLineList();
-
-        if (realtimeKLineList == null || realtimeKLineList.isEmpty()) {
-            log.warn("runEnv[{}]-tradeType[{}] 没有设置要实时获取的k线", runEnv, tradeType);
-            return 0;
-        }
-
-        List<Pair<String, KLineInterval>> intervals = new ArrayList<>();
-
-        for (SymbolKLineInfo symbolKLineInfo : realtimeKLineList) {
-            symbolKLineInfo.getIntervals().forEach(interval -> {
-                intervals.add(new Pair<>(symbolKLineInfo.getSymbol(), interval));
-            });
-        }
-
-        //Step 2: 创建topic
-        log.info("开始检查并创建所需topic");
-        createTopic(intervals, runEnv, tradeType);
-        log.info("topic创建完毕");
-
-
-        //Step 3: 分片执行
-        List<List<Pair<String, KLineInterval>>> partition = ListUtil.partition(intervals, realtimeKLineDataConfig.getClient_listen_kline_max_count());
-
-
-        try {
-            List<CompletableFuture<Void>> futures = new ArrayList<>();
-            for (List<Pair<String, KLineInterval>> list : partition) {
-
-                //Step 4: 创建task执行获取
-                CompletableFuture<Void> future = registryKLineDataLoader(
-                        runEnv,
-                        tradeType,
-                        list,
-                        (s, p, k) -> klineDataSyncToKafka(s, (KLineInterval) p.get(WebSocketStreamParamKey.KLINE_INTERVAL), k, runEnv, tradeType),
-                        taskExecutor);
-
-                futures.add(future);
-            }
-
-            CompletableFuture
-                    .allOf(futures.toArray(new CompletableFuture[0]))
-                    .get();
-
-            log.info("所有k线开始实时同步");
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-
-        return realtimeKLineList.size();
-    }
-
-
-    /**
-     * 注册k线数据加载器
-     *
-     * @param runEnv               运行环境
-     * @param tradeType            交易类型
-     * @param listenKLines         k线
-     * @param whenReceiveKLineData 回调，需要在whenReceiveKLineData.invoke()时传入symbol、interval、json格式的k线数据
-     * @param executorService      执行的线程池
-     * @return CompletableFuture
-     */
-    protected abstract CompletableFuture<Void> registryKLineDataLoader(
-            RunEnv runEnv,
-            TradeType tradeType,
-            List<Pair<String, KLineInterval>> listenKLines,
-            SubscribeResultInvocationHandler whenReceiveKLineData,
-            ExecutorService executorService
-    );
-
-    /**
-     * 把k线发到kafka
-     *
-     * @param symbol symbol
-     * @param data   data
-     */
-    public void klineDataSyncToKafka(String symbol, KLineInterval kLineInterval, JSONObject data, RunEnv runEnv, TradeType tradeType) {
-        String topic = KafkaUtil.resolveKafkaTopic(CEXType.BINANCE, KafkaUtil.getKLineStreamName(symbol, kLineInterval), runEnv, tradeType);
-
-        log.info("收到k线信息 - {}, - {} - {} - {} send to topic[{}]", symbol, data, runEnv, tradeType, topic);
-        try {
-            kafkaProducerService.sendMessage(
-                    topic,
-                    data.toJSONString()
-            ).get();
-        } catch (InterruptedException | ExecutionException e) {
-            log.error("保持k线信息到kafka出错，symbol[{}]", symbol, e);
-        }
-    }
-
-    /**
-     * 创建topic
-     *
-     * @param kLines    k线list
-     * @param runEnv    运行环境
-     * @param tradeType 交易类型
-     */
-    private void createTopic(List<Pair<String, KLineInterval>> kLines, RunEnv runEnv, TradeType tradeType) {
-        for (Pair<String, KLineInterval> kLine : kLines) {
-            String topic = KafkaUtil.resolveKafkaTopic(CEXType.BINANCE, KafkaUtil.getKLineStreamName(kLine.getKey(), kLine.getValue()), runEnv, tradeType);
-
-            kafkaProducerService.checkAndCreateTopic(
-                    topic,
-                    realtimeConfig.getKafka().getKafka_num_partitions(),
-                    realtimeConfig.getKafka().getKafka_replication_factor()
-            );
-        }
-    }
-}
-
-
-package com.helei.reaktimedatacenter.service.impl.market;
-
-import cn.hutool.core.lang.Pair;
-import com.helei.binanceapi.base.SubscribeResultInvocationHandler;
-import com.helei.constants.trade.KLineInterval;
-import com.helei.constants.RunEnv;
-import com.helei.constants.trade.TradeType;
-import com.helei.reaktimedatacenter.manager.ExecutorServiceManager;
-import com.helei.reaktimedatacenter.realtime.impl.BinanceKLineRTDataSyncTask;
-import com.helei.reaktimedatacenter.service.impl.KafkaProducerService;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-
-
-/**
- * 币安市场数据服务
- */
-@Slf4j
-@Service
-public class BinanceMarketRTDataService extends AbstractKafkaMarketRTDataService {
-
-
-    @Autowired
-    public BinanceMarketRTDataService(ExecutorServiceManager executorServiceManager, KafkaProducerService kafkaProducerService) {
-        super(executorServiceManager.getKlineTaskExecutor(), kafkaProducerService);
-    }
-
-    @Override
-    protected CompletableFuture<Void> registryKLineDataLoader(
-            RunEnv runEnv,
-            TradeType tradeType,
-            List<Pair<String, KLineInterval>> listenKLines,
-            SubscribeResultInvocationHandler whenReceiveKLineData,
-            ExecutorService executorService
-    ) {
-        String url = binanceApiConfig.getEnvUrlSet(runEnv, tradeType).getWs_market_stream_url();
-        return new BinanceKLineRTDataSyncTask(
-                listenKLines,
-                url
-        ).startSync(whenReceiveKLineData, taskExecutor);
-    }
-
-}
-
-
-package com.helei.reaktimedatacenter.service.impl.market;
-
-import cn.hutool.core.lang.Pair;
-import com.alibaba.fastjson.JSONObject;
-import com.helei.binanceapi.base.SubscribeResultInvocationHandler;
-import com.helei.constants.RunEnv;
-import com.helei.constants.WebSocketStreamParamKey;
-import com.helei.constants.trade.KLineInterval;
-import com.helei.constants.trade.TradeType;
-import com.helei.reaktimedatacenter.manager.ExecutorServiceManager;
-import com.helei.reaktimedatacenter.service.impl.KafkaProducerService;
-import org.springframework.stereotype.Service;
-
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.concurrent.*;
-
-
-/**
- * 随机市场数据服务
- */
-@Service
-public class RandomMarketRTDataService extends AbstractKafkaMarketRTDataService {
-
-    private final Random random = new Random();
-
-    private final Double maxPrice = 99999.09;
-
-    private final Double minPrice = 111.229;
-
-    private final ConcurrentHashMap<String, ConcurrentHashMap<KLineInterval, Long>> startTimeStampMap;
-
-    private final ConcurrentHashMap<String, ConcurrentHashMap<KLineInterval, Long>> realTimerMap;
-
-    private final LocalDateTime startTimeStamp = LocalDateTime.of(2022, 1, 1, 1, 1);
-
-    private long epochMilli;
-
-
-    public RandomMarketRTDataService(
-            ExecutorServiceManager executorServiceManager, KafkaProducerService kafkaProducerService
-    ) {
-        super(executorServiceManager.getKlineTaskExecutor(), kafkaProducerService);
-
-        epochMilli = startTimeStamp.toInstant(ZoneOffset.UTC).toEpochMilli();
-
-        if (epochMilli > System.currentTimeMillis()) {
-            epochMilli = System.currentTimeMillis();
-        }
-        this.startTimeStampMap = new ConcurrentHashMap<>();
-        this.realTimerMap = new ConcurrentHashMap<>();
-    }
-
-    @Override
-    protected CompletableFuture<Void> registryKLineDataLoader(
-            RunEnv runEnv,
-            TradeType tradeType,
-            List<Pair<String, KLineInterval>> listenKLines,
-            SubscribeResultInvocationHandler whenReceiveKLineData,
-            ExecutorService executorService
-    ) {
-        return CompletableFuture.runAsync(() -> {
-            String key = getKey(runEnv, tradeType);
-            for (Pair<String, KLineInterval> listenKLine : listenKLines) {
-                String symbol = listenKLine.getKey();
-                KLineInterval interval = listenKLine.getValue();
-
-                startTimeStampMap.putIfAbsent(key, new ConcurrentHashMap<>());
-                realTimerMap.putIfAbsent(key, new ConcurrentHashMap<>());
-
-                startTimeStampMap.get(key).putIfAbsent(interval, epochMilli);
-                realTimerMap.get(key).putIfAbsent(interval, epochMilli);
-
-                executorService.execute(() -> {
-                    Map<String, Object> map = new HashMap<>();
-                    map.put(WebSocketStreamParamKey.KLINE_INTERVAL, interval);
-                    while (true) {
-                        try {
-                            JSONObject kLine = loadKLine(runEnv, tradeType, symbol, interval);
-                            whenReceiveKLineData.invoke(symbol, map, kLine);
-                            TimeUnit.SECONDS.sleep(10);
-                        } catch (InterruptedException e) {
-                            throw new RuntimeException(e);
-                        }
-                    }
-                });
-            }
-
-        }, executorService);
-    }
-
-
-    protected JSONObject loadKLine(
-            RunEnv runEnv,
-            TradeType tradeType,
-            String symbol,
-            KLineInterval kLineInterval
-    ) {
-
-        double nextLow = minPrice + (maxPrice - minPrice) * random.nextDouble();
-        double nextHigh = nextLow + (maxPrice - nextLow) * random.nextDouble();
-        double nextOpen = nextLow + (nextHigh - nextLow) * random.nextDouble();
-        double nextClose = nextLow + (nextHigh - nextLow) * random.nextDouble();
-
-        double volume = 10 + (Double.MAX_VALUE / 2 - 10) * random.nextDouble();
-        long plus = kLineInterval.getSecond() * 1000;
-        String key = getKey(runEnv, tradeType);
-        long openTime = startTimeStampMap.get(key).get(kLineInterval);
-
-        realTimerMap.get(key).computeIfPresent(kLineInterval, (k, v) -> v + 200);
-        long curTime = realTimerMap.get(key).get(kLineInterval);
-
-        boolean isRealTime = curTime > System.currentTimeMillis() - kLineInterval.getSecond() * 1000;
-        if (isRealTime) {
-            if (curTime >= openTime + plus) {
-                openTime += plus;
-                startTimeStampMap.get(key).put(kLineInterval, openTime);
-            }
-        } else {
-            openTime += plus;
-            startTimeStampMap.get(key).put(kLineInterval, openTime);
-        }
-
-        JSONObject jb = new JSONObject();
-        jb.put("t", openTime);
-        jb.put("T", openTime + plus - 1000);
-        jb.put("s", symbol);
-        jb.put("h", nextHigh);
-        jb.put("l", nextLow);
-        jb.put("o", nextOpen);
-        jb.put("c", nextClose);
-        jb.put("v", volume);
-        jb.put("x", !isRealTime);
-        jb.put("i", kLineInterval.name());
-
-        return jb;
-    }
-
-    private String getKey(RunEnv runEnv, TradeType tradeType) {
-        return runEnv.name() + " - " + tradeType.name();
-    }
-}
-
-
-
-package com.helei.reaktimedatacenter.service.impl;
-
-import com.alibaba.fastjson.JSONObject;
-import com.helei.binanceapi.BinanceWSApiClient;
-import com.helei.binanceapi.config.BinanceApiConfig;
-import com.helei.cexapi.CEXApiFactory;
-import com.helei.constants.RunEnv;
-import com.helei.constants.trade.TradeType;
-import com.helei.dto.ASKey;
-import com.helei.dto.account.AccountPositionConfig;
-import com.helei.dto.account.AccountRTData;
-import com.helei.dto.account.UserAccountInfo;
-import com.helei.dto.account.UserInfo;
-import com.helei.dto.base.KeyValue;
-import com.helei.reaktimedatacenter.config.RealtimeConfig;
-import com.helei.reaktimedatacenter.service.UserService;
-import com.helei.reaktimedatacenter.supporter.BatchWriteSupporter;
-import com.helei.util.RedisKeyUtil;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.InitializingBean;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-
-import java.util.ArrayList;
-import java.util.List;
-
-
-@Slf4j
-@Service
-public class UserServiceImpl implements UserService, InitializingBean {
-
-    private final RealtimeConfig realtimeConfig = RealtimeConfig.INSTANCE;
-
-    private final BinanceApiConfig binanceApiConfig = BinanceApiConfig.INSTANCE;
-
-    @Autowired
-    private BatchWriteSupporter batchWriteSupporter;
-
-
-    @Override
-    public List<UserInfo> queryAll() {
-
-        for (KeyValue<RunEnv, TradeType> keyValue : realtimeConfig.getRun_type().getRunTypeList()) {
-            //TODO 查数据库, 只取这些环境里的
-
-        }
-        List<UserInfo> list = new ArrayList<>();
-
-        UserInfo u_contract_test_net_account = UserInfo.builder()
-                .id(1)
-                .username("合约测试网账号")
-                .password("123456")
-                .accountInfos(List.of(
-                        UserAccountInfo
-                                .builder()
-                                .id(1)
-                                .userId(1)
-                                .accountPositionConfig(AccountPositionConfig
-                                        .builder()
-                                        .riskPercent(0.5)
-                                        .leverage(10)
-                                        .build()
-                                )
-                                .asKey(new ASKey("b252246c6c6e81b64b8ff52caf6b8f37471187b1b9086399e27f6911242cbc66", "a4ed1b1addad2a49d13e08644f0cc8fc02a5c14c3511d374eac4e37763cadf5f"))
-                                .subscribeSymbol(List.of("btcusdt", "ethusdt", "solusdt"))
-                                .runEnv(RunEnv.TEST_NET)
-                                .tradeType(TradeType.CONTRACT)
-                                .build()
-                ))
-                .build();
-        UserInfo spot_test_net_account = UserInfo.builder()
-                .id(2)
-                .username("现货测试网账号")
-                .password("123456")
-                .accountInfos(List.of(
-                        UserAccountInfo
-                                .builder()
-                                .id(1)
-                                .userId(2)
-                                .accountPositionConfig(AccountPositionConfig
-                                        .builder()
-                                        .riskPercent(0.5)
-                                        .leverage(10)
-                                        .build()
-                                )
-                                .subscribeSymbol(List.of("btcusdt", "ethusdt", "solusdt"))
-                                .asKey(new ASKey("1JIhkPyK07xadG9x8hIwqitN95MgpypPzA4b6TLraTonRnJ8BBJQlaO2iL9tPH0Y", "t84TYFR1zieMGncbw3kYq4zAPLxIJHJeMdD8V0FMKxij9fApojV6bhbDpyyjNDWt"))
-                                .runEnv(RunEnv.TEST_NET)
-                                .tradeType(TradeType.SPOT)
-                                .build()
-                ))
-                .build();
-
-        UserInfo binance_account = UserInfo.builder()
-                .id(3)
-                .username("正式网账号")
-                .password("123456")
-                .accountInfos(List.of(
-                        UserAccountInfo
-                                .builder()
-                                .id(1)
-                                .userId(3)
-                                .accountPositionConfig(AccountPositionConfig
-                                        .builder()
-                                        .riskPercent(0.5)
-                                        .leverage(10)
-                                        .build()
-                                )
-                                .subscribeSymbol(List.of("btcusdt", "ethusdt", "solusdt"))
-                                .asKey(new ASKey("TUFsFL4YrBsR4fnBqgewxiGfL3Su5L9plcjZuyRO3cq6M1yuwV3eiNX1LcMamYxz", "YsLzVacYo8eOGlZZ7RjznyWVjPHltIXzZJz2BrggCmCUDcW75FyFEv0uKyLBVAuU"))
-                                .runEnv(RunEnv.NORMAL)
-                                .tradeType(TradeType.SPOT)
-                                .build()
-                ))
-                .build();
-
-
-        list.add(u_contract_test_net_account);
-//        list.add(spot_test_net_account);
-//        list.add(binance_account);
-        return list;
-    }
-
-
-    /**
-     * 更新用户账户信息
-     *
-     * @param userAccountInfo userAccountInfo
-     */
-    @Override
-    public void updateUserAccountInfo(UserAccountInfo userAccountInfo) {
-
-        long accountId = userAccountInfo.getId();
-        long userId = userAccountInfo.getUserId();
-
-        String key = RedisKeyUtil.getUserAccountEnvRTDataKey(userAccountInfo.getRunEnv(), userAccountInfo.getTradeType());
-        String hashKey = String.valueOf(accountId);
-
-        //只发实时的部分数据
-        String value = JSONObject.toJSONString(new AccountRTData(userId, accountId, userAccountInfo.getAccountBalanceInfo(), userAccountInfo.getAccountPositionInfo()));
-
-        log.info("更新账户信息，key[{}], value[{}]", key, value);
-//        batchWriteSupporter.writeToRedis(key, value);
-        batchWriteSupporter.writeToRedisHash(key, hashKey, value);
-    }
-
-    /**
-     * 更新UserInfo到Redis，包括User名下的账户信息
-     *
-     * @param env       运行环境
-     * @param tradeType 交易类型
-     */
-    public void updateUserInfoToRedis(RunEnv env, TradeType tradeType) {
-        List<UserInfo> userInfos = queryAll();
-        for (UserInfo userInfo : userInfos) {
-            String url = binanceApiConfig.getEnvUrlSet(env, tradeType).getWs_market_url();
-            CEXApiFactory.binanceApiClient(url, "");
-
-            String key = RedisKeyUtil.getUserInfoKeyPrefix(env, tradeType) + userInfo.getId();
-            batchWriteSupporter.writeToRedis(key, JSONObject.toJSONString(userInfo));
-        }
-    }
-
-    @Override
-    public void afterPropertiesSet() throws Exception {
-        for (KeyValue<RunEnv, TradeType> keyValue : realtimeConfig.getRun_type().getRunTypeList()) {
-            updateUserInfoToRedis(keyValue.getKey(), keyValue.getValue());
-        }
-    }
-}
-
-
-package com.helei;
-
-import com.helei.reaktimedatacenter.service.AccountEventStreamService;
-import com.helei.reaktimedatacenter.service.MarketRealtimeDataService;
-import com.helei.reaktimedatacenter.service.impl.market.RandomMarketRTDataService;
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.context.ConfigurableApplicationContext;
-
-/**
- * 实时数据中心
- */
-@SpringBootApplication
-public class RealtimeDataCenter {
-    public static void main(String[] args) {
-        ConfigurableApplicationContext applicationContext = SpringApplication.run(RealtimeDataCenter.class, args);
-
-
-        startRTDataStream(applicationContext);
-
-//        startAccountEventStream(applicationContext);
-    }
-
-    private static void startAccountEventStream(ConfigurableApplicationContext applicationContext) {
-        AccountEventStreamService accountEventStreamService = applicationContext.getBean(AccountEventStreamService.class);
-        accountEventStreamService.startAllUserInfoEventStream();
-    }
-
-    private static void startRTDataStream(ConfigurableApplicationContext applicationContext) {
-        MarketRealtimeDataService marketRealtimeDataService = applicationContext.getBean(RandomMarketRTDataService.class);
-        marketRealtimeDataService.startSyncRealTimeKLine();
-    }
-}
-
-
-
-
-
-package com.helei.reaktimedatacenter.service.impl;
-
-import com.helei.dto.account.UserInfo;
-import com.helei.reaktimedatacenter.service.impl.account.BinanceAccountEventStreamService;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-
-import java.util.List;
-import java.util.concurrent.TimeUnit;
-
-@SpringBootTest
-class BinanceAccountEventStreamServiceTest {
-
-    @Autowired
-    private UserServiceImpl userService;
-
-    @Autowired
-    private BinanceAccountEventStreamService binanceAccountEventStreamService;
-
-    @BeforeEach
-    void setUp() {
-    }
-
-    @AfterEach
-    void tearDown() {
-    }
-
-    @Test
-    void startAllUserInfoEventStream() {
-        binanceAccountEventStreamService.startAllUserInfoEventStream();
-
-    }
-
-    @Test
-    void startUserInfoEventStream() throws InterruptedException {
-
-        List<UserInfo> userInfos = userService.queryAll();
-
-        UserInfo first = userInfos.getFirst();
-        UserInfo two = userInfos.get(1);
-        UserInfo three = userInfos.get(2);
-
-        binanceAccountEventStreamService.startUserInfoEventStream(three);
-
-        TimeUnit.MINUTES.sleep(1000);
-    }
-}
-
-
-
-package com.helei.service.impl;
-
-import com.helei.constants.RunEnv;
-import com.helei.constants.trade.TradeType;
-import com.helei.reaktimedatacenter.service.impl.market.BinanceMarketRTDataService;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-
-import java.util.concurrent.TimeUnit;
-
-@SpringBootTest
-class BinanceMarketRTDataServiceTest {
-
-    @Autowired
-    private BinanceMarketRTDataService binanceMarketRTDataService;
-
-
-
-    @Test
-    void startSyncRealTimeKLine() throws InterruptedException {
-        binanceMarketRTDataService.startSyncRealTimeKLine(RunEnv.TEST_NET, TradeType.SPOT);
-
-        TimeUnit.MINUTES.sleep(1000);
-    }
 }
 
 
