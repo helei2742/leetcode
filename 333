@@ -1,108 +1,878 @@
-CREATE TABLE binance_contract_order (
-    order_id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '订单编号',
-    symbol VARCHAR(20) NOT NULL COMMENT '交易对，例如 BTCUSDT',
-    side ENUM('BUY', 'SELL') NOT NULL COMMENT '交易方向',
-    position_side ENUM('BOTH', 'LONG', 'SHORT') DEFAULT 'BOTH' COMMENT '持仓方向，默认BOTH',
-    type ENUM('LIMIT', 'MARKET', 'STOP', 'STOP_MARKET', 'TAKE_PROFIT', 'TAKE_PROFIT_MARKET', 'TRAILING_STOP_MARKET') NOT NULL COMMENT '订单类型',
-    quantity DECIMAL(18, 8) NOT NULL COMMENT '交易数量',
-    price DECIMAL(18, 8) DEFAULT NULL COMMENT '订单价格，仅限限价单',
-    stop_price DECIMAL(18, 8) DEFAULT NULL COMMENT '触发价，仅限触发单',
-    reduce_only BOOLEAN DEFAULT FALSE COMMENT '是否仅减少持仓，仅适用于双向持仓模式',
-    close_position BOOLEAN DEFAULT FALSE COMMENT '是否为全平仓单，仅适用于触发单',
-    time_in_force ENUM('GTC', 'IOC', 'FOK') DEFAULT 'GTC' COMMENT '订单有效期类型',
-    working_type ENUM('MARK_PRICE', 'CONTRACT_PRICE') DEFAULT 'CONTRACT_PRICE' COMMENT '触发价格类型',
-    price_protect BOOLEAN DEFAULT FALSE COMMENT '价格保护开关',
-    client_order_id VARCHAR(36) DEFAULT NULL COMMENT '用户自定义订单ID',
-    timestamp BIGINT NOT NULL COMMENT '请求时间戳',
-    status ENUM('NEW', 'PARTIALLY_FILLED', 'FILLED', 'CANCELED', 'REJECTED', 'EXPIRED') DEFAULT 'NEW' COMMENT '订单状态',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '订单创建时间',
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '订单更新时间'
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='币安合约交易订单表';
+package com.helei.dto.request;
+
+import cn.hutool.core.lang.Pair;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.KLineInterval;
+import com.helei.constants.trade.TradeType;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class AddKLineRequest {
+
+    private RunEnv runEnv;
+
+    private TradeType tradeType;
+
+    private CEXType cexType;
+
+    private List<Pair<String, KLineInterval>> klineList;
 
 
-insert overwrite table ipd_ops_dwr_pub.dwr_pub_yygzt_v2_td_order_full
-select	 busi_no
-        ,title
-        ,issue_desc
-        ,case
-			when status = '0' then '起草中'
-			when status = '1' then '待确认'
-			when status = '2' then '处理中'
-			when status = '3' then '待验证'
-			when status = '4' then '已关闭'
-			when status = '11' then '分析中'
-			when status = '12' then '拒绝待确认'
-			when status = '20' then '已拒绝'
-			when status = '30' then '已取消'
-		end as status
-		,case
-			when td_type = 1 then '工程能力类'
-			when td_type = 2 then '数据类'
-			when td_type = 3 then '流程类'
-			when td_type = 4 then '业务部门类' else '其他'
-		end as order_type
-		,biz_domain as issue_domain
-        ,nvl(user_by,'--') as  user_by
-        ,l1_dept_code
-        ,l1_dept_cn_name
-        ,l2_dept_code
-        ,l2_dept_cn_name
-        ,l3_dept_code
-        ,l3_dept_cn_name
-        ,l4_dept_code
-        ,l4_dept_cn_name
-        ,l5_dept_code
-        ,l5_dept_cn_name
-        ,l6_dept_code
-        ,l6_dept_cn_name
-		,product_code
-        ,product_name
-        ,spdt_code
-        ,spdt_name
-        ,pdt_code
-        ,pdt_name
-        ,sub_product_code
-        ,sub_product_name
-        ,module_code
-        ,module_cn_name
-        ,app_id
-        ,app_cn_name
-		,created_by
-        ,curr_process_user
-        ,opened_user
-        ,open_time
-		,deal_time
-        ,sla_upgrade_cnt
-        ,sla_break_flag
-        ,respond_sla_status
-		,closed_sla_status
-		,saty_time
-		,relate_order_no
-		,sla_warn
-		,sla_time
-		,sla_status
-		,to_do_person
-		,to_do_applicant
-		,trace_person
-		,trace_upgrade
-		,case
-			when to_do_person is not null   then '未处理'
-			else '其他'
-		end as label_priority_01
-		,case
-			when (trace_person is not null or trace_upgrade is not null) and sla_upgrade_cnt = 3 then '三次升级'
-			when (trace_person is not null or trace_upgrade is not null) and sla_upgrade_cnt = 2 then '二次升级'
-			when (trace_person is not null or trace_upgrade is not null) and sla_upgrade_cnt = 1 then '一次升级'
-			when (trace_person is not null or trace_upgrade is not null) and sla_upgrade_cnt = 0 and sla_status  - 1 >=0 then '即将打破SLA'
-			when (trace_person is not null or trace_upgrade is not null) and user_by = trace_upgrade then '待其它环节处理'
-			when trace_person is not null or trace_upgrade is not null then   '其他'
-		end as label_priority_02
-		,operate_datetime as status_start_time
-		,round((unix_timestamp() - unix_timestamp(operate_datetime))/(24*60*60),2) as status_stay_duration
-		,case
-			when related_service_order regexp 'SD' then relate_user  else created_by
-		end as team_dept_user
-		,cast(current_timestamp as string) as ops_insert_time
-	from temp2
-	where parent_rn = 1
-	and sub_rn = 1;
+    public static void main(String[] args) {
+        AddKLineRequest addKLineRequest = new AddKLineRequest(RunEnv.TEST_NET, TradeType.CONTRACT, CEXType.BINANCE, new ArrayList<>());
+        addKLineRequest.getKlineList().add(new Pair<>("aw1", KLineInterval.M_1));
+
+        String string = JSONObject.toJSONString(addKLineRequest);
+        System.out.println(string);
+        System.out.println(JSONObject.parseObject(string, AddKLineRequest.class));
+    }
+}
+
+package com.helei.realtimedatacenter.controller;
+
+
+import com.helei.constants.CEXType;
+import com.helei.dto.base.Result;
+import com.helei.dto.request.AddKLineRequest;
+import com.helei.realtimedatacenter.service.impl.market.BinanceMarketRTDataService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.Set;
+
+@RestController
+@RequestMapping("/realtime")
+public class RealtimeDataCenterController {
+
+
+    @Autowired
+    private BinanceMarketRTDataService binanceMarketRTDataService;
+
+    @GetMapping("/addKLine")
+    public Result addKLine(AddKLineRequest request) {
+        CEXType cexType = request.getCexType();
+
+        switch (cexType) {
+            case BINANCE -> {
+                Set<String> set = binanceMarketRTDataService.startSyncEnvSymbolIntervalsKLine(request.getRunEnv(), request.getTradeType(), request.getKlineList());
+                return Result.ok(set);
+            }
+            default -> {
+                return Result.fail("不支持的请求参数");
+            }
+        }
+    }
+
+}
+
+
+package com.helei.realtimedatacenter.realtime.impl;
+
+import cn.hutool.core.lang.Pair;
+import com.helei.binanceapi.BinanceWSMarketStreamClient;
+import com.helei.binanceapi.api.ws.BinanceWSStreamApi;
+import com.helei.binanceapi.base.SubscribeResultInvocationHandler;
+import com.helei.binanceapi.constants.WebSocketStreamType;
+import com.helei.binanceapi.dto.StreamSubscribeEntity;
+import com.helei.constants.RunEnv;
+import com.helei.constants.WebsocketClientStatus;
+import com.helei.constants.trade.KLineInterval;
+import com.helei.constants.WebSocketStreamParamKey;
+import com.helei.constants.trade.TradeType;
+import com.helei.realtimedatacenter.realtime.KLineRTDataSyncTask;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+
+
+@Slf4j
+public class BinanceKLineRTDataSyncTask extends KLineRTDataSyncTask<BinanceWSStreamApi.StreamCommandBuilder> {
+
+    private final RunEnv runEnv;
+
+    private final TradeType tradeType;
+
+    /**
+     * 流api 获取流实时数据
+     */
+    private final BinanceWSMarketStreamClient marketStreamClient;
+
+    /**
+     * 是否注册k线
+     */
+    private final SyncKLineFilter kLineFilter;
+
+
+    /**
+     * 币安k线数据同步任务
+     *
+     * @param marketStreamClient marketStreamClient
+     * @param listenKLines       监听的k线列表
+     */
+    public BinanceKLineRTDataSyncTask(
+            BinanceWSMarketStreamClient marketStreamClient,
+            List<Pair<String, KLineInterval>> listenKLines,
+            SyncKLineFilter kLineFilter
+    ) {
+        super(listenKLines);
+        this.runEnv = marketStreamClient.getRunEnv();
+        this.tradeType = marketStreamClient.getTradeType();
+        this.marketStreamClient = marketStreamClient;
+        this.kLineFilter = kLineFilter;
+    }
+
+
+    @Override
+    protected BinanceWSStreamApi.StreamCommandBuilder startRegistryKLine() {
+        String clientName = marketStreamClient.getName();
+        // 1 连接
+        if (!WebsocketClientStatus.RUNNING.equals(marketStreamClient.getClientStatus())) {
+
+            throw new RuntimeException(String.format("ws客户端[%s]未连接", clientName));
+        }
+
+        return marketStreamClient.getStreamApi().builder();
+    }
+
+    @Override
+    protected String whenRegistryKLine(
+            String symbol,
+            KLineInterval kLineInterval,
+            SubscribeResultInvocationHandler whenReceiveKLineData,
+            ExecutorService taskExecutor,
+            BinanceWSStreamApi.StreamCommandBuilder commandBuilder
+    ) {
+
+        String key = generateSyncKLineKey(runEnv, tradeType, symbol, kLineInterval);
+        if (kLineFilter.filter(runEnv, tradeType, symbol, kLineInterval, key)) {
+            log.warn("过滤掉K线[{}]", key);
+            return null;
+        }
+
+        log.debug("注册k线[{}]", key);
+        // 2 构建请求
+        commandBuilder.addSubscribeEntity(
+                StreamSubscribeEntity
+                        .builder()
+                        .symbol(symbol)
+                        .subscribeType(WebSocketStreamType.KLINE)
+                        .invocationHandler(whenReceiveKLineData)
+                        .callbackExecutor(taskExecutor)
+                        .build()
+                        .addParam(WebSocketStreamParamKey.KLINE_INTERVAL, kLineInterval)
+        );
+
+        return key;
+    }
+
+    @Override
+    protected void endRegistryKLine(BinanceWSStreamApi.StreamCommandBuilder commandBuilder) {
+        // 3 请求订阅
+        commandBuilder.subscribe();
+        log.info("已发送k线获取请求到api client [{}] ", marketStreamClient.getName());
+    }
+
+
+    /**
+     * 获取当前同步了多少种k线信息
+     *
+     * @param runEnv        运行环境
+     * @param tradeType     交易类型
+     * @param symbol        交易对
+     * @param kLineInterval k线频率
+     * @return key
+     */
+    private String generateSyncKLineKey(RunEnv runEnv, TradeType tradeType, String symbol, KLineInterval kLineInterval) {
+        return String.format("%s.%s.%s.%s", runEnv.name(), tradeType.name(), symbol, kLineInterval.name());
+    }
+
+
+    public interface SyncKLineFilter {
+        boolean filter(RunEnv runEnv, TradeType tradeType, String symbol, KLineInterval kLineInterval, String key);
+    }
+}
+
+
+package com.helei.realtimedatacenter.realtime;
+
+import cn.hutool.core.lang.Pair;
+import com.helei.binanceapi.base.SubscribeResultInvocationHandler;
+import com.helei.constants.trade.KLineInterval;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+
+@Slf4j
+public abstract class KLineRTDataSyncTask<T> {
+
+    protected final List<Pair<String, KLineInterval>> listenKLines;
+
+    protected KLineRTDataSyncTask(List<Pair<String, KLineInterval>> listenKLines) {
+        this.listenKLines = listenKLines;
+    }
+
+    /**
+     * 开始同步
+     *
+     * @param whenReceiveKLineData 当websocket收到消息时的回调，
+     * @param taskExecutor         执行的线程池，回调也会通过这个线程池执行
+     * @return CompletableFuture<Void>
+     */
+    public CompletableFuture<Set<String>> startSync(
+            SubscribeResultInvocationHandler whenReceiveKLineData,
+            ExecutorService taskExecutor
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            HashSet<String> set = new HashSet<>();
+
+            T requestSender = startRegistryKLine();
+
+            try {
+                for (Pair<String, KLineInterval> kLine : listenKLines) {
+                    String key = whenRegistryKLine(kLine.getKey(), kLine.getValue(), whenReceiveKLineData, taskExecutor, requestSender);
+
+                    set.add(key);
+                }
+
+                endRegistryKLine(requestSender);
+                return set;
+            } catch (Exception e) {
+                throw new RuntimeException("同步k线数据发生错误", e);
+            }
+        }, taskExecutor);
+    }
+
+    /**
+     * 开始同步k显示数据
+     */
+    protected abstract T startRegistryKLine();
+
+    /**
+     * 注册监听k线时调用
+     *
+     * @param symbol               交易对
+     * @param kLineInterval        k线频率
+     * @param whenReceiveKLineData 收到k线数据的回调
+     * @param taskExecutor         执行的线程池
+     */
+    protected abstract String whenRegistryKLine(
+            String symbol,
+            KLineInterval kLineInterval,
+            SubscribeResultInvocationHandler whenReceiveKLineData,
+            ExecutorService taskExecutor,
+            T requestSender
+    );
+
+    /**
+     * k线数据同步结束
+     */
+    protected abstract void endRegistryKLine(T requestSender);
+}
+
+
+package com.helei.realtimedatacenter.service.impl.market;
+
+import cn.hutool.core.collection.ListUtil;
+import cn.hutool.core.lang.Pair;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.base.SubscribeResultInvocationHandler;
+import com.helei.binanceapi.config.BinanceApiConfig;
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.WebSocketStreamParamKey;
+import com.helei.constants.trade.KLineInterval;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.base.KeyValue;
+import com.helei.realtimedatacenter.config.RealtimeConfig;
+import com.helei.realtimedatacenter.dto.SymbolKLineInfo;
+import com.helei.realtimedatacenter.service.MarketRealtimeDataService;
+import com.helei.realtimedatacenter.service.impl.KafkaProducerService;
+import com.helei.util.KafkaUtil;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.*;
+
+
+/**
+ * 市场实时数据服务的抽象类
+ * <P>能够将市场数据推送至kafka，会根据配置文件中的run_type来加载需要使用的环境。只需关注实现registryKLineDataLoader(*)方法</P>
+ */
+@Slf4j
+public abstract class AbstractKafkaMarketRTDataService implements MarketRealtimeDataService {
+
+    protected final ExecutorService taskExecutor;
+
+    public final KafkaProducerService kafkaProducerService;
+
+    protected final RealtimeConfig realtimeConfig;
+
+    protected final BinanceApiConfig binanceApiConfig;
+
+    protected final CEXType cexType;
+
+    public AbstractKafkaMarketRTDataService(ExecutorService taskExecutor, KafkaProducerService kafkaProducerService, CEXType cexType) {
+        this.taskExecutor = taskExecutor;
+        this.kafkaProducerService = kafkaProducerService;
+        this.cexType = cexType;
+        this.realtimeConfig = RealtimeConfig.INSTANCE;
+        this.binanceApiConfig = BinanceApiConfig.INSTANCE;
+    }
+
+    @Override
+    public Set<String> startSyncRealTimeKLine() {
+        Set<String> all = new HashSet<>();
+        List<CompletableFuture<Set<String>>> futures = new ArrayList<>();
+
+        for (KeyValue<RunEnv, TradeType> keyValue : realtimeConfig.getRun_type().getRunTypeList()) {
+            futures.add(CompletableFuture.supplyAsync(() -> startSyncEnvRealTimeKLine(keyValue.getKey(), keyValue.getValue()), taskExecutor));
+        }
+
+        for (CompletableFuture<Set<String>> future : futures) {
+            try {
+                Set<String> oneEnvKLineSet = future.get();
+                all.addAll(oneEnvKLineSet);
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        return all;
+    }
+
+    @Override
+    public Set<String> startSyncEnvRealTimeKLine(RunEnv runEnv, TradeType tradeType) {
+        log.info("开始同步env[{}]-tradeType[{}]的实时k线", runEnv, tradeType);
+
+        RealtimeConfig.RealtimeKLineDataConfig realtimeKLineDataConfig = realtimeConfig.getEnvKLineDataConfig(runEnv, tradeType);
+
+        //Step 1: 解析k线
+        List<SymbolKLineInfo> realtimeKLineList = realtimeKLineDataConfig.getRealtimeKLineList();
+
+        if (realtimeKLineList == null || realtimeKLineList.isEmpty()) {
+            log.warn("runEnv[{}]-tradeType[{}] 没有设置要实时获取的k线", runEnv, tradeType);
+            return Set.of();
+        }
+
+        List<Pair<String, KLineInterval>> intervals = new ArrayList<>();
+
+        for (SymbolKLineInfo symbolKLineInfo : realtimeKLineList) {
+            symbolKLineInfo.getIntervals().forEach(interval -> {
+                intervals.add(new Pair<>(symbolKLineInfo.getSymbol(), interval));
+            });
+        }
+
+        return startSyncEnvSymbolIntervalsKLine(runEnv, tradeType, intervals);
+    }
+
+
+    /**
+     * 开始同步指定环境的k线信息
+     *
+     * @param runEnv                     运行环境
+     * @param tradeType                  交易类型
+     * @param intervals                  k线symbol、频率
+     * @return 个数
+     */
+    public Set<String> startSyncEnvSymbolIntervalsKLine(RunEnv runEnv, TradeType tradeType, List<Pair<String, KLineInterval>> intervals) {
+        //Step 2: 创建topic
+        log.info("开始检查并创建所需topic");
+        createTopic(intervals, runEnv, tradeType);
+        log.info("topic创建完毕");
+
+
+        //Step 3: 分片执行
+        List<List<Pair<String, KLineInterval>>> partition = ListUtil.partition(intervals,
+                realtimeConfig.getEnvKLineDataConfig(runEnv, tradeType).getClient_listen_kline_max_count());
+
+
+        try {
+            List<CompletableFuture<Set<String>>> futures = new ArrayList<>();
+            for (List<Pair<String, KLineInterval>> list : partition) {
+
+                //Step 4: 创建task执行获取
+                CompletableFuture<Set<String>> future = registryKLineDataLoader(
+                        runEnv,
+                        tradeType,
+                        list,
+                        (s, p, k) -> klineDataSyncToKafka(s, (KLineInterval) p.get(WebSocketStreamParamKey.KLINE_INTERVAL), k, runEnv, tradeType),
+                        taskExecutor
+                );
+
+                futures.add(future);
+            }
+
+
+            Set<String> all = new HashSet<>();
+
+            CompletableFuture
+                    .allOf(futures.toArray(new CompletableFuture[0]))
+                    .whenCompleteAsync((unused, throwable) -> {
+                        for (CompletableFuture<Set<String>> future : futures) {
+                            try {
+                                all.addAll(future.get());
+                            } catch (InterruptedException | ExecutionException e) {
+                                throw new RuntimeException(e);
+                            }
+                        }
+                    });
+
+            log.info("所有k线开始实时同步, [{}}", all);
+            return all;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+
+    /**
+     * 注册k线数据加载器
+     *
+     * @param runEnv               运行环境
+     * @param tradeType            交易类型
+     * @param listenKLines         k线
+     * @param whenReceiveKLineData 回调，需要在whenReceiveKLineData.invoke()时传入symbol、interval、json格式的k线数据
+     * @param executorService      执行的线程池
+     * @return CompletableFuture
+     */
+    protected abstract CompletableFuture<Set<String>> registryKLineDataLoader(
+            RunEnv runEnv,
+            TradeType tradeType,
+            List<Pair<String, KLineInterval>> listenKLines,
+            SubscribeResultInvocationHandler whenReceiveKLineData,
+            ExecutorService executorService
+    ) throws ExecutionException, InterruptedException;
+
+    /**
+     * 把k线发到kafka
+     *
+     * @param symbol symbol
+     * @param data   data
+     */
+    public void klineDataSyncToKafka(String symbol, KLineInterval kLineInterval, JSONObject data, RunEnv runEnv, TradeType tradeType) {
+        String topic = KafkaUtil.resolveKafkaTopic(cexType, KafkaUtil.getKLineStreamName(symbol, kLineInterval), runEnv, tradeType);
+
+        log.info("收到k线信息 - {}, - {} - {} - {} send to topic[{}]", symbol, data, runEnv, tradeType, topic);
+        try {
+            kafkaProducerService.sendMessage(
+                    topic,
+                    data.toJSONString()
+            ).get();
+        } catch (InterruptedException | ExecutionException e) {
+            log.error("保持k线信息到kafka出错，symbol[{}]", symbol, e);
+        }
+    }
+
+    /**
+     * 创建topic
+     *
+     * @param kLines    k线list
+     * @param runEnv    运行环境
+     * @param tradeType 交易类型
+     */
+    private void createTopic(List<Pair<String, KLineInterval>> kLines, RunEnv runEnv, TradeType tradeType) {
+        for (Pair<String, KLineInterval> kLine : kLines) {
+            String topic = KafkaUtil.resolveKafkaTopic(CEXType.BINANCE, KafkaUtil.getKLineStreamName(kLine.getKey(), kLine.getValue()), runEnv, tradeType);
+
+            kafkaProducerService.checkAndCreateTopic(
+                    topic,
+                    realtimeConfig.getKafka().getKafka_num_partitions(),
+                    realtimeConfig.getKafka().getKafka_replication_factor()
+            );
+        }
+    }
+}
+
+
+package com.helei.realtimedatacenter.service.impl.market;
+
+import cn.hutool.core.collection.ConcurrentHashSet;
+import cn.hutool.core.lang.Pair;
+import com.helei.binanceapi.BinanceWSMarketStreamClient;
+import com.helei.binanceapi.base.AbstractBinanceWSApiClient;
+import com.helei.binanceapi.base.SubscribeResultInvocationHandler;
+import com.helei.binanceapi.constants.BinanceWSClientType;
+import com.helei.cexapi.manager.BinanceBaseClientManager;
+import com.helei.constants.CEXType;
+import com.helei.constants.trade.KLineInterval;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.realtimedatacenter.manager.ExecutorServiceManager;
+import com.helei.realtimedatacenter.realtime.impl.BinanceKLineRTDataSyncTask;
+import com.helei.realtimedatacenter.service.impl.KafkaProducerService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+
+
+/**
+ * 币安市场数据服务
+ */
+@Slf4j
+@Service
+public class BinanceMarketRTDataService extends AbstractKafkaMarketRTDataService {
+
+    /**
+     * 用于计数当前同步了多少种k线
+     */
+    private final Set<String> syncKLineSet = new ConcurrentHashSet<>();
+
+    @Autowired
+    private BinanceBaseClientManager binanceBaseClientManager;
+
+
+    @Autowired
+    public BinanceMarketRTDataService(ExecutorServiceManager executorServiceManager, KafkaProducerService kafkaProducerService) {
+        super(executorServiceManager.getKlineTaskExecutor(), kafkaProducerService, CEXType.BINANCE);
+    }
+
+    @Override
+    protected CompletableFuture<Set<String>> registryKLineDataLoader(
+            RunEnv runEnv,
+            TradeType tradeType,
+            List<Pair<String, KLineInterval>> listenKLines,
+            SubscribeResultInvocationHandler whenReceiveKLineData,
+            ExecutorService executorService
+    ) throws ExecutionException, InterruptedException {
+
+        AbstractBinanceWSApiClient client = binanceBaseClientManager
+                .getEnvTypedApiClient(
+                        runEnv,
+                        tradeType,
+                        BinanceWSClientType.MARKET_STREAM,
+                        "klineLoadClient-" + syncKLineSet.size() / realtimeConfig.getEnvKLineDataConfig(runEnv, tradeType).getClient_listen_kline_max_count()
+                ).get();
+        BinanceWSMarketStreamClient marketStreamClient = (BinanceWSMarketStreamClient) client;
+
+        return new BinanceKLineRTDataSyncTask(
+                marketStreamClient,
+                listenKLines,
+                this::filterKLine
+        )
+                .startSync(whenReceiveKLineData, taskExecutor)
+                .thenApplyAsync(set -> {
+                    syncKLineSet.addAll(set);
+                    return set;
+                }, executorService);
+    }
+
+
+    /**
+     * 过滤注册的k线
+     *
+     * @return 是否过滤
+     */
+    private boolean filterKLine(RunEnv runEnv, TradeType tradeType, String symbol, KLineInterval kLineInterval, String key) {
+
+        if (syncKLineSet.contains(key)) {
+            return true;
+        }
+        syncKLineSet.add(key);
+
+        return false;
+    }
+
+}
+
+
+
+
+package com.helei.realtimedatacenter.service.impl.market;
+
+import cn.hutool.core.lang.Pair;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.base.SubscribeResultInvocationHandler;
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.WebSocketStreamParamKey;
+import com.helei.constants.trade.KLineInterval;
+import com.helei.constants.trade.TradeType;
+import com.helei.realtimedatacenter.manager.ExecutorServiceManager;
+import com.helei.realtimedatacenter.service.impl.KafkaProducerService;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.*;
+import java.util.concurrent.*;
+
+
+/**
+ * 随机市场数据服务
+ */
+@Service
+public class RandomMarketRTDataService extends AbstractKafkaMarketRTDataService {
+
+    private final Random random = new Random();
+
+    private final Double maxPrice = 99999.09;
+
+    private final Double minPrice = 111.229;
+
+    private final ConcurrentHashMap<String, ConcurrentHashMap<KLineInterval, Long>> startTimeStampMap;
+
+    private final ConcurrentHashMap<String, ConcurrentHashMap<KLineInterval, Long>> realTimerMap;
+
+    private final LocalDateTime startTimeStamp = LocalDateTime.of(2022, 1, 1, 1, 1);
+
+    private long epochMilli;
+
+
+    public RandomMarketRTDataService(
+            ExecutorServiceManager executorServiceManager, KafkaProducerService kafkaProducerService
+    ) {
+        super(executorServiceManager.getKlineTaskExecutor(), kafkaProducerService, CEXType.BINANCE);
+
+        epochMilli = startTimeStamp.toInstant(ZoneOffset.UTC).toEpochMilli();
+
+        if (epochMilli > System.currentTimeMillis()) {
+            epochMilli = System.currentTimeMillis();
+        }
+        this.startTimeStampMap = new ConcurrentHashMap<>();
+        this.realTimerMap = new ConcurrentHashMap<>();
+    }
+
+    @Override
+    protected CompletableFuture<Set<String>> registryKLineDataLoader(
+            RunEnv runEnv,
+            TradeType tradeType,
+            List<Pair<String, KLineInterval>> listenKLines,
+            SubscribeResultInvocationHandler whenReceiveKLineData,
+            ExecutorService executorService
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            Set<String> set = new HashSet<>();
+            String key = getKey(runEnv, tradeType);
+            set.add(key);
+            for (Pair<String, KLineInterval> listenKLine : listenKLines) {
+                String symbol = listenKLine.getKey();
+                KLineInterval interval = listenKLine.getValue();
+
+                startTimeStampMap.putIfAbsent(key, new ConcurrentHashMap<>());
+                realTimerMap.putIfAbsent(key, new ConcurrentHashMap<>());
+
+                startTimeStampMap.get(key).putIfAbsent(interval, epochMilli);
+                realTimerMap.get(key).putIfAbsent(interval, epochMilli);
+
+                executorService.execute(() -> {
+                    Map<String, Object> map = new HashMap<>();
+                    map.put(WebSocketStreamParamKey.KLINE_INTERVAL, interval);
+                    while (true) {
+                        try {
+                            JSONObject kLine = loadKLine(runEnv, tradeType, symbol, interval);
+                            whenReceiveKLineData.invoke(symbol, map, kLine);
+                            TimeUnit.SECONDS.sleep(10);
+                        } catch (InterruptedException e) {
+                            throw new RuntimeException(e);
+                        }
+                    }
+                });
+            }
+
+            return set;
+        }, executorService);
+    }
+
+
+    protected JSONObject loadKLine(
+            RunEnv runEnv,
+            TradeType tradeType,
+            String symbol,
+            KLineInterval kLineInterval
+    ) {
+
+        double nextLow = minPrice + (maxPrice - minPrice) * random.nextDouble();
+        double nextHigh = nextLow + (maxPrice - nextLow) * random.nextDouble();
+        double nextOpen = nextLow + (nextHigh - nextLow) * random.nextDouble();
+        double nextClose = nextLow + (nextHigh - nextLow) * random.nextDouble();
+
+        double volume = 10 + (Double.MAX_VALUE / 2 - 10) * random.nextDouble();
+        long plus = kLineInterval.getSecond() * 1000;
+        String key = getKey(runEnv, tradeType);
+        long openTime = startTimeStampMap.get(key).get(kLineInterval);
+
+        realTimerMap.get(key).computeIfPresent(kLineInterval, (k, v) -> v + 200);
+        long curTime = realTimerMap.get(key).get(kLineInterval);
+
+        boolean isRealTime = curTime > System.currentTimeMillis() - kLineInterval.getSecond() * 1000;
+        if (isRealTime) {
+            if (curTime >= openTime + plus) {
+                openTime += plus;
+                startTimeStampMap.get(key).put(kLineInterval, openTime);
+            }
+        } else {
+            openTime += plus;
+            startTimeStampMap.get(key).put(kLineInterval, openTime);
+        }
+
+        JSONObject jb = new JSONObject();
+        jb.put("t", openTime);
+        jb.put("T", openTime + plus - 1000);
+        jb.put("s", symbol);
+        jb.put("h", nextHigh);
+        jb.put("l", nextLow);
+        jb.put("o", nextOpen);
+        jb.put("c", nextClose);
+        jb.put("v", volume);
+        jb.put("x", !isRealTime);
+        jb.put("i", kLineInterval.name());
+
+        return jb;
+    }
+
+    private String getKey(RunEnv runEnv, TradeType tradeType) {
+        return runEnv.name() + " - " + tradeType.name();
+    }
+}
+
+
+
+package com.helei.realtimedatacenter.service;
+
+
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+
+import java.util.Set;
+
+public interface MarketRealtimeDataService {
+
+
+    /**
+     * 同步实时k线
+     *
+     * @return k线种类
+     */
+    Set<String> startSyncRealTimeKLine();
+
+    /**
+     * 开始同步实时k线
+     * @param runEnv runEnv
+     * @param tradeType tradeType
+     * @return k线种数
+     */
+    Set<String> startSyncEnvRealTimeKLine(RunEnv runEnv, TradeType tradeType);
+
+}
+
+
+package com.helei.realtimedatacenter;
+
+import com.helei.realtimedatacenter.service.AccountEventStreamService;
+import com.helei.realtimedatacenter.service.MarketRealtimeDataService;
+import com.helei.realtimedatacenter.service.UserService;
+import com.helei.realtimedatacenter.service.impl.market.RandomMarketRTDataService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.ConfigurableApplicationContext;
+
+import java.util.Set;
+
+/**
+ * 实时数据中心
+ */
+@SpringBootApplication
+public class RealtimeDataCenter {
+    private static final Logger log = LoggerFactory.getLogger(RealtimeDataCenter.class);
+
+    public static void main(String[] args) {
+        ConfigurableApplicationContext applicationContext = SpringApplication.run(RealtimeDataCenter.class, args);
+
+
+        startRTDataStream(applicationContext);
+
+//        updateAllUserInfo2Redis(applicationContext);
+//
+//        startAccountEventStream(applicationContext);
+    }
+
+    /**
+     * 开启账户事件流监听
+     *
+     * @param applicationContext applicationContext
+     */
+    private static void startAccountEventStream(ConfigurableApplicationContext applicationContext) {
+        AccountEventStreamService accountEventStreamService = applicationContext.getBean(AccountEventStreamService.class);
+        accountEventStreamService.startAllUserInfoEventStream();
+    }
+
+    /**
+     * 开启实时数据流
+     *
+     * @param applicationContext applicationContext
+     */
+    private static void startRTDataStream(ConfigurableApplicationContext applicationContext) {
+        MarketRealtimeDataService marketRealtimeDataService = applicationContext.getBean(RandomMarketRTDataService.class);
+        Set<String> set = marketRealtimeDataService.startSyncRealTimeKLine();
+        log.info("开始同步实时k线:\n");
+        for (String s : set) {
+            log.info("[{}]\n", s);
+        }
+    }
+
+    /**
+     * 更新用户信息到redis
+     *
+     * @param applicationContext applicationContext
+     */
+    private static void updateAllUserInfo2Redis(ConfigurableApplicationContext applicationContext) {
+        UserService userService = applicationContext.getBean(UserService.class);
+        userService.updateAllUserInfo();
+    }
+}
+
+
+package com.helei.service.impl;
+
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.realtimedatacenter.service.impl.market.BinanceMarketRTDataService;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+
+import java.util.concurrent.TimeUnit;
+
+@SpringBootTest
+class BinanceMarketRTDataServiceTest {
+
+    @Autowired
+    private BinanceMarketRTDataService binanceMarketRTDataService;
+
+
+
+    @Test
+    void startSyncRealTimeKLine() throws InterruptedException {
+        binanceMarketRTDataService.startSyncEnvRealTimeKLine(RunEnv.TEST_NET, TradeType.SPOT);
+
+        TimeUnit.MINUTES.sleep(1000);
+    }
+}
+
+
