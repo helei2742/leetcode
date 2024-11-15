@@ -1,59 +1,2056 @@
-WITH temp2 AS (
-    SELECT 
-        t1.td_order_id AS busi_no,
-        t1.title,
-        t1.issue_desc,
-        t1.status,
-        t1.td_type,
-        biz_domain,
-        t1.request_user_id AS user_by,
-        CASE
-            WHEN COALESCE(d.l1_dept_code, '-1') = COALESCE(d.l0_dept_code, '-1')
-            THEN '-1' ELSE COALESCE(d.l1_dept_code, '-1')
-        END AS l1_dept_code,
-        CASE
-            WHEN COALESCE(d.l1_dept_cn_name, '异常部门') = COALESCE(d.l0_dept_cn_name, '异常部门')
-            THEN '异常部门' ELSE d.l1_dept_cn_name
-        END AS l1_dept_cn_name,
-        -- 类似的 case 语句处理
-        CASE
-            WHEN COALESCE(d.l6_dept_code, '-1') = COALESCE(d.l5_dept_code, '-1')
-            THEN '-1' ELSE COALESCE(d.l6_dept_code, '-1')
-        END AS l6_dept_code,
-        CASE
-            WHEN COALESCE(d.l6_dept_cn_name, '异常部门') = COALESCE(d.l5_dept_cn_name, '异常部门')
-            THEN '异常部门' ELSE COALESCE(d.l6_dept_cn_name, '异常部门')
-        END AS l6_dept_cn_name,
-        t2.dimension_code AS product_code,
-        t2.dimension_cn_name AS product_name,
-        CASE
-            WHEN COALESCE(t2.prod_fm_code, '-1') = COALESCE(t2.parent_code, '-1')
-            THEN NULL ELSE t2.prod_fm_code
-        END AS spdt_code,
-        -- 继续处理其他字段...
-        DENSE_RANK() OVER (PARTITION BY t1.td_order_id ORDER BY t3.label DESC) AS parent_rn,
-        ROW_NUMBER() OVER (PARTITION BY t1.td_order_id, t3.label ORDER BY t3.operate_datetime ASC) AS sub_rn,
-        t1.relate_user,
-        t1.related_service_order,
-        t1.sla_status
-    FROM temp t1
-    LEFT JOIN ipd_ops_dim.dim_pub_rels_emp_dept_t d
-        ON LOWER(created_by) = LOWER(d.w3_account)
-    LEFT JOIN ipd_ops_dim.dim_pub_ci_ciinfo ci
-        ON t1.request_ci_id = ci.ci_id
-    LEFT JOIN (
-        SELECT 
-            service_id,
-            CASE WHEN TRIM(request_ci_id) = '' THEN NULL ELSE request_ci_id END AS request_ci_id,
-            CASE WHEN TRIM(ci_module_id) = '' THEN NULL ELSE ci_module_id END AS ci_module_id
-        FROM ipd_ops_dwi.dwi_v2_t_importal_service_request_hi
-    ) sd ON t1.related_service_order = sd.service_id
-    LEFT JOIN ipd_ops_dim.dim_pub_ci_ciinfo t4
-        ON sd.request_ci_id = t4.ci_id
-    LEFT JOIN ipd_ops_dim.dim_pub_dimension_ipmt t2
-        ON COALESCE(ci.app_id, t1.module_id, t4.app_id, sd.ci_module_id) = t2.dimension_code
-    LEFT JOIN not_close_detail t3
-        ON t1.td_order_id = t3.td_order_id
-        AND t1.status = t3.to_status
-)
-SELECT * FROM temp2;
+package com.helei.dto.kafka;
+
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.util.KafkaUtil;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+
+/**
+ * 交易信号的topic
+ */
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+public class TradeSignalTopic {
+
+    private RunEnv runEnv;
+
+    private TradeType tradeType;
+
+    private String symbol;
+
+    private String name;
+
+    public String toString() {
+        return KafkaUtil.getTradeSingalTopic(runEnv, tradeType, symbol, name);
+    }
+}
+
+
+package com.helei.dto.trade;
+
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeSide;
+import com.helei.constants.trade.TradeType;
+import lombok.*;
+
+import java.math.BigDecimal;
+
+
+/**
+ * 原始订单数据
+ */
+@Data
+@AllArgsConstructor
+@EqualsAndHashCode
+@Builder
+public class TradeSignal {
+
+    /**
+     * 信号id
+     */
+    private String id;
+
+    /**
+     * 运行环境
+     */
+    private RunEnv runEnv;
+
+    /**
+     * 交易类型
+     */
+    private TradeType tradeType;
+
+    /**
+     * 交易所类型
+     */
+    private CEXType cexType;
+
+    /**
+     * 信号名称
+     */
+    private String name;
+
+    /**
+     * 交易对
+     */
+    private String symbol;
+
+    /**
+     * 交易方向
+     */
+    private TradeSide tradeSide;
+
+    /**
+     * 目标价格
+     */
+    private BigDecimal targetPrice;
+
+    /**
+     * 进场价格
+     */
+    private BigDecimal enterPrice;
+
+    /**
+     * 止损价格
+     */
+    private BigDecimal stopPrice;
+
+    /**
+     * 信号创建时间戳
+     */
+    private long createTimestamp;
+
+    /**
+     * 信号创建的k线open时间
+     */
+    private long createKLineOpenTimestamp;
+
+
+    public String simpleName() {
+        return runEnv.name() + "-" + tradeType.name() + "-" + symbol + "-" + name;
+    }
+}
+
+
+package com.helei.util;
+
+import com.helei.constants.CEXType;
+import com.helei.constants.trade.KLineInterval;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+
+public class KafkaUtil {
+
+    public static final String TOPIC_KLINE_FORMAT = "market.%s.%s.%s.%s";
+
+    private static final String TOPIC_ORDER_FORMAT = "order.%s.%s.order.%s";
+
+    private static final String TOPIC_SIGNAL_FORMAT = "signal.%s.%s.%s.%s";
+
+    /**
+     * 获取kafka里topic的名字
+     *
+     * @param cexType    cexType
+     * @param streamName streamName
+     * @param runEnv     runEnv
+     * @param type       type 合约或现货
+     * @return topic
+     */
+    public static String resolveKafkaTopic(CEXType cexType, String streamName, RunEnv runEnv, TradeType type) {
+        streamName = streamName.replace("@", "_");
+        return String.format(TOPIC_KLINE_FORMAT, cexType.getDescription(), streamName, runEnv.name().toLowerCase(), type.getDescription()).toLowerCase();
+    }
+
+    /**
+     * 获取写入订单的topic
+     *
+     * @param runEnv runEnv
+     * @param type   tradeType
+     * @param symbol 交易对
+     * @return topic
+     */
+    public static String getOrderSymbolTopic(RunEnv runEnv, TradeType type, String symbol) {
+        return String.format(TOPIC_ORDER_FORMAT, runEnv.name(), type.name(), symbol);
+    }
+
+    /**
+     * 获取信号的topic
+     *
+     * @param runEnv     运行环境
+     * @param type       交易类型
+     * @param symbol     交易对
+     * @param signalName 信号名
+     * @return topic
+     */
+    public static String getTradeSingalTopic(RunEnv runEnv, TradeType type, String symbol, String signalName) {
+        return String.format(TOPIC_SIGNAL_FORMAT, runEnv.name(), type.name(), symbol, signalName).toLowerCase();
+    }
+
+
+    public static String getKLineStreamName(String symbol, KLineInterval interval) {
+        return symbol + "_kline_" + interval.getDescribe();
+    }
+}
+
+
+package com.helei.realtimedatacenter.service.impl.market;
+
+import cn.hutool.core.collection.ListUtil;
+import cn.hutool.core.lang.Pair;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.binanceapi.base.SubscribeResultInvocationHandler;
+import com.helei.binanceapi.config.BinanceApiConfig;
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.WebSocketStreamParamKey;
+import com.helei.constants.trade.KLineInterval;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.base.KeyValue;
+import com.helei.realtimedatacenter.config.RealtimeConfig;
+import com.helei.realtimedatacenter.dto.SymbolKLineInfo;
+import com.helei.realtimedatacenter.service.MarketRealtimeDataService;
+import com.helei.realtimedatacenter.service.impl.KafkaProducerService;
+import com.helei.util.KafkaUtil;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.*;
+
+
+/**
+ * 市场实时数据服务的抽象类
+ * <P>能够将市场数据推送至kafka，会根据配置文件中的run_type来加载需要使用的环境。只需关注实现registryKLineDataLoader(*)方法</P>
+ */
+@Slf4j
+public abstract class AbstractKafkaMarketRTDataService implements MarketRealtimeDataService {
+
+    protected final ExecutorService taskExecutor;
+
+    public final KafkaProducerService kafkaProducerService;
+
+    protected final RealtimeConfig realtimeConfig;
+
+    protected final BinanceApiConfig binanceApiConfig;
+
+    protected final CEXType cexType;
+
+    public AbstractKafkaMarketRTDataService(ExecutorService taskExecutor, KafkaProducerService kafkaProducerService, CEXType cexType) {
+        this.taskExecutor = taskExecutor;
+        this.kafkaProducerService = kafkaProducerService;
+        this.cexType = cexType;
+        this.realtimeConfig = RealtimeConfig.INSTANCE;
+        this.binanceApiConfig = BinanceApiConfig.INSTANCE;
+    }
+
+    @Override
+    public Set<String> startSyncRealTimeKLine() {
+        Set<String> all = new HashSet<>();
+        List<CompletableFuture<Set<String>>> futures = new ArrayList<>();
+
+        for (KeyValue<RunEnv, TradeType> keyValue : realtimeConfig.getRun_type().getRunTypeList()) {
+            futures.add(CompletableFuture.supplyAsync(() -> startSyncEnvRealTimeKLine(keyValue.getKey(), keyValue.getValue()), taskExecutor));
+        }
+
+        for (CompletableFuture<Set<String>> future : futures) {
+            try {
+                Set<String> oneEnvKLineSet = future.get();
+                all.addAll(oneEnvKLineSet);
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        return all;
+    }
+
+    @Override
+    public Set<String> startSyncEnvRealTimeKLine(RunEnv runEnv, TradeType tradeType) {
+        log.info("开始同步env[{}]-tradeType[{}]的实时k线", runEnv, tradeType);
+
+        RealtimeConfig.RealtimeKLineDataConfig realtimeKLineDataConfig = realtimeConfig.getEnvKLineDataConfig(runEnv, tradeType);
+
+        //Step 1: 解析k线
+        List<SymbolKLineInfo> realtimeKLineList = realtimeKLineDataConfig.getRealtimeKLineList();
+
+        if (realtimeKLineList == null || realtimeKLineList.isEmpty()) {
+            log.warn("runEnv[{}]-tradeType[{}] 没有设置要实时获取的k线", runEnv, tradeType);
+            return Set.of();
+        }
+
+        List<Pair<String, KLineInterval>> intervals = new ArrayList<>();
+
+        for (SymbolKLineInfo symbolKLineInfo : realtimeKLineList) {
+            symbolKLineInfo.getIntervals().forEach(interval -> {
+                intervals.add(new Pair<>(symbolKLineInfo.getSymbol(), interval));
+            });
+        }
+
+        return startSyncEnvSymbolIntervalsKLine(runEnv, tradeType, intervals);
+    }
+
+
+    /**
+     * 开始同步指定环境的k线信息
+     *
+     * @param runEnv                     运行环境
+     * @param tradeType                  交易类型
+     * @param intervals                  k线symbol、频率
+     * @return 个数
+     */
+    public Set<String> startSyncEnvSymbolIntervalsKLine(RunEnv runEnv, TradeType tradeType, List<Pair<String, KLineInterval>> intervals) {
+        //Step 2: 创建topic
+        log.info("开始检查并创建所需topic");
+        createTopic(intervals, runEnv, tradeType);
+        log.info("topic创建完毕");
+
+
+        //Step 3: 分片执行
+        List<List<Pair<String, KLineInterval>>> partition = ListUtil.partition(intervals,
+                realtimeConfig.getEnvKLineDataConfig(runEnv, tradeType).getClient_listen_kline_max_count());
+
+
+        try {
+            List<CompletableFuture<Set<String>>> futures = new ArrayList<>();
+            for (List<Pair<String, KLineInterval>> list : partition) {
+
+                //Step 4: 创建task执行获取
+                CompletableFuture<Set<String>> future = registryKLineDataLoader(
+                        runEnv,
+                        tradeType,
+                        list,
+                        (s, p, k) -> klineDataSyncToKafka(s, (KLineInterval) p.get(WebSocketStreamParamKey.KLINE_INTERVAL), k, runEnv, tradeType),
+                        taskExecutor
+                );
+
+                futures.add(future);
+            }
+
+
+            Set<String> all = new HashSet<>();
+
+            CompletableFuture
+                    .allOf(futures.toArray(new CompletableFuture[0]))
+                    .whenCompleteAsync((unused, throwable) -> {
+                        for (CompletableFuture<Set<String>> future : futures) {
+                            try {
+                                all.addAll(future.get());
+                            } catch (InterruptedException | ExecutionException e) {
+                                throw new RuntimeException(e);
+                            }
+                        }
+                    })
+                    .get();
+
+            log.info("所有k线开始实时同步, [{}}", all);
+            return all;
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+
+    /**
+     * 注册k线数据加载器
+     *
+     * @param runEnv               运行环境
+     * @param tradeType            交易类型
+     * @param listenKLines         k线
+     * @param whenReceiveKLineData 回调，需要在whenReceiveKLineData.invoke()时传入symbol、interval、json格式的k线数据
+     * @param executorService      执行的线程池
+     * @return CompletableFuture
+     */
+    protected abstract CompletableFuture<Set<String>> registryKLineDataLoader(
+            RunEnv runEnv,
+            TradeType tradeType,
+            List<Pair<String, KLineInterval>> listenKLines,
+            SubscribeResultInvocationHandler whenReceiveKLineData,
+            ExecutorService executorService
+    ) throws ExecutionException, InterruptedException;
+
+    /**
+     * 把k线发到kafka
+     *
+     * @param symbol symbol
+     * @param data   data
+     */
+    public void klineDataSyncToKafka(String symbol, KLineInterval kLineInterval, JSONObject data, RunEnv runEnv, TradeType tradeType) {
+        String topic = KafkaUtil.resolveKafkaTopic(cexType, KafkaUtil.getKLineStreamName(symbol, kLineInterval), runEnv, tradeType);
+
+        log.info("收到k线信息 - {}, - {} - {} - {} send to topic[{}]", symbol, data, runEnv, tradeType, topic);
+        try {
+            kafkaProducerService.sendMessage(
+                    topic,
+                    data.toJSONString()
+            ).get();
+        } catch (InterruptedException | ExecutionException e) {
+            log.error("保持k线信息到kafka出错，symbol[{}]", symbol, e);
+        }
+    }
+
+    /**
+     * 创建topic
+     *
+     * @param kLines    k线list
+     * @param runEnv    运行环境
+     * @param tradeType 交易类型
+     */
+    private void createTopic(List<Pair<String, KLineInterval>> kLines, RunEnv runEnv, TradeType tradeType) {
+        for (Pair<String, KLineInterval> kLine : kLines) {
+            String topic = KafkaUtil.resolveKafkaTopic(CEXType.BINANCE, KafkaUtil.getKLineStreamName(kLine.getKey(), kLine.getValue()), runEnv, tradeType);
+
+            kafkaProducerService.checkAndCreateTopic(
+                    topic,
+                    realtimeConfig.getKafka().getKafka_num_partitions(),
+                    realtimeConfig.getKafka().getKafka_replication_factor()
+            );
+        }
+    }
+}
+
+
+package com.helei.realtimedatacenter;
+
+import com.helei.realtimedatacenter.service.AccountEventStreamService;
+import com.helei.realtimedatacenter.service.MarketRealtimeDataService;
+import com.helei.realtimedatacenter.service.UserService;
+import com.helei.realtimedatacenter.service.impl.market.RandomMarketRTDataService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.ConfigurableApplicationContext;
+
+import java.util.Set;
+
+/**
+ * 实时数据中心
+ */
+@SpringBootApplication
+public class RealtimeDataCenter {
+    private static final Logger log = LoggerFactory.getLogger(RealtimeDataCenter.class);
+
+    public static void main(String[] args) {
+        ConfigurableApplicationContext applicationContext = SpringApplication.run(RealtimeDataCenter.class, args);
+
+
+        startRTDataStream(applicationContext);
+
+//        updateAllUserInfo2Redis(applicationContext);
+//
+//        startAccountEventStream(applicationContext);
+    }
+
+    /**
+     * 开启账户事件流监听
+     *
+     * @param applicationContext applicationContext
+     */
+    private static void startAccountEventStream(ConfigurableApplicationContext applicationContext) {
+        AccountEventStreamService accountEventStreamService = applicationContext.getBean(AccountEventStreamService.class);
+        accountEventStreamService.startAllUserInfoEventStream();
+    }
+
+    /**
+     * 开启实时数据流
+     *
+     * @param applicationContext applicationContext
+     */
+    private static void startRTDataStream(ConfigurableApplicationContext applicationContext) {
+        MarketRealtimeDataService marketRealtimeDataService = applicationContext.getBean(RandomMarketRTDataService.class);
+        Set<String> set = marketRealtimeDataService.startSyncRealTimeKLine();
+        log.info("开始同步实时k线: {}", set);
+    }
+
+    /**
+     * 更新用户信息到redis
+     *
+     * @param applicationContext applicationContext
+     */
+    private static void updateAllUserInfo2Redis(ConfigurableApplicationContext applicationContext) {
+        UserService userService = applicationContext.getBean(UserService.class);
+        userService.updateAllUserInfo();
+    }
+}
+
+
+
+
+package com.helei.telegramebot.bot;
+
+import com.helei.telegramebot.constants.TelegramBotCommand;
+import com.helei.telegramebot.service.ITelegramPersistenceService;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import org.telegram.telegrambots.bots.TelegramLongPollingBot;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChatAdministrators;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChatMember;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.Chat;
+import org.telegram.telegrambots.meta.api.objects.Message;
+import org.telegram.telegrambots.meta.api.objects.Update;
+import org.telegram.telegrambots.meta.api.objects.User;
+import org.telegram.telegrambots.meta.api.objects.chatmember.ChatMember;
+import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+
+
+/**
+ * TG机器人抽象类
+ */
+@Slf4j
+public abstract class AbstractTelegramBot extends TelegramLongPollingBot {
+
+
+    /**
+     * 机器人名
+     */
+    private final String botUsername;
+
+    /**
+     * 机器人连接的token
+     */
+    private final String token;
+
+    /**
+     * 持久化服务
+     */
+    @Getter
+    private final ITelegramPersistenceService telegramPersistenceService;
+
+    /**
+     * 执行的线程池
+     */
+    protected final ExecutorService executor;
+
+    protected AbstractTelegramBot(String botUsername, String token, ITelegramPersistenceService telegramPersistenceService, ExecutorService executor) {
+        this.botUsername = botUsername;
+        this.token = token;
+        this.telegramPersistenceService = telegramPersistenceService;
+        this.executor = executor;
+    }
+
+
+    @Override
+    public String getBotUsername() {
+        return botUsername;
+    }
+
+    @Override
+    public String getBotToken() {
+        return token;
+    }
+
+    @Override
+    public void onUpdateReceived(Update update) {
+        executor.execute(() -> {
+            Message message = update.getMessage();
+            try {
+                User from = message.getFrom();
+                String text = message.getText();
+
+                log.info("bot[{}] 收到消息 用户[{}] - 消息[{}]", getBotUsername(), from.getUserName(), text);
+
+                if (message.isCommand()) {
+                    //处理命令消息
+                    String[] split = text.split(" ");
+                    TelegramBotCommand command = TelegramBotCommand.valueOf(split[0]);
+                    List<String> params = Arrays.stream(split).toList();
+                    params.removeFirst();
+                    commandMessageHandler(command, params, message);
+                } else {
+                    //处理普通消息
+                    normalMessageHandler(text, message);
+                }
+            } catch (Exception e) {
+                log.error("处理消息[{}]出错", message);
+            }
+        });
+    }
+
+
+    /**
+     * 命令消息处理
+     *
+     * @param command 命令
+     * @param params  参数
+     * @param message 原消息内容
+     */
+    public abstract void commandMessageHandler(TelegramBotCommand command, List<?> params, Message message);
+
+    /**
+     * 普通消息处理
+     *
+     * @param messageText 消息文本
+     * @param message     原消息内容
+     */
+    public abstract void normalMessageHandler(String messageText, Message message);
+
+
+    /**
+     * 给指定chat发消息
+     *
+     * @param chatId      chatId
+     * @param messageText 消息文本
+     */
+    public void sendMessageToChat(String chatId, String messageText) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(messageText);
+
+        try {
+            execute(message);  // 发送消息
+        } catch (TelegramApiException e) {
+            log.error("给群组 [{}] 发送消息[{}]发生错误", chatId, messageText, e);
+        }
+    }
+
+
+    /**
+     * 获取聊天信息
+     *
+     * @param chatId chatId
+     * @return 详细信息
+     */
+    public Chat getChat(String chatId) {
+        GetChat chat = new GetChat(chatId);
+        try {
+            return execute(chat);
+        } catch (TelegramApiException e) {
+            log.error("获取Chat[{}]消息发生错误", chatId);
+        }
+        return null;
+    }
+
+
+    /**
+     * 获取特定成员信息
+     *
+     * @param chatId 群组id
+     * @param userId 消息文本
+     */
+    public User getChatMemberInfo(String chatId, long userId) {
+        GetChatMember getChatMember = new GetChatMember();
+        getChatMember.setChatId(chatId);
+        getChatMember.setUserId(userId);
+
+        try {
+            ChatMember chatMember = execute(getChatMember);
+            log.info("获取到群组[{}]成员[{}]的信息, status[{}]", chatId, userId, chatMember.getStatus());
+            // 根据需要获取更多信息，例如用户名、权限等
+            return chatMember.getUser();
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(String.format("获取到群组[%s]成员[%s]的信息失败", chatId, userId), e);
+        }
+    }
+
+    /**
+     * 获取群组管理员信息
+     *
+     * @param chatId 群组id
+     */
+    public List<ChatMember> getChatAdministratorsInfo(String chatId) {
+        GetChatAdministrators getChatAdministrators = new GetChatAdministrators();
+        getChatAdministrators.setChatId(chatId);
+
+        try {
+            return execute(getChatAdministrators);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(String.format("获取到群组[%s]管理员信息出错", chatId), e);
+        }
+    }
+
+}
+
+
+package com.helei.telegramebot.bot;
+
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.base.Result;
+import com.helei.dto.trade.TradeSignal;
+import com.helei.telegramebot.constants.TelegramBotCommand;
+import com.helei.telegramebot.service.ITelegramPersistenceService;
+import com.helei.telegramebot.template.TelegramMessageTemplate;
+import lombok.extern.slf4j.Slf4j;
+import org.telegram.telegrambots.meta.api.objects.Message;
+import org.telegram.telegrambots.meta.api.objects.User;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+
+@Slf4j
+public class ShinanoTelegramBot extends AbstractTelegramBot {
+
+    public ShinanoTelegramBot(
+            String botUsername,
+            String token,
+            ITelegramPersistenceService telegramPersistenceService,
+            ExecutorService executorService
+    ) {
+        super(botUsername, token, telegramPersistenceService, executorService);
+    }
+
+
+    @Override
+    public void normalMessageHandler(String messageText, Message message) {
+
+    }
+
+    @Override
+    public void commandMessageHandler(TelegramBotCommand command, List<?> params, Message message) {
+        switch (command) {
+            case START -> startCommandHandler(message);
+            case ADD_LISTEN_SIGNAL_TYPE -> addListenSignalTypeCommandHandler(params, message);
+            case SEND_TRADE_SIGNAL -> sendTradeSignalCommandHandler(params);
+        }
+    }
+
+
+    /**
+     * 添加监听信号命令
+     *
+     * @param params  参数 [runEnv, tradeType, cexType, 可选symbols]
+     * @param message 消息
+     */
+    public void addListenSignalTypeCommandHandler(List<?> params, Message message) {
+        String chatId = String.valueOf(message.getChatId());
+
+        if (params.size() <= 3) {
+            sendMessageToChat(chatId, String.format("参数错误,命令[%s]参数格式应为[runEnv, tradeType, cexType, symbols(可选)]", TelegramBotCommand.ADD_LISTEN_SIGNAL_TYPE.name()));
+            return;
+        }
+
+        log.info("机器人[{}]-group chat id[{}] 添加监听信号[{}]", getBotUsername(), chatId, params);
+
+        //Step 1 解析初始化参数
+        RunEnv runEnv = RunEnv.valueOf((String) params.getFirst());
+        TradeType tradeType = TradeType.valueOf((String) params.get(1));
+        CEXType cexType = CEXType.valueOf((String) params.get(2));
+        List<String> symbols = new ArrayList<>();
+        for (int i = 3; i < params.size(); i++) {
+            symbols.add((String) params.get(i));
+        }
+
+        //Step 2 持久化
+        Result result = getTelegramPersistenceService().saveChatListenTradeSignal(chatId, runEnv, tradeType, cexType, symbols);
+        if (!result.getSuccess()) {
+            sendMessageToChat(chatId, result.getErrorMsg());
+        }
+    }
+
+    /**
+     * 处理用户发送的开始命令
+     *
+     * @param message 原消息体
+     */
+    private void startCommandHandler(Message message) {
+        Long chatId = message.getChatId();
+
+        // chatId持久化，连同用户信息
+        User from = message.getFrom();
+
+        Result result = getTelegramPersistenceService().saveChatUser(chatId, from);
+        if (!result.getSuccess()) {
+            log.error("保存聊天[{}]用户[{}]信息失败", chatId, from.getUserName());
+            sendMessageToChat(String.valueOf(chatId), result.getErrorMsg());
+        }
+    }
+
+    /**
+     * 处理发送信号命令
+     *
+     * @param params 参数
+     */
+    private void sendTradeSignalCommandHandler(List<?> params) {
+        //Step 1 参数解析
+        TradeSignal tradeSignal = (TradeSignal) params.getFirst();
+        String message = TelegramMessageTemplate.tradeSignalMessage(tradeSignal);
+
+
+        //Step 2 查询监听的id
+        Result result = getTelegramPersistenceService()
+                .queryTradeSignalListenedChatId(tradeSignal.getRunEnv(), tradeSignal.getTradeType(), tradeSignal.getCexType(), tradeSignal.getSymbol());
+
+
+        //Step 3 发送
+        if (result.getSuccess()) {
+            // 获取chatId成功
+            Collection<?> chatIds = (Collection<?>) result.getData();
+
+            if (chatIds.isEmpty()) {
+                log.warn("没有监听信号[{}]的chat", tradeSignal.simpleName());
+                return;
+            }
+
+            for (Object chatId : chatIds) {
+                CompletableFuture
+                        .runAsync(() -> {
+                            sendMessageToChat((String) chatId, message);
+                        }, executor)
+                        .exceptionallyAsync(throwable -> {
+                            log.error("向chatId[{}]发送信号[{}][{}]信息发生错误", chatId,  tradeSignal.simpleName(), tradeSignal.getId());
+                            return null;
+                        }, executor);
+            }
+        } else {
+            // 获取chatId失败
+            log.error("获取chatId失败, [{}]", result.getErrorMsg());
+        }
+    }
+}
+
+
+package com.helei.telegramebot.config;
+
+import com.helei.telegramebot.bot.AbstractTelegramBot;
+import com.helei.telegramebot.bot.ShinanoTelegramBot;
+import com.helei.telegramebot.manager.ExecutorServiceManager;
+import com.helei.telegramebot.service.ITelegramPersistenceService;
+import com.helei.util.NamedThreadFactory;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.redisson.Redisson;
+import org.redisson.api.RedissonClient;
+import org.redisson.config.Config;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.telegram.telegrambots.meta.TelegramBotsApi;
+import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+@Slf4j
+@Configuration
+public class SpringConfig {
+
+    private final TelegramBotConfig telegramBotConfig = TelegramBotConfig.INSTANCE;
+
+
+    @Autowired
+    private ITelegramPersistenceService telegramPersistenceService;
+
+    @Bean
+    public ExecutorServiceManager executorServiceManager() {
+        return new ExecutorServiceManager();
+    }
+
+    @Bean
+    public TelegramBotsApi telegramBotsApi() {
+        try {
+            return new TelegramBotsApi(DefaultBotSession.class);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException("创建TelegramBotsApi出错", e);
+        }
+    }
+
+    @Bean
+    @Qualifier("tgBots")
+    public List<AbstractTelegramBot> tgBots() {
+//        TelegramBotsApi telegramBotsApi = telegramBotsApi();
+
+        List<AbstractTelegramBot> list = new ArrayList<>();
+        for (TelegramBotConfig.TelegramBotBaseConfig botBaseConfig : telegramBotConfig.getBots()) {
+            String botUsername = botBaseConfig.getBotUsername();
+
+            try {
+//                    log.info("开始注册[{}]tg机器人", botUsername);
+                ShinanoTelegramBot bot = new ShinanoTelegramBot(
+                        botUsername,
+                        botBaseConfig.getToken(),
+                        telegramPersistenceService,
+                        Executors.newThreadPerTaskExecutor(new NamedThreadFactory(botUsername + "处理线程池"))
+                );
+
+                list.add(bot);
+//                    telegramBotsApi.registerBot(bot);
+            } catch (Exception e) {
+                log.error("注册tg机器人[{}]发生错误", botUsername, e);
+            }
+        }
+        return list;
+    }
+
+    @Bean
+    public Map<String, Object> tgbotKafkaConfigs() {
+        Map<String, Object> configProps = new HashMap<>();
+        configProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, telegramBotConfig.getKafka().getBootstrap_servers());
+        configProps.put(ConsumerConfig.GROUP_ID_CONFIG, telegramBotConfig.getKafka().getGroup_id());  // 消费者组ID
+        configProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        configProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        configProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
+        return configProps;
+    }
+
+//    @Bean
+//    public ConsumerFactory<String, String> consumerFactory() {
+//        return new DefaultKafkaConsumerFactory<>(kafkaConfigs());
+//    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory() {
+        ConcurrentKafkaListenerContainerFactory<String, String> factory = new ConcurrentKafkaListenerContainerFactory<>();
+//        factory.setConsumerFactory(consumerFactory());
+        return factory;
+    }
+
+
+    @Bean
+    public RedissonClient redissonClient() {
+        Config config = new Config();
+        config.useSingleServer().setAddress(telegramBotConfig.getRedis().getUrl());
+        return Redisson.create(config);
+    }
+}
+package com.helei.telegramebot.config;
+
+import com.helei.dto.base.KeyValue;
+import lombok.Data;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.InputStream;
+import java.io.Serializable;
+import java.util.List;
+import java.util.Map;
+
+@Data
+public class TwitterConfig implements Serializable {
+    private static final String CONFIG_FILE = "twitter-config.yaml";
+
+    public static final TwitterConfig INSTANCE;
+
+    static {
+        Yaml yaml = new Yaml();
+        try (InputStream inputStream = TelegramBotConfig.class.getClassLoader().getResourceAsStream(CONFIG_FILE)) {
+            if (inputStream == null) {
+                throw new IllegalArgumentException("File not found: " + CONFIG_FILE);
+            }
+            Map<String, Object> yamlData = yaml.load(inputStream);
+            Map<String, Object> shinano = (Map<String, Object>) yamlData.get("shinano");
+            Map<String, Object> quantity = (Map<String, Object>) shinano.get("quantity");
+            Map<String, Object> twitter = (Map<String, Object>) quantity.get("twitter");
+
+            INSTANCE = yaml.loadAs(yaml.dump(twitter), TwitterConfig.class);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to load YAML file: " + CONFIG_FILE, e);
+        }
+    }
+
+
+    /**
+     * token
+     */
+    private String bearer_token;
+
+    /**
+     * url设置
+     */
+    private TwitterUrlConfig url;
+
+    /**
+     * 规则配置
+     */
+    private List<KeyValue<String, String>> filter_rule;
+
+    /**
+     * twitter的url设置
+     */
+    @Data
+    public static class TwitterUrlConfig implements Serializable {
+
+        /**
+         * 注册规则的url
+         */
+        private String rule_url;
+
+        /**
+         * 获取流的url
+         */
+        private String stream_url;
+    }
+
+
+    public static void main(String[] args) {
+        System.out.println(INSTANCE);
+    }
+}
+
+
+package com.helei.telegramebot.manager;
+
+
+import com.helei.util.NamedThreadFactory;
+import lombok.Data;
+import org.springframework.stereotype.Component;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+@Data
+@Component
+public class ExecutorServiceManager {
+
+    public final ExecutorService commonExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("common处理线程池"));
+
+
+    public final ExecutorService twitterExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("twitter处理线程池"));
+}
+
+
+
+
+package com.helei.telegramebot.service.impl;
+
+
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.base.KeyValue;
+import com.helei.dto.config.TradeSignalConfig;
+import com.helei.telegramebot.bot.AbstractTelegramBot;
+import com.helei.telegramebot.config.TelegramBotConfig;
+import com.helei.telegramebot.manager.ExecutorServiceManager;
+import com.helei.telegramebot.listener.KafkaTradeSignalTGBotListener;
+import com.helei.util.KafkaUtil;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.listener.ConcurrentMessageListenerContainer;
+import org.springframework.kafka.listener.MessageListener;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+@Slf4j
+@Service
+public class KafkaConsumerService {
+
+    private final TelegramBotConfig telegramBotConfig = TelegramBotConfig.INSTANCE;
+
+    @Autowired
+    private ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory;
+
+    @Autowired
+    @Qualifier("tgbotKafkaConfigs")
+    private Map<String, Object> tgbotKafkaConfigs;
+
+    @Autowired
+    private ExecutorServiceManager executorServiceManager;
+
+    @Autowired
+    private List<AbstractTelegramBot> tgBots;
+
+
+    /**
+     * 开始交易信号消费
+     *
+     * @param env       运行环境
+     * @param tradeType 交易类型
+     */
+    public void startTradeSignalConsumer(RunEnv env, TradeType tradeType) {
+        List<TradeSignalConfig.TradeSignalSymbolConfig> envSignalSymbolConfig = telegramBotConfig.getSignal().getEnvSignalSymbolConfig(env, tradeType);
+        if (envSignalSymbolConfig == null) return;
+
+        List<String> topics = new ArrayList<>();
+        for (TradeSignalConfig.TradeSignalSymbolConfig tradeSignalSymbolConfig : envSignalSymbolConfig) {
+            String symbol = tradeSignalSymbolConfig.getSymbol();
+            for (String signalName : tradeSignalSymbolConfig.getSignal_names()) {
+                topics.add(KafkaUtil.getTradeSingalTopic(env, tradeType, symbol, signalName));
+            }
+        }
+
+        log.info("开始监听kafka交易信号, [{}]", topics);
+
+
+        startTelegramBotTradeSignalConsumer(topics);
+    }
+
+    /**
+     * 开启tg机器人交易信号消费
+     *
+     * @param topics topics
+     */
+    private void startTelegramBotTradeSignalConsumer(List<String> topics) {
+        for (AbstractTelegramBot tgBot : tgBots) {
+            try {
+                startConsumer(topics, "telegram-bot" + tgBot.getBotUsername(), new KafkaTradeSignalTGBotListener(tgBot, executorServiceManager));
+                log.info("已为[{}]telegram bot注册监听交易信号", tgBot.getBotUsername());
+            } catch (Exception e) {
+                log.error("telegram bot[{}]监听交易信号发生错误", tgBot.getBotUsername(), e);
+            }
+        }
+    }
+
+
+    /**
+     * 开始kafka消费
+     *
+     * @param topics          topics
+     * @param groupId         groupId
+     * @param messageListener messageListener
+     */
+    public void startConsumer(List<String> topics, String groupId, MessageListener<String, String> messageListener) {
+        Map<String, Object> config = new HashMap<>();
+        Map<String, Object> o = (Map<String, Object>) tgbotKafkaConfigs.get("tgbotKafkaConfigs");
+        for (String s : o.keySet()) {
+            config.put(s, o.get(s));
+        }
+        config.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+
+        kafkaListenerContainerFactory.setConsumerFactory(new DefaultKafkaConsumerFactory<>(config));
+        ConcurrentMessageListenerContainer<String, String> container = kafkaListenerContainerFactory.createContainer(topics.toArray(new String[0]));
+        container.setupMessageListener(messageListener);
+        container.start();
+    }
+
+    /**
+     * 开启所有环境的信号消费
+     */
+    public void startAllTradeSignalConsumer() {
+        for (KeyValue<RunEnv, TradeType> keyValue : telegramBotConfig.getRun_type().getRunTypeList()) {
+            startTradeSignalConsumer(keyValue.getKey(), keyValue.getValue());
+        }
+    }
+}
+
+
+
+package com.helei.telegramebot.service.impl;
+
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.base.Result;
+import com.helei.telegramebot.service.ITelegramPersistenceService;
+import com.helei.telegramebot.util.TelegramRedisUtil;
+import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RSet;
+import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.stereotype.Service;
+import org.telegram.telegrambots.meta.api.objects.Chat;
+import org.telegram.telegrambots.meta.api.objects.User;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Set;
+
+
+@Slf4j
+@Service
+public class TelegramPersistenceServiceImpl implements ITelegramPersistenceService {
+
+    @Autowired
+    @Lazy
+    private RedissonClient redissonClient;
+
+    @Override
+    public Result saveChatUser(Long chatId, User user) {
+        return Result.ok();
+    }
+
+    @Override
+    public Result saveGroupChat(Chat chat) {
+        return Result.ok();
+    }
+
+    @Override
+    public Result saveChatListenTradeSignal(String chatId, RunEnv runEnv, TradeType tradeType, CEXType cexType, List<String> symbols) {
+
+        List<String> errorKey = new ArrayList<>();
+
+        for (String symbol : symbols) {
+            String key = null;
+            try {
+                key = TelegramRedisUtil.tradeSignalListenChatIdSetKey(runEnv, tradeType, cexType, symbol);
+                RSet<String> set = redissonClient.getSet(key);
+                set.add(chatId);
+            } catch (Exception e) {
+                errorKey.add(key);
+                log.error("保存[{}]到[{}]出错", chatId, key);
+            }
+        }
+
+        if (errorKey.isEmpty()) {
+            return Result.ok();
+        } else {
+            return Result.fail(String.format("监听信号[%s]出错", errorKey));
+        }
+    }
+
+    @Override
+    public Result queryTradeSignalListenedChatId(RunEnv runEnv, TradeType tradeType, CEXType cexType, String symbol) {
+        String key = "";
+        try {
+            key = TelegramRedisUtil.tradeSignalListenChatIdSetKey(runEnv, tradeType, cexType, symbol);
+
+            Set<Object> chatIds = redissonClient.getSet(key).readAll();
+
+            return Result.ok(chatIds, chatIds.size());
+        } catch (Exception e) {
+            return Result.fail(String.format("查询监听信号[%s]的chatId失败", key));
+        }
+    }
+}
+
+
+
+package com.helei.telegramebot.service.impl;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.dto.base.KeyValue;
+import com.helei.telegramebot.config.TwitterConfig;
+import com.helei.telegramebot.manager.ExecutorServiceManager;
+import com.helei.telegramebot.service.ITwitterMessageService;
+import com.helei.twiterstream.TwitterStreamRuleClient;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import java.net.MalformedURLException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+
+@Slf4j
+@Service
+public class TwitterMessageServiceImpl implements ITwitterMessageService {
+
+    private final TwitterConfig twitterConfig = TwitterConfig.INSTANCE;
+
+    private final ExecutorService executor;
+
+    private final TwitterStreamRuleClient twitterStreamRuleClient;
+
+    private final AtomicBoolean running = new AtomicBoolean(false);
+
+    private final List<Consumer<JSONObject>> eventListeners = new ArrayList<>();
+
+    public TwitterMessageServiceImpl(ExecutorServiceManager manager) throws MalformedURLException {
+        executor = manager.getCommonExecutor();
+        TwitterConfig.TwitterUrlConfig urlConfig = twitterConfig.getUrl();
+        this.twitterStreamRuleClient = new TwitterStreamRuleClient(
+                urlConfig.getRule_url(),
+                urlConfig.getStream_url(),
+                twitterConfig.getBearer_token(),
+                executor
+        );
+    }
+
+
+    @Override
+    public ITwitterMessageService initConfigFileRule() {
+        List<KeyValue<String, String>> filterRule = twitterConfig.getFilter_rule();
+        for (KeyValue<String, String> keyValue : filterRule) {
+            twitterStreamRuleClient.addFilterRule(keyValue.getKey(), keyValue.getValue());
+        }
+
+        return this;
+    }
+
+    @Override
+    public void startListenStream() {
+        twitterStreamRuleClient
+                .listenToStream()
+                .thenAcceptAsync(buffer->{
+                    running.set(true);
+                    try {
+                        JSONObject event = null;
+                        while (running.get()) {
+                            event = buffer.take();
+                            JSONObject finalEvent = event;
+                            for (Consumer<JSONObject> eventListener : eventListeners) {
+                                CompletableFuture.runAsync(()->{
+                                    eventListener.accept(finalEvent);
+                                }, executor);
+                            }
+                        }
+
+                    } catch (InterruptedException e) {
+                        log.error("从缓存中获取twitter事件失败", e);
+                        closeListenStream();
+                    }
+                });
+    }
+
+
+
+    @Override
+    public void closeListenStream() {
+        twitterStreamRuleClient.close();
+    }
+}
+
+
+
+package com.helei.telegramebot.service;
+
+public interface ITwitterMessageService {
+
+
+    /**
+     * 初始化配置文件中的规则
+     *
+     * @return this
+     */
+    ITwitterMessageService initConfigFileRule();
+
+    void startListenStream();
+
+    void closeListenStream();
+}
+
+
+
+
+package com.helei.telegramebot.template;
+
+import com.helei.dto.trade.TradeSignal;
+
+import java.time.Instant;
+
+/**
+ * TG 消息模板
+ */
+public class TelegramMessageTemplate {
+    private static final String TRADE_SIGNAL_MESSAGE_TEMPLATE
+            = """
+            
+            <b>%s</b>
+            方向:<b>%s</b>
+            入场价:<b>%s</b>
+            止盈:<b>%s</b>
+            止损:<b>%s</b>
+            ----------------------
+            信号名:<b>%s</b>
+            K线时间:<b>%s</b>
+            信号时间:<b>%s</b>
+            
+            """;
+
+
+    /**
+     * 交易信号消息
+     *
+     * @param tradeSignal 信号
+     * @return 结构化后的消息
+     */
+    public static String tradeSignalMessage(TradeSignal tradeSignal) {
+        return String.format(TRADE_SIGNAL_MESSAGE_TEMPLATE,
+                tradeSignal.getSymbol(),
+                tradeSignal.getTradeSide().name(),
+                tradeSignal.getEnterPrice(),
+                tradeSignal.getTargetPrice(),
+                tradeSignal.getStopPrice(),
+                tradeSignal.getName(),
+                Instant.ofEpochMilli(tradeSignal.getCreateKLineOpenTimestamp()),
+                Instant.ofEpochMilli(tradeSignal.getCreateKLineOpenTimestamp())
+        );
+    }
+}
+
+package com.helei.twiterstream.dto;
+
+import lombok.Data;
+import org.json.JSONObject;
+
+import java.util.ArrayList;
+import java.util.List;
+
+
+/**
+ * 推特的流的过滤规则
+ */
+@Data
+public class TwitterFilterRule {
+
+    public final List<JSONObject> add = new ArrayList<>();
+
+
+    public void addRule(String rule) {
+        JSONObject jsonObject = new JSONObject();
+        jsonObject.put("value", rule);
+        add.add(jsonObject);
+    }
+}
+
+package com.helei.twiterstream;
+
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiFunction;
+
+@Slf4j
+public class RetryConnector {
+
+    private final int retryLimit;
+
+    private final AtomicInteger tryTimes;
+
+    private final int timeWindowSecond;
+
+    private final ExecutorService executor;
+
+    public RetryConnector(
+            int retryLimit,
+            int timeWindowSecond,
+
+            ExecutorService executor
+    ) {
+        this.retryLimit = retryLimit;
+        this.timeWindowSecond = timeWindowSecond;
+        this.executor = executor;
+
+        this.tryTimes = new AtomicInteger(0);
+    }
+
+    /**
+     * 重连
+     *
+     * @param connectMethod   执行的方法
+     * @param startPrint      开始时打印的字符串
+     * @param retryPrint      重试时打印的字符串
+     * @param finalErrorPrint 失败打印的字符串
+     * @return 是否成功
+     */
+    public boolean retryConnect(
+            BiFunction<Integer, Integer, Boolean> connectMethod,
+            String startPrint,
+            String retryPrint,
+            String finalErrorPrint
+    ) {
+        Exception lastException = null;
+
+        int i = 0;
+        while ((i = tryTimes.incrementAndGet()) <= retryLimit) {
+            try {
+                log.info("[{}/{}] - {}", i, retryLimit, startPrint);
+                if (connectMethod.apply(i, retryLimit)) {
+                    return true;
+                }
+            } catch (Exception e) {
+                log.warn("[{}/{}] - {}, 准备重试. errorMsg[{}]", i, retryLimit, retryPrint, e.getMessage());
+                setDecretTimer();
+                lastException = e;
+            }
+        }
+
+        log.error("[{}/{}] - {}", retryLimit, retryLimit, finalErrorPrint);
+        throw new RuntimeException(finalErrorPrint, lastException);
+    }
+
+
+    private void setDecretTimer() {
+        executor.execute(() -> {
+            try {
+                TimeUnit.SECONDS.sleep(timeWindowSecond);
+                tryTimes.decrementAndGet();
+            } catch (InterruptedException ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+    }
+}
+
+
+
+package com.helei.twiterstream;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.twiterstream.dto.TwitterFilterRule;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.util.concurrent.*;
+
+
+@Slf4j
+public class TwitterStreamRuleClient {
+
+    private static final int CONNECT_RETRY_LIMIT = 3;
+
+    private final URL ruleUrl;
+
+    private final URL streamUrl;
+
+    private final String bearerToken;
+
+    private final ExecutorService executor;
+
+    private final TwitterFilterRule filterRule;
+
+    private final BlockingQueue<JSONObject> buffer;
+
+    private volatile boolean isRunning = false;
+
+    @Getter
+    private HttpURLConnection streamConnection;
+
+    public TwitterStreamRuleClient(String ruleUrl, String streamUrl, String bearerToken, ExecutorService executor) throws MalformedURLException {
+        this.ruleUrl = new URL(ruleUrl);
+        this.streamUrl = new URL(streamUrl);
+        this.bearerToken = bearerToken;
+        this.executor = executor;
+        this.filterRule = new TwitterFilterRule();
+        this.buffer = new LinkedBlockingQueue<>();
+    }
+
+    /**
+     * 添加过滤规则
+     *
+     * @param rule 规则字符串
+     * @return this
+     */
+    public TwitterStreamRuleClient addFilterRule(String rule, String value) {
+        filterRule.addRule(rule + ":" + value);
+        return this;
+    }
+
+    /**
+     * 开始监听流
+     *
+     * @return buffer
+     */
+    public CompletableFuture<BlockingQueue<JSONObject>> listenToStream() {
+        if (isRunning) return CompletableFuture.supplyAsync(()->buffer, executor);
+
+        return requestAddFilterRule()
+                .thenApplyAsync(isSuccess -> {
+                    if (isSuccess) {
+                        BlockingQueue<JSONObject> jsonObjects = null;
+                        try {
+                            jsonObjects = requestListenStream().get();
+                        } catch (InterruptedException | ExecutionException e) {
+                            throw new RuntimeException(e);
+                        }
+                        return jsonObjects;
+                    } else {
+                        throw new RuntimeException("请求添加过滤规则失败");
+                    }
+                }, executor);
+    }
+
+
+    /**
+     * 关闭连接
+     */
+    public void close() {
+        isRunning = false;
+
+        if (this.streamConnection != null) {
+            log.warn("关闭连接[{}]", streamConnection);
+            streamConnection.disconnect();
+        }
+    }
+
+
+    /**
+     * 请求添加过滤规则
+     *
+     * @return 是否添加成功
+     */
+    private CompletableFuture<Boolean> requestAddFilterRule() {
+        return CompletableFuture.supplyAsync(() -> {
+            RetryConnector retryConnector = new RetryConnector(CONNECT_RETRY_LIMIT, 10, executor);
+
+            return retryConnector.retryConnect(
+                    (i, limit) -> {
+                        try {
+                            HttpURLConnection connection = (HttpURLConnection) ruleUrl.openConnection();
+                            connection.setRequestMethod("POST");
+                            initConnection(connection);
+                            connection.setDoOutput(true);
+                            connection.getOutputStream().write(JSONObject.toJSONBytes(filterRule));
+
+                            int responseCode = connection.getResponseCode();
+                            if (responseCode == 201) {
+                                log.info("[{}/{}] - 规则[{}]添加成功", i, limit, filterRule);
+                                return true;
+                            } else {
+                                log.warn("[{}/{}] - 规则[{}]添加失败code[{}], message[{}], 准备重试",
+                                        i, limit, filterRule, responseCode, connection.getResponseMessage());
+                                return false;
+                            }
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    },
+                    String.format("开始向bearerToken[%s]添加规则[%S]", bearerToken, filterRule),
+                    String.format("尝试向bearerToken[%s]添加规则[%S]发生异常, url[%s]", bearerToken, filterRule, ruleUrl),
+                    String.format("向bearerToken[%s]添加规则[%S]失败, url[%s]", bearerToken, filterRule, ruleUrl)
+            );
+
+        }, executor);
+    }
+
+    /**
+     * 请求监听流
+     *
+     * @return future<buffer>
+     */
+    private CompletableFuture<BlockingQueue<JSONObject>> requestListenStream() {
+        return CompletableFuture.supplyAsync(() -> {
+            isRunning = true;
+
+            RetryConnector retryConnector = new RetryConnector(CONNECT_RETRY_LIMIT, 60, executor);
+            try {
+                boolean result = retryConnector.retryConnect(
+                        (i, limit) -> {
+                            try {
+                                streamConnection = (HttpURLConnection) streamUrl.openConnection();
+                                streamConnection.setRequestMethod("GET");
+                                initConnection(streamConnection);
+
+                                streamConnection.connect();
+
+                                //开始从http长连接中取推送数据
+                                startLoadTwitterMessage(streamConnection)
+                                        //错误异步给他重试
+                                        .exceptionallyAsync(throwable -> {
+                                            log.error("从Http长连接中获取流数据发生错误, 尝试重新连接. url[{}], bearerToken[{}]", streamUrl, bearerToken);
+                                            streamConnection.disconnect();
+
+                                            // client 还在运行， 继续运行调用此方法尝试重启
+                                            if (isRunning) {
+                                                requestListenStream();
+                                            }
+
+                                            return null;
+                                        }, executor);
+
+                                return true;
+                            } catch (Exception e) {
+                                throw new RuntimeException("获取流数据时发生错误", e);
+                            }
+                        },
+                        String.format("开始获取bearerToken[%s]-rule[%s]数据流", bearerToken, filterRule),
+                        String.format("获取bearerToken[%s]-rule[%s]数据流发生异常, url[%s]", bearerToken, filterRule, streamUrl),
+                        String.format("获取bearerToken[%s]-rule[%S]数据流获取失败, url[%s]", bearerToken, filterRule, streamUrl)
+                );
+
+                if (result) return buffer;
+                return null;
+            } catch (Exception e) {
+                close();
+                throw new RuntimeException("请求监听流发生错误", e);
+            }
+        }, executor);
+    }
+
+
+    /**
+     * 开始加载k线信息
+     *
+     * @param connection connection
+     * @return void
+     */
+    private CompletableFuture<Void> startLoadTwitterMessage(HttpURLConnection connection) {
+        return CompletableFuture.runAsync(() -> {
+            //一直写数据
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    buffer.put(JSONObject.parseObject(line));
+                }
+            } catch (Exception e) {
+                throw new RuntimeException("获取流数据时发生错误", e);
+            }
+        }, executor);
+    }
+
+
+    /**
+     * 初始化连接
+     *
+     * @param connection 连接
+     */
+    private void initConnection(HttpURLConnection connection) {
+        connection.setRequestProperty("Authorization", "Bearer " + bearerToken);
+        connection.setRequestProperty("Content-Type", "application/json");
+    }
+
+
+    public static void main(String[] args) throws MalformedURLException, ExecutionException, InterruptedException {
+        TwitterStreamRuleClient twitterStreamRuleClient = new TwitterStreamRuleClient(
+                "https://api.twitter.com/2/tweets/search/stream/rules",
+                "https://api.twitter.com/2/tweets/search/stream",
+                "YOUR_BEARER_TOKEN",
+                Executors.newVirtualThreadPerTaskExecutor()
+        );
+        twitterStreamRuleClient.addFilterRule("from", "masike");
+        twitterStreamRuleClient.requestAddFilterRule().get();
+    }
+
+}
+
+package com.helei;
+
+import com.helei.telegramebot.bot.AbstractTelegramBot;
+import com.helei.telegramebot.service.impl.KafkaConsumerService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.telegram.telegrambots.meta.TelegramBotsApi;
+
+import java.util.List;
+
+@Slf4j
+@SpringBootApplication
+public class App {
+    public static void main(String[] args) {
+        ConfigurableApplicationContext applicationContext = SpringApplication.run(App.class, args);
+
+
+        startAllEnvTradeSignalConsumer(applicationContext);
+
+        startAllTGBot(applicationContext);
+    }
+
+
+    /**
+     * 开启所有信号消费
+     *
+     * @param applicationContext app
+     */
+    private static void startAllEnvTradeSignalConsumer(ApplicationContext applicationContext) {
+        log.info("开始消费交易信号.....");
+        KafkaConsumerService kafkaConsumerService = applicationContext.getBean(KafkaConsumerService.class);
+        kafkaConsumerService.startAllTradeSignalConsumer();
+        log.info("交易信号消费启动完成.....");
+    }
+
+    /**
+     * 开启所有的tg机器人
+     *
+     * @param applicationContext app
+     */
+    private static void startAllTGBot(ApplicationContext applicationContext) {
+        try {
+            log.info("开始启动tg机器人.....");
+            TelegramBotsApi telegramBotsApi = applicationContext.getBean(TelegramBotsApi.class);
+
+            List<AbstractTelegramBot> tgBots = (List<AbstractTelegramBot>) applicationContext.getBean("tgBots");
+
+            for (AbstractTelegramBot tgBot : tgBots) {
+                log.info("启动[{}}机器人", tgBot.getBotUsername());
+//                telegramBotsApi.registerBot(tgBot);
+            }
+
+            log.info("tg机器人启动完成");
+        } catch (Exception e) {
+            log.error("开启Telegram Bot发生异常", e);
+        }
+    }
+}
+shinano:
+  quantity:
+    telegram_bot:
+      run_type: # 运行环境配置
+        configs:
+          - env: TEST_NET
+            trade_type:
+              - CONTRACT
+
+      bots: #机器人的具体设置
+        - botUsername: test1
+          token: 12345677
+        - botUsername: test2
+          token: 12345677
+
+      kafka:
+        bootstrap_servers: 127.0.0.1:9092 # Kafka服务器地址
+        group_id: tg_bot_test_group
+        kafka_num_partitions: 1
+        kafka_replication_factor: 1
+
+      redis:
+        # 如果需要密码，格式为 redis://:password@localhost:6379
+        #        url: redis://127.0.0.1:6379
+        url: redis://127.0.0.1:6379
+
+      signal: # 信号设置
+        normal: # 运行环境
+          spot: # 交易类型
+            - symbol: btcusdt # 交易对名称
+              signal_names: # 信号名list
+                - test1
+                - test2
+                - test3
+            - symbol: ethusdt
+              signal_names:
+                - test1
+                - test2
+                - test3
+          contract:
+            - symbol: btcusdt
+              signal_names:
+                - test1
+                - test2
+                - test3
+            - symbol: ethusdt
+              signal_names:
+                - test1
+                - test2
+                - test3
+        test_net:
+          contract: # 交易类型
+            - symbol: btcusdt # 交易对名称
+              signal_names: # 信号名list
+                - test1
+
+
+shinano:
+  quantity:
+    twitter: # 推特设置
+      bearer_token: YOUR_BEARER_TOKEN # token
+      url: # url相关
+        rule_url: https://api.twitter.com/2/tweets/search/stream/rules
+        stream_url: https://api.twitter.com/2/tweets/search/stream
+      filter_rule:
+        - key: from
+          value: masike
+
+package com.helei;
+
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.telegramebot.bot.AbstractTelegramBot;
+import com.helei.telegramebot.bot.ShinanoTelegramBot;
+import com.helei.telegramebot.constants.TelegramBotCommand;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Bean;
+import org.telegram.telegrambots.meta.api.objects.Chat;
+import org.telegram.telegrambots.meta.api.objects.Message;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+@SpringBootTest
+class AppTest {
+
+    @Autowired
+    @Qualifier("tgBots")
+    public List<AbstractTelegramBot> tgBots;
+
+    @BeforeEach
+    void setUp() {
+    }
+
+    @Test
+    public void testAddListenSignalChat() {
+        ShinanoTelegramBot bot = (ShinanoTelegramBot) tgBots.getFirst();
+        List<Object> parmas = new ArrayList<>();
+        parmas.add(RunEnv.TEST_NET.name());
+        parmas.add(TradeType.CONTRACT.name());
+        parmas.add(CEXType.BINANCE.name());
+        parmas.add("btcusdt");
+        Message message = new Message();
+        Chat chat = new Chat();
+        chat.setId(11111111L);
+        message.setChat(chat);
+        bot.addListenSignalTypeCommandHandler(parmas, message);
+    }
+
+    @AfterEach
+    void tearDown() {
+    }
+}
+
+
+
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.helei</groupId>
+        <artifactId>ShinanoQuanti</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>TelegramBot</artifactId>
+    <packaging>jar</packaging>
+
+    <name>TelegramBot</name>
+    <url>http://maven.apache.org</url>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.helei</groupId>
+            <artifactId>Base</artifactId>
+            <version>0.0.1-SNAPSHOT</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.telegram</groupId>
+            <artifactId>telegrambots</artifactId>
+            <version>6.0.1</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.twitter4j</groupId>
+            <artifactId>twitter4j-core</artifactId>
+            <version>4.1.2</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson-spring-boot-starter</artifactId>
+        </dependency>
+
+
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>cn.hutool</groupId>
+            <artifactId>hutool-all</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
+
+
+
+package com.helei.tradesignalprocess.stream.a_klinesource.impl;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.dto.trade.KLine;
+import com.helei.tradesignalprocess.stream.a_klinesource.KLineHisAndRTSource;
+import org.apache.flink.configuration.Configuration;
+
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.util.Set;
+import java.util.concurrent.BlockingQueue;
+
+public class LocalKLineSource extends KLineHisAndRTSource {
+
+    private final String filePath;
+
+    private BufferedReader reader;
+
+    public LocalKLineSource(String filePath) {
+        super("", Set.of(), System.currentTimeMillis());
+        this.filePath = filePath;
+    }
+
+    @Override
+    protected void onOpen(Configuration parameters) throws Exception {
+        reader = new BufferedReader(new FileReader(filePath));
+    }
+
+    @Override
+    protected void loadDataInBuffer(BlockingQueue<KLine> buffer) {
+        reader.lines().forEach(line -> {
+            try {
+                buffer.put(JSONObject.parseObject(line, KLine.class));
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+}
+
+
+
+
+package com.helei.tradesignalprocess.stream.d_decision;
+
+import com.helei.constants.CEXType;
+import com.helei.dto.trade.IndicatorMap;
+import com.helei.dto.trade.IndicatorSignal;
+import com.helei.dto.trade.TradeSignal;
+import com.helei.tradesignalprocess.config.TradeSignalConfig;
+
+import java.util.List;
+
+public abstract class BinanceDecisionMaker extends AbstractDecisionMaker<TradeSignal> {
+
+    private final TradeSignalConfig tradeSignalConfig = TradeSignalConfig.TRADE_SIGNAL_CONFIG;
+
+    protected BinanceDecisionMaker(String name) {
+        super(name);
+    }
+
+
+    @Override
+    protected TradeSignal decisionAndBuilderOrder(String symbol, List<IndicatorSignal> windowSignal, IndicatorMap indicatorMap) {
+        TradeSignal tradeSignal = makeBinanceTradeSignal(symbol, windowSignal, indicatorMap);
+        if (tradeSignal == null) return null;
+
+        tradeSignal.setName(getName());
+        tradeSignal.setId(nextSignalId());
+        tradeSignal.setSymbol(symbol);
+        tradeSignal.setCexType(CEXType.BINANCE);
+        tradeSignal.setRunEnv(tradeSignalConfig.getRun_env());
+        tradeSignal.setTradeType(tradeSignalConfig.getTrade_type());
+        tradeSignal.setCreateTimestamp(System.currentTimeMillis());
+
+        return tradeSignal;
+    }
+
+
+    protected abstract TradeSignal makeBinanceTradeSignal(String symbol, List<IndicatorSignal> windowSignal, IndicatorMap indicatorMap);
+
+}
+
+
