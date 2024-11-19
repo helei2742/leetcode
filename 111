@@ -1,1646 +1,192 @@
-package com.helei.dto.base;
+package com.helei.solanarpc;
 
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import java.util.Collection;
-
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
-public class Result {
-    private Boolean success;
-    private String errorMsg;
-    private Object data;
-    private Integer total;
-
-    public static Result ok(){
-        return new Result(true, null, null, null);
-    }
-    public static Result ok(Object data){
-        return new Result(true, null, data, null);
-    }
-    public static Result ok(Collection<?> data, Integer total){
-        return new Result(true, null, data, total);
-    }
-    public static Result fail(String errorMsg){
-        return new Result(false, errorMsg, null, null);
-    }
-}
-package com.helei.dto.config;
-
-import com.helei.constants.RunEnv;
-import com.helei.constants.trade.TradeType;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import java.util.List;
-
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-public class TradeSignalConfig {
-    /**
-     * 主网环境信号配置
-     */
-    private TradeSignalEnvConfig normal;
-
-    /**
-     * 测试环境信号配置
-     */
-    private TradeSignalEnvConfig test_net;
-
-
-    /**
-     * 根据环境获取配置
-     *
-     * @param runEnv    运行环境
-     * @param tradeType 交易类型
-     * @return 交易类型列表
-     */
-    public List<TradeSignalSymbolConfig> getEnvSignalSymbolConfig(RunEnv runEnv, TradeType tradeType) {
-        return switch (runEnv) {
-            case TEST_NET -> test_net.getTradeSignalSymbolConfigs(tradeType);
-            case NORMAL -> normal.getTradeSignalSymbolConfigs(tradeType);
-        };
-    }
-
-    @Data
-    @AllArgsConstructor
-    @NoArgsConstructor
-    public static class TradeSignalEnvConfig {
-
-        /**
-         * 现货类型信号配置
-         */
-        private List<TradeSignalSymbolConfig> spot;
-
-        /**
-         * u本位合约类型信号设置
-         */
-        private List<TradeSignalSymbolConfig> contract;
-
-        public List<TradeSignalSymbolConfig> getTradeSignalSymbolConfigs(TradeType tradeType) {
-            return switch (tradeType) {
-                case SPOT -> spot;
-                case CONTRACT -> contract;
-            };
-        }
-    }
-
-
-    @Data
-    @AllArgsConstructor
-    @NoArgsConstructor
-    public static class TradeSignalSymbolConfig {
-
-        /**
-         * 交易对名称
-         */
-        private String symbol;
-
-        /**
-         * 信号名list
-         */
-        private List<String> signal_names;
-    }
-}
-
-package com.helei.dto.trade;
-
-import com.helei.constants.CEXType;
-import com.helei.constants.RunEnv;
-import com.helei.constants.trade.TradeSide;
-import com.helei.constants.trade.TradeType;
-import lombok.*;
-
-import java.math.BigDecimal;
-
-
-/**
- * 原始订单数据
- */
-@Data
-@AllArgsConstructor
-@EqualsAndHashCode
-@Builder
-public class TradeSignal {
-
-    /**
-     * 信号id
-     */
-    private String id;
-
-    /**
-     * 运行环境
-     */
-    private RunEnv runEnv;
-
-    /**
-     * 交易类型
-     */
-    private TradeType tradeType;
-
-    /**
-     * 交易所类型
-     */
-    private CEXType cexType;
-
-    /**
-     * 信号名称
-     */
-    private String name;
-
-    /**
-     * 交易对
-     */
-    private String symbol;
-
-    /**
-     * 交易方向
-     */
-    private TradeSide tradeSide;
-
-    /**
-     * 目标价格
-     */
-    private BigDecimal targetPrice;
-
-    /**
-     * 进场价格
-     */
-    private BigDecimal enterPrice;
-
-    /**
-     * 止损价格
-     */
-    private BigDecimal stopPrice;
-
-    /**
-     * 信号创建时间戳
-     */
-    private long createTimestamp;
-
-    /**
-     * 信号创建的k线open时间
-     */
-    private long createKLineOpenTimestamp;
-}
-
-
-
-package com.helei.util;
-
-import com.helei.constants.CEXType;
-import com.helei.constants.trade.KLineInterval;
-import com.helei.constants.RunEnv;
-import com.helei.constants.trade.TradeType;
-
-public class KafkaUtil {
-
-    public static final String TOPIC_KLINE_FORMAT = "topic.%s.%s.%s.%s";
-
-    private static final String TOPIC_ORDER_FORMAT = "topic.%s.%s.order.%s";
-
-    /**
-     * 获取kafka里topic的名字
-     *
-     * @param cexType    cexType
-     * @param streamName streamName
-     * @param runEnv     runEnv
-     * @param type       type 合约或现货
-     * @return topic
-     */
-    public static String resolveKafkaTopic(CEXType cexType, String streamName, RunEnv runEnv, TradeType type) {
-        streamName = streamName.replace("@", "_");
-        return String.format(TOPIC_KLINE_FORMAT, cexType.getDescription(), streamName, runEnv.name().toLowerCase(), type.getDescription()).toLowerCase();
-    }
-
-    /**
-     * 获取写入订单的topic
-     *
-     * @param runEnv runEnv
-     * @param type   tradeType
-     * @param symbol 交易对
-     * @return topic
-     */
-    public static String getOrderSymbolTopic(RunEnv runEnv, TradeType type, String symbol) {
-        return String.format(TOPIC_ORDER_FORMAT, runEnv.name(), type.name(), symbol);
-    }
-
-    /**
-     * 获取信号的topic
-     *
-     * @param runEnv     运行环境
-     * @param type       交易类型
-     * @param symbol     交易对
-     * @param signalName 信号名
-     * @return topic
-     */
-    public static String getTradeSingalTopic(RunEnv runEnv, TradeType type, String symbol, String signalName) {
-        return (runEnv.name() + "." + type + "." + symbol + "." + signalName).toLowerCase();
-    }
-
-
-    public static String getKLineStreamName(String symbol, KLineInterval interval) {
-        return symbol + "_kline_" + interval.getDescribe();
-    }
-}
-
-
-package com.helei.telegramebot.bot;
-
-import com.helei.telegramebot.constants.TelegramBotCommand;
-import com.helei.telegramebot.service.ITelegramPersistenceService;
-import lombok.Getter;
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.solanarpc.constants.SolanaConstants;
+import com.helei.solanarpc.constants.SolanaSwapType;
+import com.helei.solanarpc.constants.SolanaTransactionType;
+import com.helei.solanarpc.dto.SolanaTransactionDetail;
 import lombok.extern.slf4j.Slf4j;
-import org.telegram.telegrambots.bots.TelegramLongPollingBot;
-import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat;
-import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChatAdministrators;
-import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChatMember;
-import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
-import org.telegram.telegrambots.meta.api.objects.Chat;
-import org.telegram.telegrambots.meta.api.objects.Message;
-import org.telegram.telegrambots.meta.api.objects.Update;
-import org.telegram.telegrambots.meta.api.objects.User;
-import org.telegram.telegrambots.meta.api.objects.chatmember.ChatMember;
-import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
-import java.util.Arrays;
-import java.util.List;
-import java.util.concurrent.ExecutorService;
-
-
-/**
- * TG机器人抽象类
- */
-@Slf4j
-public abstract class AbstractTelegramBot extends TelegramLongPollingBot {
-
-
-    /**
-     * 机器人名
-     */
-    private final String botUsername;
-
-    /**
-     * 机器人连接的token
-     */
-    private final String token;
-
-    /**
-     * 持久化服务
-     */
-    @Getter
-    private final ITelegramPersistenceService telegramPersistenceService;
-
-    /**
-     * 执行的线程池
-     */
-    protected final ExecutorService executor;
-
-    protected AbstractTelegramBot(String botUsername, String token, ITelegramPersistenceService telegramPersistenceService, ExecutorService executor) {
-        this.botUsername = botUsername;
-        this.token = token;
-        this.telegramPersistenceService = telegramPersistenceService;
-        this.executor = executor;
-    }
-
-
-    @Override
-    public String getBotUsername() {
-        return botUsername;
-    }
-
-    @Override
-    public String getBotToken() {
-        return token;
-    }
-
-    @Override
-    public void onUpdateReceived(Update update) {
-        executor.execute(() -> {
-            Message message = update.getMessage();
-            try {
-                User from = message.getFrom();
-                String text = message.getText();
-
-                log.info("bot[{}] 收到消息 用户[{}] - 消息[{}]", getBotUsername(), from.getUserName(), text);
-
-                if (message.isCommand()) {
-                    //处理命令消息
-                    String[] split = text.split(" ");
-                    TelegramBotCommand command = TelegramBotCommand.valueOf(split[0]);
-                    List<String> params = Arrays.stream(split).toList();
-                    params.removeFirst();
-                    commandMessageHandler(command, params, message);
-                } else {
-                    //处理普通消息
-                    normalMessageHandler(text, message);
-                }
-            } catch (Exception e) {
-                log.error("处理消息[{}]出错", message);
-            }
-        });
-    }
-
-
-    /**
-     * 命令消息处理
-     *
-     * @param command 命令
-     * @param params  参数
-     * @param message 原消息内容
-     */
-    public abstract void commandMessageHandler(TelegramBotCommand command, List<?> params, Message message);
-
-    /**
-     * 普通消息处理
-     *
-     * @param messageText 消息文本
-     * @param message     原消息内容
-     */
-    public abstract void normalMessageHandler(String messageText, Message message);
-
-
-    /**
-     * 给指定chat发消息
-     *
-     * @param chatId      chatId
-     * @param messageText 消息文本
-     */
-    public void sendMessageToChat(String chatId, String messageText) {
-        SendMessage message = new SendMessage();
-        message.setChatId(chatId);
-        message.setText(messageText);
-
-        try {
-            execute(message);  // 发送消息
-        } catch (TelegramApiException e) {
-            log.error("给群组 [{}] 发送消息发生错误", chatId, e);
-        }
-    }
-
-
-    /**
-     * 获取聊天信息
-     *
-     * @param chatId chatId
-     * @return 详细信息
-     */
-    public Chat getChat(String chatId) {
-        GetChat chat = new GetChat(chatId);
-        try {
-            return execute(chat);
-        } catch (TelegramApiException e) {
-            log.error("获取Chat[{}]消息发生错误", chatId);
-        }
-        return null;
-    }
-
-
-    /**
-     * 获取特定成员信息
-     *
-     * @param chatId 群组id
-     * @param userId 消息文本
-     */
-    public User getChatMemberInfo(String chatId, long userId) {
-        GetChatMember getChatMember = new GetChatMember();
-        getChatMember.setChatId(chatId);
-        getChatMember.setUserId(userId);
-
-        try {
-            ChatMember chatMember = execute(getChatMember);
-            log.info("获取到群组[{}]成员[{}]的信息, status[{}]", chatId, userId, chatMember.getStatus());
-            // 根据需要获取更多信息，例如用户名、权限等
-            return chatMember.getUser();
-        } catch (TelegramApiException e) {
-            throw new RuntimeException(String.format("获取到群组[%s]成员[%s]的信息失败", chatId, userId), e);
-        }
-    }
-
-    /**
-     * 获取群组管理员信息
-     *
-     * @param chatId 群组id
-     */
-    public List<ChatMember> getChatAdministratorsInfo(String chatId) {
-        GetChatAdministrators getChatAdministrators = new GetChatAdministrators();
-        getChatAdministrators.setChatId(chatId);
-
-        try {
-            return execute(getChatAdministrators);
-        } catch (TelegramApiException e) {
-            throw new RuntimeException(String.format("获取到群组[%s]管理员信息出错", chatId), e);
-        }
-    }
-
-}
-
-
-
-package com.helei.telegramebot.bot;
-
-import com.helei.constants.CEXType;
-import com.helei.constants.RunEnv;
-import com.helei.constants.trade.TradeType;
-import com.helei.dto.base.Result;
-import com.helei.dto.trade.TradeSignal;
-import com.helei.telegramebot.constants.TelegramBotCommand;
-import com.helei.telegramebot.service.ITelegramPersistenceService;
-import com.helei.telegramebot.template.TelegramMessageTemplate;
-import lombok.extern.slf4j.Slf4j;
-import org.telegram.telegrambots.meta.api.objects.Message;
-import org.telegram.telegrambots.meta.api.objects.User;
-
+import javax.net.ssl.SSLException;
+import java.net.InetSocketAddress;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.function.Consumer;
 
 @Slf4j
-public class ShinanoTelegramBot extends AbstractTelegramBot {
+public class SolanaApiService {
 
-    public ShinanoTelegramBot(
-            String botUsername,
-            String token,
-            ITelegramPersistenceService telegramPersistenceService,
-            ExecutorService executorService
-    ) {
-        super(botUsername, token, telegramPersistenceService, executorService);
-    }
+    private final SolanaWebsocketClient solanaWebsocketClient;
 
-
-    @Override
-    public void normalMessageHandler(String messageText, Message message) {
-
-    }
-
-    @Override
-    public void commandMessageHandler(TelegramBotCommand command, List<?> params, Message message) {
-        switch (command) {
-            case START -> startCommandHandler(message);
-            case ADD_LISTEN_SIGNAL_TYPE -> addListenSignalTypeCommandHandler(params, message);
-            case SEND_TRADE_SIGNAL -> sendTradeSignalCommandHandler(params);
-        }
-    }
-
-
-    /**
-     * 添加监听信号命令
-     *
-     * @param params  参数 [runEnv, tradeType, cexType, 可选symbols]
-     * @param message 消息
-     */
-    private void addListenSignalTypeCommandHandler(List<?> params, Message message) {
-        String chatId = String.valueOf(message.getChatId());
-
-        if (params.size() <= 3) {
-            sendMessageToChat(chatId, String.format("参数错误,命令[%s]参数格式应为[runEnv, tradeType, cexType, symbols(可选)]", TelegramBotCommand.ADD_LISTEN_SIGNAL_TYPE.name()));
-            return;
-        }
-
-        log.info("开始初始化群机器人[{}]-group chat id[{}]", getBotUsername(), chatId);
-
-        //Step 1 解析初始化参数
-        RunEnv runEnv = RunEnv.valueOf((String) params.getFirst());
-        TradeType tradeType = TradeType.valueOf((String) params.get(1));
-        CEXType cexType = CEXType.valueOf((String) params.get(2));
-        List<String> symbols = new ArrayList<>();
-        for (int i = 3; i < params.size(); i++) {
-            symbols.add((String) params.get(i));
-        }
-
-        //Step 2 持久化
-        Result result = getTelegramPersistenceService().saveChatListenTradeSignal(chatId, runEnv, tradeType, cexType, symbols);
-        if (!result.getSuccess()) {
-            sendMessageToChat(chatId, result.getErrorMsg());
-        }
-    }
-
-    /**
-     * 处理用户发送的开始命令
-     *
-     * @param message 原消息体
-     */
-    private void startCommandHandler(Message message) {
-        Long chatId = message.getChatId();
-
-        // chatId持久化，连同用户信息
-        User from = message.getFrom();
-
-        Result result = getTelegramPersistenceService().saveChatUser(chatId, from);
-        if (!result.getSuccess()) {
-            log.error("保存聊天[{}]用户[{}]信息失败", chatId, from.getUserName());
-            sendMessageToChat(String.valueOf(chatId), result.getErrorMsg());
-        }
-    }
-
-    /**
-     * 处理发送信号命令
-     *
-     * @param params 参数
-     */
-    private void sendTradeSignalCommandHandler(List<?> params) {
-        //Step 1 参数解析
-        TradeSignal tradeSignal = (TradeSignal) params.getFirst();
-        String message = TelegramMessageTemplate.tradeSignalMessage(tradeSignal);
-
-
-        //Step 2 查询监听的id
-        Result result = getTelegramPersistenceService()
-                .queryTradeSignalListenedChatId(tradeSignal.getRunEnv(), tradeSignal.getTradeType(), tradeSignal.getCexType(), tradeSignal.getSymbol());
-
-
-        //Step 3 发送
-        if (result.getSuccess()) {
-            // 获取chatId成功
-            Collection<?> chatIds = (Collection<?>) result.getData();
-            for (Object chatId : chatIds) {
-                CompletableFuture
-                        .runAsync(() -> {
-                            sendMessageToChat((String) chatId, message);
-                        }, executor)
-                        .exceptionallyAsync(throwable -> {
-                            log.error("向chatId[{}]发送信号[{}]信息发生错误", chatId, tradeSignal.getId());
-                            return null;
-                        }, executor);
-            }
-        } else {
-            // 获取chatId失败
-            log.error("获取chatId失败, [{}]", result.getErrorMsg());
-        }
-    }
-}
-
-
-package com.helei.telegramebot.config;
-
-import com.helei.telegramebot.bot.AbstractTelegramBot;
-import com.helei.telegramebot.bot.ShinanoTelegramBot;
-import com.helei.telegramebot.manager.ExecutorServiceManager;
-import com.helei.telegramebot.service.ITelegramPersistenceService;
-import com.helei.util.NamedThreadFactory;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.common.serialization.StringDeserializer;
-import org.redisson.Redisson;
-import org.redisson.api.RedissonClient;
-import org.redisson.config.Config;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
-import org.springframework.kafka.core.ConsumerFactory;
-import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
-import org.telegram.telegrambots.meta.TelegramBotsApi;
-import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
-import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
-
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
-@Slf4j
-@Configuration
-public class SpringConfig {
-
-    private final TelegramBotConfig telegramBotConfig = TelegramBotConfig.INSTANCE;
-
-
-    @Autowired
-    private ITelegramPersistenceService telegramPersistenceService;
-
-    @Bean
-    public ExecutorServiceManager executorServiceManager() {
-        return new ExecutorServiceManager();
-    }
-
-    @Bean
-    public TelegramBotsApi telegramBotsApi() {
-        try {
-            return new TelegramBotsApi(DefaultBotSession.class);
-        } catch (TelegramApiException e) {
-            throw new RuntimeException("创建TelegramBotsApi出错", e);
-        }
-    }
-
-    @Bean
-    @Qualifier("tgBots")
-    public List<AbstractTelegramBot> tgBots() {
-        TelegramBotsApi telegramBotsApi = telegramBotsApi();
-
-        ExecutorService executor = executorServiceManager().getCommonExecutor();
-
-        for (TelegramBotConfig.TelegramBotBaseConfig botBaseConfig : telegramBotConfig.getBots()) {
-            executor.execute(()->{
-                String botUsername = botBaseConfig.getBotUsername();
-
-                try {
-                    log.info("开始注册[{}]tg机器人", botUsername);
-                    ShinanoTelegramBot bot = new ShinanoTelegramBot(
-                            botUsername,
-                            botBaseConfig.getToken(),
-                            telegramPersistenceService,
-                            Executors.newThreadPerTaskExecutor(new NamedThreadFactory(botUsername + "处理线程池"))
-                    );
-                    telegramBotsApi.registerBot(bot);
-                } catch (TelegramApiException e) {
-                    log.error("注册tg机器人[{}]发生错误", botUsername, e);
-                }
-            });
-        }
-        return List.of();
-    }
-
-    @Bean
-    public Map<String, Object> kafkaConfigs() {
-        Map<String, Object> configProps = new HashMap<>();
-        configProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, telegramBotConfig.getKafka().getBootstrap_servers());
-        configProps.put(ConsumerConfig.GROUP_ID_CONFIG, telegramBotConfig.getKafka().getGroup_id());  // 消费者组ID
-        configProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        configProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        configProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
-        return configProps;
-    }
-
-    @Bean
-    public ConsumerFactory<String, String> consumerFactory() {
-        return new DefaultKafkaConsumerFactory<>(kafkaConfigs());
-    }
-
-    @Bean
-    public ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory() {
-        ConcurrentKafkaListenerContainerFactory<String, String> factory = new ConcurrentKafkaListenerContainerFactory<>();
-        factory.setConsumerFactory(consumerFactory());
-        return factory;
-    }
-
-
-    @Bean
-    public RedissonClient redissonClient() {
-        Config config = new Config();
-        config.useSingleServer().setAddress(telegramBotConfig.getRedis().getUrl());
-        return Redisson.create(config);
-    }
-}
-
-
-
-package com.helei.telegramebot.config;
-
-import com.helei.constants.RunEnv;
-import com.helei.constants.trade.TradeType;
-import com.helei.dto.config.RunTypeConfig;
-import com.helei.dto.config.TradeSignalConfig;
-import com.helei.dto.kafka.KafkaConfig;
-import com.helei.dto.kafka.RedisConfig;
-import lombok.Data;
-import org.yaml.snakeyaml.Yaml;
-
-import java.io.InputStream;
-import java.io.Serializable;
-import java.util.List;
-import java.util.Map;
-
-@Data
-public class TelegramBotConfig implements Serializable {
-
-    private static final String CONFIG_FILE = "telegram-bot-config.yaml";
-
-    public static final TelegramBotConfig INSTANCE;
-
-    static {
-        Yaml yaml = new Yaml();
-        try (InputStream inputStream = TelegramBotConfig.class.getClassLoader().getResourceAsStream(CONFIG_FILE)) {
-            if (inputStream == null) {
-                throw new IllegalArgumentException("File not found: " + CONFIG_FILE);
-            }
-            Map<String, Object> yamlData = yaml.load(inputStream);
-            Map<String, Object> shinano = (Map<String, Object>) yamlData.get("shinano");
-            Map<String, Object> quantity = (Map<String, Object>) shinano.get("quantity");
-            Map<String, Object> telegram_bot = (Map<String, Object>) quantity.get("telegram_bot");
-
-            INSTANCE = yaml.loadAs(yaml.dump(telegram_bot), TelegramBotConfig.class);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to load YAML file: " + CONFIG_FILE, e);
-        }
-    }
-
-    private RunTypeConfig run_type;
-
-    private List<TelegramBotBaseConfig> bots;
-
-    private KafkaConfig kafka;
-
-    private RedisConfig redis;
-
-    private TradeSignalConfig signal;
-
-    @Data
-    public static class TelegramBotBaseConfig {
-
-        /**
-         * 运行环境
-         */
-        private RunEnv runEnv;
-
-        /**
-         * 交易类型
-         */
-        private TradeType tradeType;
-
-        /*
-        机器人的用户名
-         */
-        private String botUsername;
-
-        /**
-         * token
-         */
-        private String token;
-    }
-
-
-    public static void main(String[] args) {
-        System.out.println(INSTANCE);
-    }
-}
-
-
-package com.helei.telegramebot.constants;
-
-
-/**
- * tg 机器人命令+
- */
-public enum TelegramBotCommand {
-
-    /**
-     * 用户第一次点bot时发送的start命令
-     */
-    START,
-
-    /**
-     * 机器人加入群组后，发送此命令，将该群组id记录
-     */
-    ADD_LISTEN_SIGNAL_TYPE,
-
-    /**
-     * 发送交易信号
-     */
-    SEND_TRADE_SIGNAL
-}
-
-
-package com.helei.telegramebot.listener;
-
-import cn.hutool.core.util.StrUtil;
-import com.alibaba.fastjson.JSONObject;
-import com.helei.dto.trade.TradeSignal;
-import com.helei.telegramebot.bot.AbstractTelegramBot;
-import com.helei.telegramebot.constants.TelegramBotCommand;
-import com.helei.telegramebot.manager.ExecutorServiceManager;
-import jakarta.validation.constraints.NotNull;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.springframework.kafka.listener.MessageListener;
-
-import java.util.List;
-import java.util.concurrent.ExecutorService;
-
-/**
- * kafka交易信号监听， 会将其发到telegram bot，由其发送消息到群组
- */
-@Slf4j
-public class KafkaTradeSignalTGBotListener implements MessageListener<String, String> {
-
-    private final AbstractTelegramBot telegramBot;
+    private final SolanaRestHttpClient solanaRestHttpClient;
 
     private final ExecutorService executor;
 
-    public KafkaTradeSignalTGBotListener(AbstractTelegramBot telegramBot, ExecutorServiceManager executorServiceManager) {
-        this.telegramBot = telegramBot;
-        this.executor = executorServiceManager.getCommonExecutor();
+    public SolanaApiService(String wsUrl, String httpUrl, InetSocketAddress proxy, ExecutorService executorService) {
+        this.solanaRestHttpClient = new SolanaRestHttpClient(proxy, httpUrl, executorService);
+        this.solanaWebsocketClient = new SolanaWebsocketClient(wsUrl);
+        this.solanaWebsocketClient.setProxy(proxy);
+        this.executor = executorService;
     }
 
 
-    @Override
-    public void onMessage(@NotNull ConsumerRecord<String, String> record) {
-        executor.execute(()->{
-            String topic = record.topic();
-            String value = record.value();
-            log.info("topic[{}]收到消息[{}]", topic, value);
+    public void init() throws URISyntaxException, SSLException, ExecutionException, InterruptedException {
+        this.solanaWebsocketClient.connect().get();
+    }
 
-            if (StrUtil.isBlank(value)) {
-                log.warn("receive null kafka trade signal, topic[{}] key [{}]", topic, record.key());
-                return;
-            }
 
-            try {
-                TradeSignal tradeSignal = JSONObject.parseObject(value, TradeSignal.class);
+    /**
+     * 监听地址的交易
+     *
+     * @param address        address
+     * @param detailConsumer detailConsumer
+     * @return CompletableFuture<Long>
+     */
+    public CompletableFuture<Long> listenAddressTransition(String address, Consumer<SolanaTransactionDetail> detailConsumer) {
+        //Step 1 监听 地址的log
+        return solanaWebsocketClient.logsSubscribe(address, (eventType, context, event) -> {
+            JSONObject value = event.getJSONObject("params").getJSONObject("value");
 
-                telegramBot.commandMessageHandler(TelegramBotCommand.SEND_TRADE_SIGNAL, List.of(tradeSignal), null);
-            } catch (Exception e) {
-                log.error("处理kafka topic[{}] 消息[{}]时出错", topic, value, e);
-            }
+            //Step 2.从监听事件中获取签名
+            String signature = value.getString("signature");
+
+            //Step 3 根据签名获取交易信息
+            solanaRestHttpClient.getTransaction(signature).thenAcceptAsync(response -> {
+                //Step 4 解析交易消息
+                SolanaTransactionDetail detail = getSolanaTransactionDetail(response);
+
+                log.info("地址[{}]收到交易信息[{}]", address, detail);
+
+                // Step 5 调用回调方法
+                detailConsumer.accept(detail);
+            }, executor).exceptionally(throwable -> {
+                log.error("处理地址[{}]交易信息发生错误", address, throwable);
+                return null;
+            });
+        }).exceptionally(throwable -> {
+            log.error("监听地址[{}]的log信息发生错误", address, throwable);
+            return null;
         });
     }
-}
-
-
-
-
-
-package com.helei.telegramebot.manager;
-
-
-import com.helei.util.NamedThreadFactory;
-import lombok.Data;
-
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
-@Data
-public class ExecutorServiceManager {
-
-    public final ExecutorService commonExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("common处理线程池"));
-
-}
-
-
-
-
-package com.helei.telegramebot.service.impl;
-
-
-import com.helei.constants.RunEnv;
-import com.helei.constants.trade.TradeType;
-import com.helei.dto.base.KeyValue;
-import com.helei.dto.config.TradeSignalConfig;
-import com.helei.telegramebot.bot.AbstractTelegramBot;
-import com.helei.telegramebot.config.TelegramBotConfig;
-import com.helei.telegramebot.manager.ExecutorServiceManager;
-import com.helei.telegramebot.listener.KafkaTradeSignalTGBotListener;
-import com.helei.util.KafkaUtil;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
-import org.springframework.kafka.listener.ConcurrentMessageListenerContainer;
-import org.springframework.kafka.listener.MessageListener;
-import org.springframework.stereotype.Service;
-
-import java.util.ArrayList;
-import java.util.List;
-
-@Slf4j
-@Service
-public class KafkaConsumerService {
-
-    private final TelegramBotConfig telegramBotConfig = TelegramBotConfig.INSTANCE;
-
-    @Autowired
-    private ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory;
-
-    @Autowired
-    private ExecutorServiceManager executorServiceManager;
-
-    @Autowired
-    private List<AbstractTelegramBot> tgBots;
 
 
     /**
-     * 开始交易信号消费
+     * 解析交易信息
      *
-     * @param env       运行环境
-     * @param tradeType 交易类型
+     * @param response response
+     * @return SolanaTransactionDetail
      */
-    public void startTradeSignalConsumer(RunEnv env, TradeType tradeType) {
-        List<TradeSignalConfig.TradeSignalSymbolConfig> envSignalSymbolConfig = telegramBotConfig.getSignal().getEnvSignalSymbolConfig(env, tradeType);
+    private static SolanaTransactionDetail getSolanaTransactionDetail(JSONObject response) {
+        JSONObject result = response.getJSONObject("result");
 
-        List<String> topics = new ArrayList<>();
-        for (TradeSignalConfig.TradeSignalSymbolConfig tradeSignalSymbolConfig : envSignalSymbolConfig) {
-            String symbol = tradeSignalSymbolConfig.getSymbol();
-            for (String signalName : tradeSignalSymbolConfig.getSignal_names()) {
-                topics.add(KafkaUtil.getTradeSingalTopic(env, tradeType, symbol, signalName));
+        JSONObject meta = result.getJSONObject("meta");
+
+        JSONObject transaction = result.getJSONObject("transaction");
+        JSONArray addressArray = transaction.getJSONObject("message").getJSONArray("accountKeys");
+
+
+        // token 交易信息
+        JSONArray preTokenBalances = meta.getJSONArray("preTokenBalances");
+        JSONArray postTokenBalances = meta.getJSONArray("postTokenBalances");
+
+        // 账户sol信息
+        JSONArray preBalancesLamports = meta.getJSONArray("preBalances");
+        JSONArray postBalancesLamports = meta.getJSONArray("postBalances");
+
+
+        Long fee = meta.getLong("fee");
+
+        SolanaTransactionDetail.SolanaTransactionDetailBuilder builder = SolanaTransactionDetail
+                .builder()
+                .fee(fee / SolanaConstants.lamports);
+
+        SolanaTransactionType transactionType = SolanaTransactionType.SEND_SPL_TOKEN;
+        if (!preTokenBalances.isEmpty()) {
+            // 代币swap，sol换其它币，或其它币换sol， 或者其它代币换其它代币
+
+            // token 变化信息
+            List<SolanaTransactionDetail.SolanaTokenAmountChangeInfo> tokenAmountChangeInfos = new ArrayList<>();
+            for (int i = 0; i < preTokenBalances.size(); i++) {
+                JSONObject preBalance = preTokenBalances.getJSONObject(i);
+                JSONObject postBalance = postTokenBalances.getJSONObject(i);
+
+                int accountIndex = preBalance.getInteger("accountIndex");
+                String accountAddress = addressArray.getString(accountIndex);
+
+                // 获取 Token Mint 地址 (币种)
+                String tokenMint = preBalance.getString("mint");
+
+                // 获取token数量变化
+                double preAmount = preBalance.getJSONObject("uiTokenAmount").getDoubleValue("uiAmount");
+                double postAmount = postBalance.getJSONObject("uiTokenAmount").getDoubleValue("uiAmount");
+                double amountTransferred = preAmount - postAmount;
+
+                // 获取token数量变化
+                long preLamports = preBalancesLamports.getLongValue(accountIndex);
+                long postLamports = postBalancesLamports.getLongValue(accountIndex);
+                long solTransferred = preLamports - postLamports;
+
+
+                tokenAmountChangeInfos.add(new SolanaTransactionDetail.SolanaTokenAmountChangeInfo(
+                        accountAddress,
+                        tokenMint,
+                        amountTransferred,
+                        solTransferred,
+                        postAmount,
+                        postLamports / SolanaConstants.lamports
+                ));
             }
-        }
-        log.info("开始监听kafka交易信号, [{}]", topics);
-        for (AbstractTelegramBot tgBot : tgBots) {
-            try {
-                startConsumer(topics, new KafkaTradeSignalTGBotListener(tgBot, executorServiceManager));
-                log.info("已为[{}]telegram bot注册监听交易信号", tgBot.getBotUsername());
-            } catch (Exception e) {
-                log.error("telegram bot[{}]监听交易信号发生错误", tgBot.getBotUsername(), e);
+
+            builder.tokenAmountChangeInfos(tokenAmountChangeInfos);
+
+            JSONArray instructions = transaction.getJSONObject("message").getJSONArray("instructions");
+
+            // 解析swap类型
+            SolanaSwapType solanaSwapType = null;
+            for (int i = 0; i < instructions.size(); i++) {
+                if (solanaSwapType != null) break;
+
+                String programId = instructions.getJSONObject(i).getString("programId");
+                for (SolanaSwapType type : SolanaSwapType.values()) {
+                    if (programId.contains(type.name())) {
+                        solanaSwapType = type;
+                        break;
+                    }
+                }
             }
-        }
-    }
-
-
-    /**
-     * 开始kafka消费
-     *
-     * @param topics          topics
-     * @param messageListener messageListener
-     */
-    public void startConsumer(List<String> topics, MessageListener<String, String> messageListener) {
-        ConcurrentMessageListenerContainer<String, String> container = kafkaListenerContainerFactory.createContainer(topics.toArray(new String[0]));
-
-        container.setupMessageListener(messageListener);
-        container.start();
-    }
-
-    /**
-     * 开启所有环境的信号消费
-     */
-    public void startAllTradeSignalConsumer() {
-        for (KeyValue<RunEnv, TradeType> keyValue : telegramBotConfig.getRun_type().getRunTypeList()) {
-            startTradeSignalConsumer(keyValue.getKey(), keyValue.getValue());
-        }
-    }
-}
-
-
-package com.helei.telegramebot.service.impl;
-
-import com.helei.constants.CEXType;
-import com.helei.constants.RunEnv;
-import com.helei.constants.trade.TradeType;
-import com.helei.dto.base.Result;
-import com.helei.telegramebot.service.ITelegramPersistenceService;
-import com.helei.telegramebot.util.TelegramRedisUtil;
-import lombok.extern.slf4j.Slf4j;
-import org.redisson.api.RSet;
-import org.redisson.api.RedissonClient;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-import org.telegram.telegrambots.meta.api.objects.Chat;
-import org.telegram.telegrambots.meta.api.objects.User;
-
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.Set;
-
-
-@Slf4j
-@Service
-public class TelegramPersistenceServiceImpl implements ITelegramPersistenceService {
-
-    @Autowired
-    private RedissonClient redissonClient;
-
-    @Override
-    public Result saveChatUser(Long chatId, User user) {
-        return Result.ok();
-    }
-
-    @Override
-    public Result saveGroupChat(Chat chat) {
-        return Result.ok();
-    }
-
-    @Override
-    public Result saveChatListenTradeSignal(String chatId, RunEnv runEnv, TradeType tradeType, CEXType cexType, List<String> symbols) {
-
-        List<String> errorKey = new ArrayList<>();
-
-        for (String symbol : symbols) {
-            String key = null;
-            try {
-                key = TelegramRedisUtil.tradeSignalListenChatIdSetKey(runEnv, tradeType, cexType, symbol);
-                RSet<String> set = redissonClient.getSet(key);
-                set.add(chatId);
-            } catch (Exception e) {
-                errorKey.add(key);
-                log.error("保存[{}]到[{}]出错", chatId, key);
+            if (solanaSwapType != null) {
+                transactionType = SolanaTransactionType.SWAP;
             }
-        }
-
-        if (errorKey.isEmpty()) {
-            return Result.ok();
+            builder.solanaSwapType(solanaSwapType);
         } else {
-            return Result.fail(String.format("监听信号[%s]出错", errorKey));
-        }
-    }
-
-    @Override
-    public Result queryTradeSignalListenedChatId(RunEnv runEnv, TradeType tradeType, CEXType cexType, String symbol) {
-        String key = "";
-        try {
-            key = TelegramRedisUtil.tradeSignalListenChatIdSetKey(runEnv, tradeType, cexType, symbol);
-
-            Set<Object> chatIds = redissonClient.getSet(key).readAll();
-
-            return Result.ok(chatIds, chatIds.size());
-        } catch (Exception e) {
-            return Result.fail(String.format("查询监听信号[%s]的chatId失败", key));
-        }
-    }
-}
-
-
-
-
-package com.helei.telegramebot.service;
-
-import com.helei.constants.CEXType;
-import com.helei.constants.RunEnv;
-import com.helei.constants.trade.TradeType;
-import com.helei.dto.base.Result;
-import org.telegram.telegrambots.meta.api.objects.Chat;
-import org.telegram.telegrambots.meta.api.objects.User;
-
-import java.util.List;
-
-public interface ITelegramPersistenceService {
-
-
-    /**
-     * 保存聊天用户信息
-     *
-     * @param chatId 聊天id
-     * @param user   用户
-     * @return 是否保存成功
-     */
-    Result saveChatUser(Long chatId, User user);
-
-    /**
-     * 保存群组信息
-     *
-     * @param chat 群组信息
-     * @return 是否成功
-     */
-    Result saveGroupChat(Chat chat);
-
-    /**
-     * 保存chat监听的交易信号
-     *
-     * @param chatId    chatId
-     * @param runEnv    runEnv
-     * @param tradeType tradeType
-     * @param cexType   cexType
-     * @param symbols   symbols
-     * @return 是否成功
-     */
-    Result saveChatListenTradeSignal(String chatId, RunEnv runEnv, TradeType tradeType, CEXType cexType, List<String> symbols);
-
-
-    /**
-     * 查询监听交易对信号的tg chatId
-     *
-     * @param runEnv    runEnv
-     * @param tradeType tradeType
-     * @param cexType   cexType
-     * @param symbol    symbol
-     * @return chatId list
-     */
-    Result queryTradeSignalListenedChatId(RunEnv runEnv, TradeType tradeType, CEXType cexType, String symbol);
-}
-
-
-
-package com.helei.telegramebot.template;
-
-import com.helei.dto.trade.TradeSignal;
-
-import java.time.Instant;
-
-/**
- * TG 消息模板
- */
-public class TelegramMessageTemplate {
-    private static final String TRADE_SIGNAL_MESSAGE_TEMPLATE
-            = """
-            <b>%s</b>\n
-            方向:<b>%s</b>\n
-            入场价:<b>%s</b>\n 
-            止盈:<b>%s</b>\n 
-            止损:<b>%s</b>\n
-                            
-            信号名:<b>%s</b>\n
-            K线时间:<b>%s</b>\n
-            信号时间:<b>%s</b>
-            """;
-
-
-    /**
-     * 交易信号消息
-     *
-     * @param tradeSignal 信号
-     * @return 结构化后的消息
-     */
-    public static String tradeSignalMessage(TradeSignal tradeSignal) {
-        return String.format(TRADE_SIGNAL_MESSAGE_TEMPLATE,
-                tradeSignal.getSymbol(),
-                tradeSignal.getTradeSide().name(),
-                tradeSignal.getEnterPrice(),
-                tradeSignal.getTargetPrice(),
-                tradeSignal.getStopPrice(),
-                tradeSignal.getName(),
-                Instant.ofEpochMilli(tradeSignal.getCreateKLineOpenTimestamp()),
-                Instant.ofEpochMilli(tradeSignal.getCreateKLineOpenTimestamp())
-        );
-    }
-}
-
-
-package com.helei.telegramebot.util;
-
-import com.helei.constants.CEXType;
-import com.helei.constants.RunEnv;
-import com.helei.constants.trade.TradeType;
-
-public class TelegramRedisUtil {
-
-    private static final String REDIS_KEY_PREFIX = "telegram:bot:";
-
-    /**
-     * 监听交易信号的chatId的redis key，set类型
-     *
-     * @param runEnv    runEnv
-     * @param tradeType tradeType
-     * @param cexType   cexType
-     * @param symbol    symbol
-     * @return key
-     */
-    public static String tradeSignalListenChatIdSetKey(RunEnv runEnv, TradeType tradeType, CEXType cexType, String symbol) {
-        return REDIS_KEY_PREFIX + "signal:" + cexType.name() + ":" + runEnv.name() + ":" + tradeType.name() + ":" + symbol;
-    }
-}
-
-package com.helei;
-
-import com.helei.telegramebot.service.impl.KafkaConsumerService;
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.context.ApplicationContext;
-import org.springframework.context.ConfigurableApplicationContext;
-
-
-@SpringBootApplication
-public class App {
-    public static void main(String[] args) {
-        ConfigurableApplicationContext applicationContext = SpringApplication.run(App.class, args);
-
-
-        startAllEnvTradeSignalConsumer(applicationContext);
-    }
-
-
-    /**
-     * 开启所有信号消费
-     *
-     * @param applicationContext app
-     */
-    private static void startAllEnvTradeSignalConsumer(ApplicationContext applicationContext) {
-        KafkaConsumerService kafkaConsumerService = applicationContext.getBean(KafkaConsumerService.class);
-        kafkaConsumerService.startAllTradeSignalConsumer();
-    }
-}
-
-
-shinano:
-  quantity:
-    telegram_bot:
-      run_type: # 运行环境配置
-        configs:
-          - env: TEST_NET
-            trade_type:
-              - CONTRACT
-
-      bots: #机器人的具体设置
-        - botUsername: test1
-          token: 12345677
-        - botUsername: test2
-          token: 12345677
-
-      kafka:
-        bootstrap_servers: 127.0.0.1:9092 # Kafka服务器地址
-        group_id: tg_bot_test_group
-        kafka_num_partitions: 1
-        kafka_replication_factor: 1
-
-      redis:
-        # 如果需要密码，格式为 redis://:password@localhost:6379
-        #        url: redis://127.0.0.1:6379
-        url: redis://127.0.0.1:6379
-
-      signal: # 信号设置
-        normal: # 运行环境
-          spot: # 交易类型
-            - symbol: btcusdt # 交易对名称
-              signal_names: # 信号名list
-                - test1
-                - test2
-                - test3
-            - symbol: ethusdt
-              signal_names:
-                - test1
-                - test2
-                - test3
-          contract:
-            - symbol: btcusdt
-              signal_names:
-                - test1
-                - test2
-                - test3
-            - symbol: ethusdt
-              signal_names:
-                - test1
-                - test2
-                - test3
-        test_net: { }
-
-
-
-
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
-    <parent>
-        <groupId>com.helei</groupId>
-        <artifactId>ShinanoQuanti</artifactId>
-        <version>0.0.1-SNAPSHOT</version>
-    </parent>
-
-    <artifactId>TelegramBot</artifactId>
-    <packaging>jar</packaging>
-
-    <name>TelegramBot</name>
-    <url>http://maven.apache.org</url>
-
-    <properties>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    </properties>
-
-    <dependencies>
-        <dependency>
-            <groupId>com.helei</groupId>
-            <artifactId>Base</artifactId>
-            <version>0.0.1-SNAPSHOT</version>
-        </dependency>
-
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.telegram</groupId>
-            <artifactId>telegrambots</artifactId>
-            <version>6.0.1</version>
-        </dependency>
-
-
-        <dependency>
-            <groupId>org.redisson</groupId>
-            <artifactId>redisson-spring-boot-starter</artifactId>
-        </dependency>
-
-
-        <dependency>
-            <groupId>org.springframework.kafka</groupId>
-            <artifactId>spring-kafka</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-all</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
-</project>
-
-
-
-
-package com.helei.tradeapplication.config;
-
-import com.alibaba.fastjson.JSON;
-import com.helei.binanceapi.config.BinanceApiConfig;
-import com.helei.constants.RunEnv;
-import com.helei.constants.trade.TradeType;
-import com.helei.dto.config.RunTypeConfig;
-import com.helei.dto.config.TradeSignalConfig;
-import com.helei.dto.kafka.KafkaConfig;
-import com.helei.dto.kafka.RedisConfig;
-import com.helei.util.KafkaUtil;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-import org.yaml.snakeyaml.Yaml;
-
-import java.io.InputStream;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
-
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-public class TradeAppConfig {
-    private static final String CONFIG_FILE = "trade-app-config.yaml";
-
-    public static final TradeAppConfig INSTANCE;
-
-    private RunTypeConfig run_type;
-
-    private RedisConfig redis;
-
-    private KafkaConfig kafka;
-
-    private TradeSignalConfig signal;
-
-
-    static {
-        Yaml yaml = new Yaml();
-        try (InputStream inputStream = BinanceApiConfig.class.getClassLoader().getResourceAsStream(CONFIG_FILE)) {
-            if (inputStream == null) {
-                throw new IllegalArgumentException("File not found: " + CONFIG_FILE);
+            // sol转账
+            transactionType = SolanaTransactionType.SEND_SOL;
+
+            List<SolanaTransactionDetail.SolanaAmountChangeInfo> solanaAmountChangeInfos = new ArrayList<>();
+
+            for (int i = 0; i < preBalancesLamports.size(); i++) {
+                long preLamports = preBalancesLamports.getLongValue(i);
+                long postLamports = postBalancesLamports.getLongValue(i);
+                long solTransferred = preLamports - postLamports;
+                String accountAddress = addressArray.getString(i);
+
+
+                solanaAmountChangeInfos.add(new SolanaTransactionDetail.SolanaAmountChangeInfo(
+                        accountAddress,
+                        solTransferred / SolanaConstants.lamports,
+                        postLamports
+                ));
             }
-            Map<String, Object> yamlData = yaml.load(inputStream);
-            Map<String, Object> shinano = (Map<String, Object>) yamlData.get("shinano");
-            Map<String, Object> quantity = (Map<String, Object>) shinano.get("quantity");
-            Map<String, Object> trade_app = (Map<String, Object>) quantity.get("trade_app");
 
-            INSTANCE = yaml.loadAs(yaml.dump(trade_app), TradeAppConfig.class);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to load YAML file: " + CONFIG_FILE, e);
-        }
-    }
-
-
-    /**
-     * 获取信号topics，通过回调的方式，不直接返回topic列表
-     *
-     * @param env          运行环境
-     * @param tradeType    交易类型
-     * @param topicResolve 回调函数， 第一个参数为前缀， 第二个参数为信号名列表
-     */
-    public void getSignalTopics(RunEnv env, TradeType tradeType, BiConsumer<String, List<String>> topicResolve) {
-        StringBuilder prefix = new StringBuilder(env.name());
-        prefix.append(".").append(tradeType.name()).append(".");
-
-        List<TradeSignalConfig.TradeSignalSymbolConfig> scList = signal.getEnvSignalSymbolConfig(env, tradeType);
-
-        if (scList == null) {
-            topicResolve.accept(prefix.toString(), Collections.emptyList());
-            return;
+            builder.solanaAmountChangeInfos(solanaAmountChangeInfos);
         }
 
-        for (TradeSignalConfig.TradeSignalSymbolConfig signalSymbolConfig : scList) {
-            String symbol = signalSymbolConfig.getSymbol();
-            topicResolve.accept(prefix + symbol + ".", signalSymbolConfig.getSignal_names());
-        }
-    }
-
-
-    /**
-     * 获取交易订单的topic
-     *
-     * @param env          运行环境
-     * @param tradeType    交易信号
-     * @param topicResolve 回调
-     */
-    public void getTradeOrderTopics(RunEnv env, TradeType tradeType, Consumer<List<String>> topicResolve) {
-
-        List<TradeSignalConfig.TradeSignalSymbolConfig> scList = switch (env) {
-            case TEST_NET -> signal.getTest_net().getTradeSignalSymbolConfigs(tradeType);
-            case NORMAL -> signal.getNormal().getTradeSignalSymbolConfigs(tradeType);
-        };
-
-        if (scList == null) {
-            topicResolve.accept(Collections.emptyList());
-            return;
-        }
-
-        topicResolve.accept(scList.stream().map(e -> KafkaUtil.getOrderSymbolTopic(env, tradeType, e.getSymbol())).toList());
-    }
-
-
-
-    public static void main(String[] args) {
-        System.out.println(JSON.toJSONString(INSTANCE));
-    }
-}
-
-
-package com.helei.tradeapplication.service.impl;
-
-import com.alibaba.fastjson.JSONObject;
-import com.helei.constants.CEXType;
-import com.helei.constants.order.GroupOrderStatus;
-import com.helei.constants.order.OrderEvent;
-import com.helei.constants.order.OrderStatus;
-import com.helei.constants.order.OrderType;
-import com.helei.constants.trade.TradeType;
-import com.helei.dto.account.AccountPositionConfig;
-import com.helei.dto.account.UserAccountInfo;
-import com.helei.dto.order.BaseOrder;
-import com.helei.dto.order.CEXTradeOrder;
-import com.helei.dto.order.CEXTradeOrderWrap;
-import com.helei.tradeapplication.dto.GroupOrder;
-import com.helei.dto.trade.TradeSignal;
-import com.helei.interfaces.CompleteInvocation;
-import com.helei.tradeapplication.manager.ExecutorServiceManager;
-import com.helei.tradeapplication.service.IBinanceContractOrderService;
-import com.helei.tradeapplication.service.OrderEventProcessService;
-import com.helei.tradeapplication.supporter.TradeOrderBuildSupporter;
-import com.helei.util.KafkaUtil;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-
-import java.util.List;
-import java.util.concurrent.ExecutionException;
-
-
-@Slf4j
-@Service
-public class OrderServiceImpl extends OrderEventProcessService {
-
-
-    @Autowired
-    private KafkaProducerService kafkaProducerService;
-
-
-    @Autowired
-    private IBinanceContractOrderService binanceContractOrderService;
-
-
-    @Autowired
-    private TradeOrderBuildSupporter tradeOrderBuildSupporter;
-
-
-    @Autowired
-    public OrderServiceImpl(ExecutorServiceManager executorServiceManager) {
-        super(executorServiceManager.getOrderExecutor());
-        super.startProcessEvents();
-    }
-
-
-    /**
-     * 生成订单
-     *
-     * @param accountInfo   账户信息
-     * @param signal        信号
-     */
-    @Override
-    public void makeOrder(UserAccountInfo accountInfo, TradeSignal signal, CompleteInvocation<GroupOrder> invocation) {
-
-        AccountPositionConfig accountPositionConfig = accountInfo.getUserAccountStaticInfo().getAccountPositionConfig();
-        OrderType orderType = accountPositionConfig.getOrderType();
-
-        GroupOrder groupOrder = new GroupOrder();
-
-        //Step 1 创建主单
-        CEXTradeOrderWrap orderWrapper = switch (orderType) {
-            case LIMIT -> tradeOrderBuildSupporter.buildLimitOrder(accountInfo, signal);
-            case MARKET -> tradeOrderBuildSupporter.buildMarketOrder(accountInfo, signal);
-            default -> null;
-        };
-
-
-        long userId = accountInfo.getId();
-        long accountId = accountInfo.getId();
-
-        if (orderWrapper == null) {
-            log.warn("userId[{}]-accountId[{}]创建主订单结果为null, signalId[{}]", userId, accountId, signal.getId());
-            return;
-        }
-
-        //获取订单
-        CEXTradeOrder order = orderWrapper.getFullFieldOrder();
-
-        // 资金不足
-        if (order.getQuantity().doubleValue() <= 0) {
-            order.setStatus(OrderStatus.BALANCE_INSUFFICIENT);
-        }
-        groupOrder.setMainOrder(order);
-
-
-        // 满足资金不足的标记，给group order也打上，不继续创建止盈止损单了
-        if (OrderStatus.BALANCE_INSUFFICIENT.equals(order.getStatus())) {
-            log.warn("userId[{}]-account[{}] 资金不足，将不会提交订单[{}]到交易所, signalId[{}]", userId, accountId, order.getOrderId(), signal.getId());
-            groupOrder.setGroupOrderStatus(GroupOrderStatus.BALANCE_INSUFFICIENT);
-
-            super.submitOrderEvent(groupOrder, OrderEvent.BALANCE_INSUFFICIENT, invocation);
-            return;
-        }
-
-        //Step 2 根据策略创建止损、止盈单
-
-
-        log.info("订单[{}]创建成功", order);
-        //Step 3 提交订单创建事件
-        super.submitOrderEvent(groupOrder, OrderEvent.CREATED_ORDER, invocation);
-    }
-
-
-    @Override
-    public GroupOrder writeOrder2Kafka(GroupOrder order) throws ExecutionException, InterruptedException {
-        //Step 1 从主单中取出环境信息，生成topic
-        BaseOrder mainOrder = order.getMainOrder();
-
-        String topic = KafkaUtil.getOrderSymbolTopic(mainOrder.getOriRunEnv(), mainOrder.getOriTradeType(), mainOrder.getSymbol());
-
-        //Step 2 获取交易所订单列表发送
-        List<CEXTradeOrder> cexTradeOrders = order.getCexTradeOrders();
-
-        kafkaProducerService.sendMessage(topic, JSONObject.toJSONString(cexTradeOrders)).get();
-
-        log.debug("订单order[{}]写入kafka成功", order);
-
-        return order;
-    }
-
-
-    @Override
-    public GroupOrder writeOrder2DB(GroupOrder order) {
-
-        BaseOrder mainOrder = order.getMainOrder();
-        CEXType cexType = mainOrder.getCexType();
-        TradeType tradeType = mainOrder.getTradeType();
-
-
-        if (CEXType.BINANCE.equals(cexType) && TradeType.CONTRACT.equals(tradeType)) {
-            List<CEXTradeOrder> cexTradeOrders = binanceContractOrderService.saveGroupOrder(order);
-            order.setCexTradeOrders(cexTradeOrders);
-            return order;
-        }
-
-        return null;
+        return builder.solanaTransactionType(transactionType).build();
     }
 
 }
-
-
-
-
-
-package com.helei.tradesignalprocess.stream.d_decision;
-
-import com.helei.constants.CEXType;
-import com.helei.dto.trade.IndicatorMap;
-import com.helei.dto.trade.IndicatorSignal;
-import com.helei.dto.trade.TradeSignal;
-import com.helei.tradesignalprocess.config.TradeSignalConfig;
-
-import java.util.List;
-
-public abstract class BinanceDecisionMaker extends AbstractDecisionMaker<TradeSignal> {
-
-    private final TradeSignalConfig tradeSignalConfig = TradeSignalConfig.TRADE_SIGNAL_CONFIG;
-
-    protected BinanceDecisionMaker(String name) {
-        super(name);
-    }
-
-
-    @Override
-    protected TradeSignal decisionAndBuilderOrder(String symbol, List<IndicatorSignal> windowSignal, IndicatorMap indicatorMap) {
-        TradeSignal tradeSignal = makeBinanceTradeSignal(symbol, windowSignal, indicatorMap);
-        tradeSignal.setName(getName());
-        tradeSignal.setId(nextSignalId());
-        tradeSignal.setSymbol(symbol);
-        tradeSignal.setCexType(CEXType.BINANCE);
-        tradeSignal.setRunEnv(tradeSignalConfig.getRun_env());
-        tradeSignal.setTradeType(tradeSignalConfig.getTrade_type());
-        tradeSignal.setCreateTimestamp(System.currentTimeMillis());
-
-        return tradeSignal;
-    }
-
-
-    protected abstract TradeSignal makeBinanceTradeSignal(String symbol, List<IndicatorSignal> windowSignal, IndicatorMap indicatorMap);
-
-}
-
-
-
-
