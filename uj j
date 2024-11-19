@@ -1,0 +1,94 @@
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+
+public class SolanaTransactionParser {
+
+    public static void main(String[] args) {
+        // 示例 JSON 响应
+        String jsonResponse = "{"
+                + "  \"jsonrpc\": \"2.0\","
+                + "  \"id\": 1,"
+                + "  \"result\": {"
+                + "    \"transaction\": {"
+                + "      \"signatures\": [\"...\"],"
+                + "      \"message\": {"
+                + "        \"accountKeys\": ["
+                + "          \"SourceAddress\","
+                + "          \"TargetAddress\","
+                + "          \"TokenAccount\","
+                + "          \"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA\""
+                + "        ],"
+                + "        \"instructions\": ["
+                + "          {"
+                + "            \"programId\": \"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA\","
+                + "            \"accounts\": [\"TokenAccount\", \"TargetAddress\", \"SourceAddress\"],"
+                + "            \"data\": \"3Bxs4f8AAAAAA==\""
+                + "          }"
+                + "        ]"
+                + "      }"
+                + "    },"
+                + "    \"meta\": {"
+                + "      \"preTokenBalances\": ["
+                + "        {"
+                + "          \"accountIndex\": 2,"
+                + "          \"mint\": \"TokenMintAddress\","
+                + "          \"uiTokenAmount\": {"
+                + "            \"uiAmount\": 100,"
+                + "            \"decimals\": 6"
+                + "          }"
+                + "        }"
+                + "      ],"
+                + "      \"postTokenBalances\": ["
+                + "        {"
+                + "          \"accountIndex\": 2,"
+                + "          \"mint\": \"TokenMintAddress\","
+                + "          \"uiTokenAmount\": {"
+                + "            \"uiAmount\": 90,"
+                + "            \"decimals\": 6"
+                + "          }"
+                + "        }"
+                + "      ]"
+                + "    }"
+                + "  }"
+                + "}";
+
+        // 解析 JSON 响应
+        JSONObject response = JSON.parseObject(jsonResponse);
+        JSONObject result = response.getJSONObject("result");
+
+        // 获取币种信息 (mint 地址)
+        JSONArray preBalances = result.getJSONObject("meta").getJSONArray("preTokenBalances");
+        JSONArray postBalances = result.getJSONObject("meta").getJSONArray("postTokenBalances");
+
+        if (preBalances.size() > 0 && postBalances.size() > 0) {
+            JSONObject preBalance = preBalances.getJSONObject(0);
+            JSONObject postBalance = postBalances.getJSONObject(0);
+
+            // 获取 Token Mint 地址 (币种)
+            String tokenMint = preBalance.getString("mint");
+
+            // 获取数量变化
+            double preAmount = preBalance.getJSONObject("uiTokenAmount").getDoubleValue("uiAmount");
+            double postAmount = postBalance.getJSONObject("uiTokenAmount").getDoubleValue("uiAmount");
+            double amountTransferred = preAmount - postAmount;
+
+            System.out.println("Token Mint: " + tokenMint);
+            System.out.println("Amount Transferred: " + amountTransferred);
+        } else {
+            System.out.println("No token balances found.");
+        }
+
+        // 检查是否为 SOL 转账
+        JSONArray preBalancesLamports = result.getJSONObject("meta").getJSONArray("preBalances");
+        JSONArray postBalancesLamports = result.getJSONObject("meta").getJSONArray("postBalances");
+
+        if (preBalancesLamports != null && postBalancesLamports != null) {
+            long preLamports = preBalancesLamports.getLongValue(0);
+            long postLamports = postBalancesLamports.getLongValue(0);
+            long solTransferred = preLamports - postLamports;
+
+            System.out.println("SOL Transferred (lamports): " + solTransferred);
+        }
+    }
+}
