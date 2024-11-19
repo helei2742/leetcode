@@ -1,18 +1,19 @@
 package com.helei.solanarpc;
 
+import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
-import com.helei.solanarpc.constants.SolanaConstants;
-import com.helei.solanarpc.constants.SolanaSwapType;
 import com.helei.solanarpc.constants.SolanaTransactionType;
 import com.helei.solanarpc.dto.SolanaTransactionDetail;
 import lombok.extern.slf4j.Slf4j;
 
 import javax.net.ssl.SSLException;
+import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URISyntaxException;
-import java.util.ArrayList;
-import java.util.List;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -58,7 +59,7 @@ public class SolanaApiService {
             //Step 3 根据签名获取交易信息
             solanaRestHttpClient.getTransaction(signature).thenAcceptAsync(response -> {
                 //Step 4 解析交易消息
-                SolanaTransactionDetail detail = getSolanaTransactionDetail(response);
+                SolanaTransactionDetail detail = getSolanaTransactionDetail(address, response);
 
                 log.info("地址[{}]收到交易信息[{}]", address, detail);
 
@@ -81,112 +82,127 @@ public class SolanaApiService {
      * @param response response
      * @return SolanaTransactionDetail
      */
-    private static SolanaTransactionDetail getSolanaTransactionDetail(JSONObject response) {
+    private static SolanaTransactionDetail getSolanaTransactionDetail(String sourceAddress, JSONObject response) {
         JSONObject result = response.getJSONObject("result");
 
         JSONObject meta = result.getJSONObject("meta");
 
         JSONObject transaction = result.getJSONObject("transaction");
-        JSONArray addressArray = transaction.getJSONObject("message").getJSONArray("accountKeys");
 
+
+        // 交易源
+        String targetAddress = "";
+
+        SolanaTransactionType transactionType = null;
+
+        for (int i = 0; i < meta.getJSONArray("innerInstructions").size(); i++) {
+            if (transactionType != null) break;
+
+            JSONArray instructions = meta.getJSONArray("innerInstructions").getJSONObject(i).getJSONArray("instructions");
+
+            for (int i1 = 0; i1 < instructions.size(); i1++) {
+                JSONObject instruction = instructions.getJSONObject(i1);
+
+                // 有spl-token，是swap
+                if (instruction.containsKey("parsed") && "spl-token".equals(instruction.getString("program"))) {
+                    JSONObject info = instruction.getJSONObject("parsed").getJSONObject("info");
+
+                    targetAddress = StrUtil.isBlank(info.getString("authority"))
+                            ? info.getString("destination") : info.getString("authority");
+
+                    transactionType = SolanaTransactionType.SEND_SPL_TOKEN;
+                    break;
+                }
+            }
+        }
 
         // token 交易信息
         JSONArray preTokenBalances = meta.getJSONArray("preTokenBalances");
         JSONArray postTokenBalances = meta.getJSONArray("postTokenBalances");
-
-        // 账户sol信息
-        JSONArray preBalancesLamports = meta.getJSONArray("preBalances");
-        JSONArray postBalancesLamports = meta.getJSONArray("postBalances");
 
 
         Long fee = meta.getLong("fee");
 
         SolanaTransactionDetail.SolanaTransactionDetailBuilder builder = SolanaTransactionDetail
                 .builder()
-                .fee(fee / SolanaConstants.lamports);
+                .sourceAccountAddress(sourceAddress)
+                .targetAccountAddress(targetAddress)
+                .fee(fee);
 
-        SolanaTransactionType transactionType = SolanaTransactionType.SEND_SPL_TOKEN;
-        if (!preTokenBalances.isEmpty()) {
+        if (preTokenBalances != null && !preTokenBalances.isEmpty()) {
             // 代币swap，sol换其它币，或其它币换sol， 或者其它代币换其它代币
 
             // token 变化信息
-            List<SolanaTransactionDetail.SolanaTokenAmountChangeInfo> tokenAmountChangeInfos = new ArrayList<>();
             for (int i = 0; i < preTokenBalances.size(); i++) {
                 JSONObject preBalance = preTokenBalances.getJSONObject(i);
                 JSONObject postBalance = postTokenBalances.getJSONObject(i);
 
-                int accountIndex = preBalance.getInteger("accountIndex");
-                String accountAddress = addressArray.getString(accountIndex);
-
-                // 获取 Token Mint 地址 (币种)
-                String tokenMint = preBalance.getString("mint");
-
                 // 获取token数量变化
                 double preAmount = preBalance.getJSONObject("uiTokenAmount").getDoubleValue("uiAmount");
                 double postAmount = postBalance.getJSONObject("uiTokenAmount").getDoubleValue("uiAmount");
-                double amountTransferred = preAmount - postAmount;
+                double amountTransferred = postAmount - preAmount;
 
-                // 获取token数量变化
-                long preLamports = preBalancesLamports.getLongValue(accountIndex);
-                long postLamports = postBalancesLamports.getLongValue(accountIndex);
-                long solTransferred = preLamports - postLamports;
+                builder.tokenMint(preBalance.getString("mint"));
 
+                if (targetAddress.equals(preBalance.getString("owner"))) {
 
-                tokenAmountChangeInfos.add(new SolanaTransactionDetail.SolanaTokenAmountChangeInfo(
-                        accountAddress,
-                        tokenMint,
-                        amountTransferred,
-                        solTransferred,
-                        postAmount,
-                        postLamports / SolanaConstants.lamports
-                ));
-            }
+                    builder.targetTokenAmount(postAmount);
+                    builder.targetTokenTransfer(amountTransferred);
+                } else if (sourceAddress.equals(preBalance.getString("owner"))) {
 
-            builder.tokenAmountChangeInfos(tokenAmountChangeInfos);
-
-            JSONArray instructions = transaction.getJSONObject("message").getJSONArray("instructions");
-
-            // 解析swap类型
-            SolanaSwapType solanaSwapType = null;
-            for (int i = 0; i < instructions.size(); i++) {
-                if (solanaSwapType != null) break;
-
-                String programId = instructions.getJSONObject(i).getString("programId");
-                for (SolanaSwapType type : SolanaSwapType.values()) {
-                    if (programId.contains(type.name())) {
-                        solanaSwapType = type;
-                        break;
-                    }
+                    builder.sourceTokenAmount(postAmount);
+                    builder.sourceTokenTransfer(amountTransferred);
                 }
             }
-            if (solanaSwapType != null) {
-                transactionType = SolanaTransactionType.SWAP;
-            }
-            builder.solanaSwapType(solanaSwapType);
         } else {
             // sol转账
             transactionType = SolanaTransactionType.SEND_SOL;
-
-            List<SolanaTransactionDetail.SolanaAmountChangeInfo> solanaAmountChangeInfos = new ArrayList<>();
-
-            for (int i = 0; i < preBalancesLamports.size(); i++) {
-                long preLamports = preBalancesLamports.getLongValue(i);
-                long postLamports = postBalancesLamports.getLongValue(i);
-                long solTransferred = preLamports - postLamports;
-                String accountAddress = addressArray.getString(i);
-
-
-                solanaAmountChangeInfos.add(new SolanaTransactionDetail.SolanaAmountChangeInfo(
-                        accountAddress,
-                        solTransferred / SolanaConstants.lamports,
-                        postLamports
-                ));
-            }
-
-            builder.solanaAmountChangeInfos(solanaAmountChangeInfos);
         }
+
+        JSONArray addressArray = transaction.getJSONObject("message").getJSONArray("accountKeys");
+
+        Integer sourceIdx = null;
+        Integer targetIdx = null;
+        if (transactionType.equals(SolanaTransactionType.SEND_SOL)) {
+            sourceIdx = 0;
+            targetIdx = 1;
+        } else {
+            for (int i = 0; i < addressArray.size(); i++) {
+                String pubkey = addressArray.getJSONObject(i).getString("pubkey");
+                if (pubkey.equals(sourceAddress)) {
+                    sourceIdx = i;
+                } else if (pubkey.equals(targetAddress)) {
+                    targetIdx = i;
+                }
+
+                if (sourceIdx != null && targetIdx != null) break;
+            }
+        }
+
+
+        // 账户sol信息
+        JSONArray preBalancesLamports = meta.getJSONArray("preBalances");
+        JSONArray postBalancesLamports = meta.getJSONArray("postBalances");
+
+        builder.sourceSolAmount(postBalancesLamports.getLong(sourceIdx))
+                .sourceSolTransfer(postBalancesLamports.getLong(sourceIdx) - preBalancesLamports.getLong(sourceIdx))
+                .targetSolAmount(postBalancesLamports.getLong(targetIdx))
+                .targetSolTransfer(postBalancesLamports.getLong(targetIdx) - preBalancesLamports.getLong(targetIdx));
+
 
         return builder.solanaTransactionType(transactionType).build();
     }
 
+
+    public static void main(String[] args) throws IOException {
+        Path path = Paths.get("D:\\workspace\\ideaworkspace\\ShinanoQuanti-main\\test.json");
+
+        byte[] bytes = Files.readAllBytes(path);
+
+        String text = new String(bytes);
+        JSONObject jsonObject = JSONObject.parseObject(text);
+
+        SolanaTransactionDetail detail = getSolanaTransactionDetail("EBnKTDJxUCPzLQDbFE3gsvpiBwq9UiR5NWja6EZtSw3z", jsonObject);
+        System.out.println(JSONObject.toJSONString(detail));
+    }
 }
