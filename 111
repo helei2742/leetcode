@@ -1,9 +1,179 @@
+package com.helei.solanarpc.constants;
+
+public class SolanaConstants {
+
+
+    /**
+     * Sol计算的最小单位
+     */
+    public final static double lamports = 1000000000.0;
+
+
+
+
+}
+
+package com.helei.solanarpc.constants;
+
+public enum SolanaTransactionType {
+
+    /**
+     * 交换
+     */
+    SWAP,
+
+    /**
+     * 发送sol
+     */
+    SEND_SOL,
+
+    /**
+     * 发送其它代币
+     */
+    SEND_SPL_TOKEN
+}
+
+
+package com.helei.solanarpc.dto;
+
+import lombok.*;
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@Builder
+@EqualsAndHashCode
+public class SolanaAddress {
+
+
+    /**
+     * 监听地址的名字
+     */
+    private String name;
+
+    /**
+     * 描述
+     */
+    private String description;
+
+    /**
+     * 账户地址
+     */
+    private String accountAddress;
+
+    /**
+     * 开始计算的时间
+     */
+    private long calStartTime;
+
+    /**
+     * 从calStartTIme开始收益的SOL数
+     */
+    private long profitSol;
+
+}
+
+
+package com.helei.solanarpc.dto;
+
+
+import com.helei.solanarpc.constants.SolanaTransactionType;
+import lombok.Builder;
+import lombok.Data;
+
+@Data
+@Builder
+public class SolanaTransactionDetail {
+
+
+    /**
+     * 交易类型
+     */
+    private SolanaTransactionType solanaTransactionType;
+
+
+    /**
+     *  Token Mint 地址 (币种)
+     */
+    private String tokenMint;
+
+    /**
+     * 源账户地址, 发起交易的账户地址
+     */
+    private String sourceAccountAddress;
+
+    /**
+     * 源sol数量
+     */
+    private long sourceSolAmount;
+
+    /**
+     * 源token 币的数量
+     */
+    private Double sourceTokenAmount;
+
+    /**
+     * 源sol的变化量
+     */
+    private long sourceSolTransfer;
+
+    /**
+     * 源token币的变化量
+     */
+    private Double sourceTokenTransfer;
+
+
+
+    /**
+     * 目标账户地址
+     */
+    private String targetAccountAddress;
+    /**
+     * 目标sol数量
+     */
+    private long targetSolAmount;
+
+    /**
+     * 目标token 币的数量
+     */
+    private Double targetTokenAmount;
+
+    /**
+     * 目标sol的变化量
+     */
+    private long targetSolTransfer;
+
+    /**
+     * 目标token币的变化量
+     */
+    private Double targetTokenTransfer;
+
+
+    /**
+     * 费用
+     */
+    private long fee;
+
+
+    /**
+     * 交易是否发生错误
+     */
+    private Boolean error;
+
+
+    /**
+     * 这笔交易的签名
+     */
+    private String transactionSignature;
+}
+
 package com.helei.solanarpc;
 
 import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import com.helei.solanarpc.constants.SolanaTransactionType;
+import com.helei.solanarpc.dto.SolanaAddress;
 import com.helei.solanarpc.dto.SolanaTransactionDetail;
 import lombok.extern.slf4j.Slf4j;
 
@@ -17,7 +187,7 @@ import java.nio.file.Paths;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 
 @Slf4j
 public class SolanaApiService {
@@ -48,23 +218,28 @@ public class SolanaApiService {
      * @param detailConsumer detailConsumer
      * @return CompletableFuture<Long>
      */
-    public CompletableFuture<Long> listenAddressTransition(String address, Consumer<SolanaTransactionDetail> detailConsumer) {
+    public CompletableFuture<Long> listenAddressTransition(SolanaAddress address, BiConsumer<SolanaAddress, SolanaTransactionDetail> detailConsumer) {
         //Step 1 监听 地址的log
-        return solanaWebsocketClient.logsSubscribe(address, (eventType, context, event) -> {
+        return solanaWebsocketClient.logsSubscribe(address.getAccountAddress(), (eventType, context, event) -> {
             JSONObject value = event.getJSONObject("params").getJSONObject("value");
 
             //Step 2.从监听事件中获取签名
             String signature = value.getString("signature");
 
+            log.info("监听到账户名[{}]-地址[{}] - 产生交易 signature[{}], 开始获取详细信息",
+                    address.getName(), address.getAccountAddress(), signature);
+
+
             //Step 3 根据签名获取交易信息
             solanaRestHttpClient.getTransaction(signature).thenAcceptAsync(response -> {
                 //Step 4 解析交易消息
-                SolanaTransactionDetail detail = getSolanaTransactionDetail(address, response);
+                SolanaTransactionDetail detail = getSolanaTransactionDetail(address.getAccountAddress(), response);
+                detail.setTransactionSignature(signature);
 
-                log.info("地址[{}]收到交易信息[{}]", address, detail);
+                log.info("账户名[{}]-地址[{}] - 交易信息[{}]", address.getName(), address.getAccountAddress(), detail);
 
                 // Step 5 调用回调方法
-                detailConsumer.accept(detail);
+                detailConsumer.accept(address, detail);
             }, executor).exceptionally(throwable -> {
                 log.error("处理地址[{}]交易信息发生错误", address, throwable);
                 return null;
@@ -187,7 +362,8 @@ public class SolanaApiService {
         builder.sourceSolAmount(postBalancesLamports.getLong(sourceIdx))
                 .sourceSolTransfer(postBalancesLamports.getLong(sourceIdx) - preBalancesLamports.getLong(sourceIdx))
                 .targetSolAmount(postBalancesLamports.getLong(targetIdx))
-                .targetSolTransfer(postBalancesLamports.getLong(targetIdx) - preBalancesLamports.getLong(targetIdx));
+                .targetSolTransfer(postBalancesLamports.getLong(targetIdx) - preBalancesLamports.getLong(targetIdx))
+                .error(meta.getBoolean("error"));
 
 
         return builder.solanaTransactionType(transactionType).build();
@@ -206,3 +382,1846 @@ public class SolanaApiService {
         System.out.println(JSONObject.toJSONString(detail));
     }
 }
+
+package com.helei.telegramebot.bot.impl;
+
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.base.Result;
+import com.helei.dto.trade.TradeSignal;
+import com.helei.telegramebot.bot.AbstractTelegramBot;
+import com.helei.telegramebot.bot.TradeSignalCommandTelegramBot;
+import com.helei.telegramebot.config.TelegramBotNameSpaceCommand;
+import com.helei.telegramebot.service.ITelegramPersistenceService;
+import com.helei.telegramebot.service.ITradeSignalPersistenceService;
+import com.helei.telegramebot.service.impl.KafkaConsumerService;
+import com.helei.telegramebot.template.TelegramMessageTemplate;
+import com.helei.util.KafkaUtil;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+import org.telegram.telegrambots.meta.api.objects.Message;
+import org.telegram.telegrambots.meta.api.objects.User;
+
+import java.util.Collection;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+
+@Slf4j
+public class ShinanoTelegramBot extends AbstractTelegramBot implements TradeSignalCommandTelegramBot {
+
+
+    private final KafkaConsumerService kafkaConsumerService;
+
+    @Setter
+    private ITradeSignalPersistenceService tradeSignalPersistenceService;
+
+    public ShinanoTelegramBot(
+            String botUsername,
+            String token,
+            ITelegramPersistenceService telegramPersistenceService,
+            KafkaConsumerService kafkaConsumerService,
+            ExecutorService executorService
+    ) {
+        super(botUsername, token, telegramPersistenceService, executorService);
+        this.kafkaConsumerService = kafkaConsumerService;
+    }
+
+
+    @Override
+    public boolean commandMessageFilter(TelegramBotNameSpaceCommand.NameSpace nameSpace, String nameSpaceCommand, List<String> params, Message message) {
+        Result result = getTelegramPersistenceService().isSavedChatInBot(getBotUsername(), message.getChatId());
+
+        if (!result.getSuccess()) {
+            sendMessageToChat(String.valueOf(message.getChatId()), result.getErrorMsg());
+            return true;
+        }
+
+        return false;
+    }
+
+    @Override
+    public Result commandMessageHandler(TelegramBotNameSpaceCommand.NameSpace nameSpace, String nameSpaceCommand, List<?> params, Message message) {
+        return switch (nameSpaceCommand) {
+            case "ADD_LISTEN_SIGNAL_TYPE" -> addListenSignalTypeCommandHandler(params, message);
+            case "SEND_TRADE_SIGNAL" -> sendTradeSignalCommandHandler(params);
+            default -> Result.fail(String.format("namespace[%s]没有命令[%S]", nameSpace, nameSpaceCommand));
+        };
+    }
+
+    @Override
+    public Result normalMessageHandler(String messageText, Message message) {
+        return null;
+    }
+
+    /**
+     * 处理用户发送的开始命令
+     *
+     * @param message 原消息体
+     */
+    @Override
+    public void startCommandHandler(Message message) {
+        Long chatId = message.getChatId();
+
+        // chatId持久化，连同用户信息
+        User from = message.getFrom();
+
+        Result result = getTelegramPersistenceService().saveChatInBot(getBotUsername(), chatId, from);
+        if (!result.getSuccess()) {
+            log.error("保存聊天[{}]用户[{}]信息失败", chatId, from.getUserName());
+            sendMessageToChat(String.valueOf(chatId), result.getErrorMsg());
+        } else {
+            sendMessageToChat(String.valueOf(chatId), getBotUsername() + " 注册聊天信息成功");
+        }
+    }
+
+    /**
+     * 处理发送信号命令
+     *
+     * @param params 参数
+     */
+    @Override
+    public Result sendTradeSignalCommandHandler(List<?> params) {
+        //Step 1 参数解析
+        TradeSignal tradeSignal = (TradeSignal) params.getFirst();
+        String message = TelegramMessageTemplate.tradeSignalMessage(tradeSignal);
+
+
+        //Step 2 查询监听的id
+        Result result = tradeSignalPersistenceService
+                .queryTradeSignalListenedChatId(getBotUsername(), tradeSignal.getRunEnv(), tradeSignal.getTradeType(), tradeSignal.getCexType(), tradeSignal.getSymbol());
+
+
+        //Step 3 发送
+        if (result.getSuccess()) {
+            // 获取chatId成功
+            Collection<?> chatIds = (Collection<?>) result.getData();
+
+            if (chatIds.isEmpty()) {
+                log.warn("没有监听信号[{}]的chat", tradeSignal.simpleName());
+                return result;
+            }
+
+            for (Object chatId : chatIds) {
+                CompletableFuture
+                        .runAsync(() -> {
+                            sendHTMLMessageToChat((String) chatId, message);
+                        }, executor)
+                        .exceptionallyAsync(throwable -> {
+                            log.error("向chatId[{}]发送信号[{}][{}]信息发生错误", chatId, tradeSignal.simpleName(), tradeSignal.getId());
+                            return null;
+                        }, executor);
+            }
+
+            return result;
+        } else {
+            // 获取chatId失败
+            return Result.fail("获取chatId失败, " + result.getErrorMsg());
+        }
+    }
+
+
+    /**
+     * 添加监听信号命令
+     *
+     * @param params  参数 [runEnv, tradeType, cexType, 可选symbols]
+     * @param message 消息
+     */
+    @Override
+    public Result addListenSignalTypeCommandHandler(List<?> params, Message message) {
+        String chatId = String.valueOf(message.getChatId());
+
+        if (params.size() <= 3) {
+            return Result.fail(String.format("参数错误,命令[%s]参数格式应为[runEnv, tradeType, cexType, symbols(可选)]", "ADD_LISTEN_SIGNAL_TYPE"));
+        }
+
+        log.info("机器人[{}]-group chat id[{}] 添加监听信号[{}]", getBotUsername(), chatId, params);
+
+        //Step 1 解析初始化参数
+        RunEnv runEnv = RunEnv.valueOf(((String) params.getFirst()).toUpperCase());
+        TradeType tradeType = TradeType.valueOf(((String) params.get(1)).toUpperCase());
+        CEXType cexType = CEXType.valueOf(((String) params.get(2)).toUpperCase());
+
+        String symbol = (String) params.get(3);
+        String signalName = (String) params.get(4);
+
+
+        //Step 2 持久化
+        Result result = tradeSignalPersistenceService
+                .saveChatListenTradeSignal(getBotUsername(), chatId, runEnv, tradeType, cexType, symbol, signalName);
+
+        //Step 3 注册kafka消费者
+        String topic = KafkaUtil.getTradeSingalTopic(runEnv, tradeType, symbol, signalName);
+        kafkaConsumerService.startTelegramBotTradeSignalConsumer(List.of(topic));
+
+        if (result.getSuccess()) {
+            result.setData(String.format("添加信号[%s]-[%s]-[%s]-[%s]-%s成功", runEnv.name(), tradeType.name(), cexType.name(), symbol, signalName));
+        }
+
+        return result;
+    }
+
+}
+
+
+
+
+package com.helei.telegramebot.bot.impl;
+
+import com.helei.dto.base.Result;
+import com.helei.solanarpc.dto.SolanaAddress;
+import com.helei.telegramebot.bot.MenuBaseTelegramBot;
+import com.helei.telegramebot.bot.SolanaTelegramBot;
+import com.helei.telegramebot.bot.menu.SolanaBotMenu;
+import com.helei.telegramebot.config.TelegramBotNameSpaceCommand;
+import com.helei.telegramebot.config.command.SolanaBotCommand;
+import com.helei.telegramebot.service.ISolanaATBotPersistenceService;
+import com.helei.telegramebot.service.ITelegramPersistenceService;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+import org.telegram.telegrambots.meta.api.objects.Message;
+
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+
+
+@Setter
+@Slf4j
+public class SolanaAutoTradeTelegramBot extends MenuBaseTelegramBot implements SolanaTelegramBot {
+
+
+    private ISolanaATBotPersistenceService solanaATBotPersistenceService;
+
+
+    public SolanaAutoTradeTelegramBot(
+            String botUsername,
+            String token,
+            ITelegramPersistenceService telegramPersistenceService,
+            ExecutorService executor
+    ) {
+        super(botUsername, token, telegramPersistenceService, executor);
+        super.init(new SolanaBotMenu(getBotUsername(), getTelegramPersistenceService()));
+    }
+
+
+    @Override
+    public Result commandMessageHandler(TelegramBotNameSpaceCommand.NameSpace nameSpace, String nameSpaceCommand, List<?> params, Message message) {
+        SolanaBotCommand solanaBotCommand = SolanaBotCommand.valueOf(nameSpaceCommand);
+
+        return switch (solanaBotCommand) {
+            case BIND_WALLET_ADDRESS -> bindWalletAddress(params, message);
+            case ADD_LISTEN_ACCOUNT -> updateTransactionListenAccount(params, message);
+            case CANCEL_LISTEN_ACCOUNT -> cancelTransactionListenAccount(params, message);
+        };
+    }
+
+
+    @Override
+    public Result normalMessageHandler(String messageText, Message message) {
+        return null;
+    }
+
+    @Override
+    public Result bindWalletAddress(List<?> params, Message message) {
+        //Step 1 参数校验
+        if (params.isEmpty()) return Result.fail("参数错误");
+
+        //Step 2 解析参数
+        String address = (String) params.getFirst();
+
+        return solanaATBotPersistenceService.bindWalletAddress(getBotUsername(), String.valueOf(message.getChatId()), address);
+    }
+
+
+    @Override
+    public Result updateTransactionListenAccount(List<?> params, Message message) {
+        //Step 1 参数校验
+        if (params.isEmpty()) return Result.fail("参数错误");
+
+        //Step 2 解析参数
+        String address = (String) params.getFirst();
+        String name = "";
+        if (params.size() >= 2) {
+            name = (String) params.get(1);
+        }
+        String description = "";
+        if (params.size() >= 3) {
+            description = (String) params.get(2);
+        }
+
+        SolanaAddress solanaAddress = SolanaAddress
+                .builder()
+                .accountAddress(address)
+                .name(name)
+                .description(description)
+                .build();
+
+        //Step 3 保存
+        return solanaATBotPersistenceService.updateChatListenAddress(getBotUsername(), String.valueOf(message.getChatId()), solanaAddress);
+    }
+
+    @Override
+    public Result cancelTransactionListenAccount(List<?> params, Message message) {
+        //Step 1 参数校验
+        if (params.isEmpty()) return Result.fail("参数错误");
+
+        //Step 2 解析参数
+        String address = (String) params.getFirst();
+
+        //Step 3 删除
+        return solanaATBotPersistenceService.deleteChatListenAddress(getBotUsername(), String.valueOf(message.getChatId()), address);
+    }
+}
+
+
+
+package com.helei.telegramebot.bot.menu;
+
+import com.helei.dto.base.Result;
+import com.helei.telegramebot.service.ITelegramPersistenceService;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.Message;
+
+import java.io.Serializable;
+
+public class SolanaBotMenu implements Serializable, TelegramBotMenu {
+
+    private final String botUsername;
+
+    private final ITelegramPersistenceService telegramPersistenceService;
+
+    public SolanaBotMenu(String botUsername, ITelegramPersistenceService telegramPersistenceService) {
+        this.botUsername = botUsername;
+        this.telegramPersistenceService = telegramPersistenceService;
+    }
+
+
+    @Override
+    public SendMessage initChatMenu(String chatId) {
+        Result result = telegramPersistenceService.saveChatMenuState(botUsername, chatId, SolanaBotMenuType.MAIN);
+
+        if (result.getSuccess()) {
+            SolanaBotMenuType menuType = SolanaBotMenuType.valueOf((String) result.getData());
+            return menuType.getMenu();
+        } else {
+            SendMessage sendMessage = new SendMessage();
+            sendMessage.setChatId(chatId);
+            sendMessage.setText(result.getErrorMsg());
+            return sendMessage;
+        }
+    }
+
+    @Override
+    public TelegramBotMenuType getCurrentMenuState(String chatId) {
+        Result result = telegramPersistenceService.getChatMenuState(botUsername, chatId);
+
+        if (result.getSuccess()) {
+            return SolanaBotMenuType.valueOf((String) result.getData());
+        } else {
+            return SolanaBotMenuType.MAIN;
+        }
+    }
+
+    @Override
+    public TelegramBotMenuType getPrefer(String chatId) {
+
+        return getCurrentMenuState(chatId).getPrefer();
+    }
+
+
+    @Override
+    public SendMessage getCurrentMenu(String chatId) {
+        SolanaBotMenuType currentMenuState = (SolanaBotMenuType) getCurrentMenuState(chatId);
+
+        SendMessage menu = currentMenuState.getMenu();
+        menu.setChatId(chatId);
+        return menu;
+    }
+
+    @Override
+    public SendMessage menuCommandHandler(String menuCommand, Message message) {
+        SolanaBotMenuType solanaBotMenuType = SolanaBotMenuType.valueOf(menuCommand);
+
+
+
+        return null;
+    }
+
+}
+
+
+package com.helei.telegramebot.bot.menu;
+
+import com.helei.dto.base.KeyValue;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public enum SolanaBotMenuType implements TelegramBotMenuType {
+
+    /**
+     * 主菜单
+     */
+    MAIN {
+        @Override
+        public SendMessage getMenu() {
+            SendMessage message = new SendMessage();
+            message.setText("欢迎使用TG机器人");
+
+            InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+            List<List<InlineKeyboardButton>> keyboardRows = new ArrayList<>();
+
+            //第一行按钮
+            keyboardRows.add(createKeyboardRow(List.of(
+                    new KeyValue<>("钱包", "WAllET"),
+                    new KeyValue<>("交易", "TRANSACTION")
+            )));
+
+            //第二行按钮
+            keyboardRows.add(createKeyboardRow(List.of(
+                    new KeyValue<>("钱包跟踪", "TRANCE_ADDRESS"),
+                    new KeyValue<>("设置", "SETTING")
+            )));
+
+            markup.setKeyboard(keyboardRows);
+            message.setReplyMarkup(markup);
+            return message;
+        }
+
+        @Override
+        public TelegramBotMenuType getPrefer() {
+            return MAIN;
+        }
+    },
+
+    /**
+     * 钱包菜单
+     */
+    WAllET {
+        @Override
+        public SendMessage getMenu() {
+            SendMessage message = new SendMessage();
+            message.setText("我的钱包");
+
+            InlineKeyboardMarkup markup = new InlineKeyboardMarkup();
+            List<List<InlineKeyboardButton>> keyboardRows = new ArrayList<>();
+
+            //第一行按钮
+            keyboardRows.add(createKeyboardRow(List.of(
+                    new KeyValue<>("切换默认钱包", "切换默认钱包 TODO"),
+                    new KeyValue<>("已绑定的钱包", "已绑定的钱包 TODO")
+            )));
+
+            //第二行按钮
+            keyboardRows.add(createKeyboardRow(List.of(
+                    new KeyValue<>("绑定钱包", "绑定钱包地址 TODO"),
+                    new KeyValue<>("解除绑定", "解除绑定")
+            )));
+
+            keyboardRows.add(createKeyboardRow(List.of(
+                    new KeyValue<>("返回", "/menu.back")
+            )));
+
+            markup.setKeyboard(keyboardRows);
+            message.setReplyMarkup(markup);
+            return message;
+        }
+
+        @Override
+        public TelegramBotMenuType getPrefer() {
+            return MAIN;
+        }
+    },
+
+    /**
+     * 交易菜单
+     */
+    TRANSACTION {
+        @Override
+        public SendMessage getMenu() {
+
+
+            return null;
+        }
+
+        @Override
+        public TelegramBotMenuType getPrefer() {
+            return MAIN;
+        }
+    },
+
+    /**
+     * 追踪地址菜单
+     */
+    TRANCE_ADDRESS {
+        @Override
+        public SendMessage getMenu() {
+            return null;
+        }
+
+        @Override
+        public TelegramBotMenuType getPrefer() {
+            return MAIN;
+        }
+    },
+
+    /**
+     * 设置菜单
+     */
+    SETTING {
+        @Override
+        public SendMessage getMenu() {
+            return null;
+        }
+
+        @Override
+        public TelegramBotMenuType getPrefer() {
+            return MAIN;
+        }
+    };
+
+
+    public String getName() {
+        return this.name();
+    }
+}
+
+
+package com.helei.telegramebot.bot.menu;
+
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.Message;
+
+public interface TelegramBotMenu {
+
+
+    SendMessage initChatMenu(String chatId);
+
+    TelegramBotMenuType getCurrentMenuState(String chatId);
+
+    /**
+     * 获取 id 当前菜单上一级的菜单
+     *
+     * @return 上一级菜单
+     */
+    TelegramBotMenuType getPrefer(String chatId);
+
+
+    /**
+     * 获取当前菜单
+     *
+     * @param chatId chatId
+     * @return 菜单
+     */
+    SendMessage getCurrentMenu(String chatId);
+
+
+    /**
+     * 处理菜单命令
+     *
+     * @param menuCommand menuCommand
+     * @param message     message
+     * @return SendMessage
+     */
+    SendMessage menuCommandHandler(String menuCommand, Message message);
+}
+
+
+
+
+package com.helei.telegramebot.bot.menu;
+
+import com.helei.dto.base.KeyValue;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
+
+import java.util.List;
+
+public interface TelegramBotMenuType {
+
+    String getName();
+
+    SendMessage getMenu();
+
+    TelegramBotMenuType getPrefer();
+
+
+    /**
+     * 创建键盘行
+     *
+     * @param list 按钮text
+     * @return list
+     */
+    default List<InlineKeyboardButton> createKeyboardRow(List<KeyValue<String, String>> list) {
+        return list.stream().map(kv -> {
+            InlineKeyboardButton inlineKeyboardButton = new InlineKeyboardButton(kv.getKey());
+            inlineKeyboardButton.setCallbackData("/menu." + kv.getValue());
+            return inlineKeyboardButton;
+        }).toList();
+    }
+}
+
+
+package com.helei.telegramebot.bot;
+
+import cn.hutool.core.util.BooleanUtil;
+import cn.hutool.core.util.StrUtil;
+import com.helei.dto.base.Result;
+import com.helei.telegramebot.config.TelegramBotCommand;
+import com.helei.telegramebot.config.TelegramBotNameSpaceCommand;
+import com.helei.telegramebot.service.ITelegramPersistenceService;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import org.telegram.telegrambots.bots.TelegramLongPollingBot;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChatAdministrators;
+import org.telegram.telegrambots.meta.api.methods.groupadministration.GetChatMember;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.Chat;
+import org.telegram.telegrambots.meta.api.objects.Message;
+import org.telegram.telegrambots.meta.api.objects.Update;
+import org.telegram.telegrambots.meta.api.objects.User;
+import org.telegram.telegrambots.meta.api.objects.chatmember.ChatMember;
+import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+
+
+/**
+ * TG机器人抽象类
+ */
+@Slf4j
+public abstract class AbstractTelegramBot extends TelegramLongPollingBot implements BaseCommandTelegramBot {
+
+
+    /**
+     * 机器人名
+     */
+    private final String botUsername;
+
+    /**
+     * 机器人连接的token
+     */
+    private final String token;
+
+    /**
+     * 持久化服务
+     */
+    @Getter
+    private final ITelegramPersistenceService telegramPersistenceService;
+
+    /**
+     * 执行的线程池
+     */
+    protected final ExecutorService executor;
+
+    protected AbstractTelegramBot(String botUsername, String token, ITelegramPersistenceService telegramPersistenceService, ExecutorService executor) {
+        this.botUsername = botUsername;
+        this.token = token;
+        this.telegramPersistenceService = telegramPersistenceService;
+        this.executor = executor;
+    }
+
+
+    @Override
+    public String getBotUsername() {
+        return botUsername;
+    }
+
+    @Override
+    public String getBotToken() {
+        return token;
+    }
+
+    @Override
+    public void onUpdateReceived(Update update) {
+        executor.execute(() -> {
+            Message message = update.getMessage();
+
+            Result result = null;
+
+            String chatId = String.valueOf(message.getChatId());
+
+            try {
+                User from = message.getFrom();
+                String text = message.getText();
+
+                log.info("bot[{}] 收到消息 chatId[{}]-用户[{}] - 消息[{}]", getBotUsername(), chatId, from.getUserName(), text);
+
+                // 处理命令消息
+                if (message.isCommand()) {
+                    //Step 1 解析命令、参数
+                    String[] split = text.split(" ");
+
+                    String[] commandAndBotName = split[0].split("@");
+                    String[] nameSpaceAndCommand = commandAndBotName[0].replace("/", "").toUpperCase().split("\\.");
+
+                    String nameSpaceStr = nameSpaceAndCommand[0].toUpperCase();
+                    String commandStr = nameSpaceAndCommand[1].toUpperCase();
+
+                    String botName = commandAndBotName[1];
+
+                    //不是本机器人，不管
+                    if (!getBotUsername().equals(botName)) {
+                        return;
+                    }
+
+                    // 菜单命令
+                    if (nameSpaceStr.equalsIgnoreCase("menu")) {
+                        menuCommandHandler(commandStr, message);
+                        return;
+                    }
+
+                    // 不是Namespace里的命令, 就是基础bot的命令
+                    if (StrUtil.isBlank(nameSpaceStr)) {
+                        baseCommandHandler(commandStr, message);
+                        return;
+                    }
+
+                    // 检查namespace 是否有对应的command
+                    if (!TelegramBotNameSpaceCommand.isContainCommand(nameSpaceStr, commandStr)) {
+                        String format = String.format("不存在[%s]命令[%s]", nameSpaceStr, commandStr);
+                        log.error(format);
+                        result = Result.fail(format);
+                        return;
+                    }
+
+                    TelegramBotNameSpaceCommand.NameSpace nameSpace = TelegramBotNameSpaceCommand.NameSpace.valueOf(nameSpaceStr);
+
+
+                    List<String> params = new ArrayList<>(Arrays.asList(split));
+                    params.removeFirst();
+
+                    //Step 2 过滤
+                    if (commandMessageFilter(nameSpace, commandStr, params, message)) {//2 过滤
+                        log.warn("bot[{}] 过滤掉 用户[{}] - 消息[{}]", getBotUsername(), from.getUserName(), text);
+                    } else {//3 其他命令
+                        result = commandMessageHandler(nameSpace, commandStr, params, message);
+                    }
+                } else {
+                    //处理普通消息
+                    result = normalMessageHandler(text, message);
+                }
+            } catch (Exception e) {
+                log.error("处理消息[{}]出错", message, e);
+            } finally {
+                //Step 3 发送结果
+                if (result != null) {
+                    resolveHandlerResult(chatId, result);
+                }
+            }
+        });
+    }
+
+
+    /**
+     * 处理handler处理后的结果
+     *
+     * @param result result
+     */
+    private void resolveHandlerResult(String chatId, Result result) {
+        try {
+            if (BooleanUtil.isFalse(result.getSuccess())) {
+                sendMessageToChat(chatId, result.getErrorMsg());
+            } else if (result.getData() != null) {
+                sendMessageToChat(chatId, result.getData().toString());
+            }
+        } catch (Exception e) {
+            log.error("向chat[{}]发送结果[{}]时出现异常", chatId, result);
+        }
+    }
+
+
+
+    /**
+     * 处理基础命令
+     *
+     * @param commandStr 命令字符串
+     * @param message    消息
+     */
+    private void baseCommandHandler(String commandStr, Message message) {
+
+        TelegramBotCommand command = null;
+        try {
+            command = TelegramBotCommand.valueOf(commandStr);
+        } catch (Exception e) {
+            log.error("不存在基础命令[{}]", commandStr);
+            sendMessageToChat(String.valueOf(message.getChatId()), String.format("不存在基础命令[%s]", commandStr));
+            return;
+        }
+
+        switch (command) {
+            case START -> startCommandHandler(message);
+        }
+    }
+
+
+    /**
+     * 菜单命令
+     *
+     * @param commandStr commandStr
+     * @param message    message
+     */
+    public abstract void menuCommandHandler(String commandStr, Message message);
+
+    /**
+     * 过滤命令消息
+     *
+     * @param nameSpace        nameSpace
+     * @param nameSpaceCommand nameSpaceCommand
+     * @param params           params
+     * @param message          message
+     */
+    public abstract boolean commandMessageFilter(TelegramBotNameSpaceCommand.NameSpace nameSpace, String nameSpaceCommand, List<String> params, Message message);
+
+
+    /**
+     * 命令消息处理
+     *
+     * @param nameSpace        nameSpace
+     * @param nameSpaceCommand 命令
+     * @param params           参数
+     * @param message          原消息内容
+     */
+    public abstract Result commandMessageHandler(TelegramBotNameSpaceCommand.NameSpace nameSpace, String nameSpaceCommand, List<?> params, Message message);
+
+
+    /**
+     * 普通消息处理
+     *
+     * @param messageText 消息文本
+     * @param message     原消息内容
+     */
+    public abstract Result normalMessageHandler(String messageText, Message message);
+
+
+    /**
+     * 给指定chat发消息
+     *
+     * @param chatId      chatId
+     * @param messageText 消息文本
+     */
+    public void sendMessageToChat(String chatId, String messageText) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setText(messageText);
+
+        try {
+            execute(message);  // 发送消息
+        } catch (TelegramApiException e) {
+            log.error("给群组 [{}] 发送消息[{}]发生错误", chatId, messageText, e);
+        }
+    }
+
+    /**
+     * 给指定chat发送html消息
+     *
+     * @param chatId      chatId
+     * @param messageText 消息文本
+     */
+    public void sendHTMLMessageToChat(String chatId, String messageText) {
+        SendMessage message = new SendMessage();
+        message.setChatId(chatId);
+        message.setParseMode("HTML");
+        message.setText(messageText);
+
+        try {
+            execute(message);  // 发送消息
+        } catch (TelegramApiException e) {
+            log.error("给群组 [{}] 发送消息[{}]发生错误", chatId, messageText, e);
+        }
+    }
+
+
+    /**
+     * 获取聊天信息
+     *
+     * @param chatId chatId
+     * @return 详细信息
+     */
+    public Chat getChat(String chatId) {
+        GetChat chat = new GetChat(chatId);
+        try {
+            return execute(chat);
+        } catch (TelegramApiException e) {
+            log.error("获取Chat[{}]消息发生错误", chatId);
+        }
+        return null;
+    }
+
+
+    /**
+     * 获取特定成员信息
+     *
+     * @param chatId 群组id
+     * @param userId 消息文本
+     */
+    public User getChatMemberInfo(String chatId, long userId) {
+        GetChatMember getChatMember = new GetChatMember();
+        getChatMember.setChatId(chatId);
+        getChatMember.setUserId(userId);
+
+        try {
+            ChatMember chatMember = execute(getChatMember);
+            log.info("获取到群组[{}]成员[{}]的信息, status[{}]", chatId, userId, chatMember.getStatus());
+            // 根据需要获取更多信息，例如用户名、权限等
+            return chatMember.getUser();
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(String.format("获取到群组[%s]成员[%s]的信息失败", chatId, userId), e);
+        }
+    }
+
+    /**
+     * 获取群组管理员信息
+     *
+     * @param chatId 群组id
+     */
+    public List<ChatMember> getChatAdministratorsInfo(String chatId) {
+        GetChatAdministrators getChatAdministrators = new GetChatAdministrators();
+        getChatAdministrators.setChatId(chatId);
+
+        try {
+            return execute(getChatAdministrators);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException(String.format("获取到群组[%s]管理员信息出错", chatId), e);
+        }
+    }
+
+}
+
+
+package com.helei.telegramebot.bot;
+
+import com.helei.dto.base.Result;
+import com.helei.telegramebot.config.TelegramBotNameSpaceCommand;
+import com.helei.telegramebot.bot.menu.TelegramBotMenu;
+import com.helei.telegramebot.service.ITelegramPersistenceService;
+import lombok.extern.slf4j.Slf4j;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.Message;
+import org.telegram.telegrambots.meta.api.objects.User;
+
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+
+
+@Slf4j
+public abstract class MenuBaseTelegramBot extends AbstractTelegramBot {
+
+    /**
+     * 菜单
+     */
+    protected TelegramBotMenu telegramBotMenu;
+
+
+    protected MenuBaseTelegramBot(String botUsername, String token, ITelegramPersistenceService telegramPersistenceService, ExecutorService executor) {
+        super(botUsername, token, telegramPersistenceService, executor);
+    }
+
+
+    public void init(TelegramBotMenu telegramBotMenu) {
+        this.telegramBotMenu = telegramBotMenu;
+    }
+
+
+    @Override
+    public boolean commandMessageFilter(TelegramBotNameSpaceCommand.NameSpace nameSpace, String nameSpaceCommand, List<String> params, Message message) {
+        Result result = getTelegramPersistenceService().isSavedChatInBot(getBotUsername(), message.getChatId());
+
+        // 过滤掉没初始化的chat
+        if (!result.getSuccess()) {
+            sendMessageToChat(String.valueOf(message.getChatId()), result.getErrorMsg());
+            return true;
+        }
+
+        return false;
+    }
+
+    @Override
+    public void menuCommandHandler(String menuCommand, Message message) {
+        SendMessage sendMessage = telegramBotMenu.menuCommandHandler(menuCommand, message);
+        try {
+            if (sendMessage != null) {
+                execute(sendMessage);
+            }
+        } catch (Exception e) {
+            log.error("[{}]处理菜单命令[{}]失败", message.getChatId(), message, e);
+        }
+    }
+
+
+    @Override
+    public void startCommandHandler(Message message) {
+        Long chatId = message.getChatId();
+
+        // chatId持久化，连同用户信息
+        User from = message.getFrom();
+
+        Result result = getTelegramPersistenceService().saveChatInBot(getBotUsername(), chatId, from);
+        if (!result.getSuccess()) {
+            log.error("保存聊天[{}]用户[{}]信息失败", chatId, from.getUserName());
+            sendMessageToChat(String.valueOf(chatId), result.getErrorMsg());
+        } else {
+            sendMessageToChat(String.valueOf(chatId), getBotUsername() + " 注册聊天信息成功");
+        }
+
+
+        try {
+            SendMessage sendMessage = telegramBotMenu.initChatMenu(String.valueOf(chatId));
+            execute(sendMessage);
+        } catch (Exception e) {
+            log.error("[{}]创建菜单失败", chatId, e);
+            sendMessageToChat(String.valueOf(chatId), "创建菜单失败");
+        }
+    }
+}
+
+
+
+package com.helei.telegramebot.bot;
+
+import com.helei.dto.base.Result;
+import org.telegram.telegrambots.meta.api.objects.Message;
+
+import java.util.List;
+
+public interface SolanaTelegramBot {
+
+
+    /**
+     * 绑定钱包地址
+     *
+     * @param params  参数
+     * @param message message
+     * @return Result
+     */
+    Result bindWalletAddress(List<?> params, Message message);
+
+    /**
+     * 更新监听交易的账户
+     *
+     * @param params  参数
+     * @param message message
+     * @return Result
+     */
+    Result updateTransactionListenAccount(List<?> params, Message message);
+
+
+    /**
+     * 取消监听账户地址交易
+     *
+     * @param params  参数
+     * @param message message
+     * @return Result
+     */
+    Result cancelTransactionListenAccount(List<?> params, Message message);
+}
+
+
+
+
+package com.helei.telegramebot.bot;
+
+
+import com.helei.dto.base.Result;
+import org.telegram.telegrambots.meta.api.objects.Message;
+
+import java.util.List;
+
+public interface TradeSignalCommandTelegramBot {
+
+
+    /**
+     * 添加监听信号命令
+     *
+     * @param params  参数 [runEnv, tradeType, cexType, 可选symbols]
+     * @param message 消息
+     */
+    Result addListenSignalTypeCommandHandler(List<?> params, Message message);
+
+    /**
+     * 处理发送信号命令
+     *
+     * @param params 参数
+     */
+    Result sendTradeSignalCommandHandler(List<?> params);
+}
+
+
+
+package com.helei.telegramebot.config.command;
+
+public enum SolanaBotCommand {
+
+
+    /**
+     * 绑定钱包地址 /SolanaBotCommand.bind_wallet_address address  绑定钱包地址
+     */
+    BIND_WALLET_ADDRESS,
+
+    /**
+     * 添加监听的账户, /SolanaBotCommand.add_listen_account address name
+     */
+    ADD_LISTEN_ACCOUNT,
+
+    /**
+     * 取消监听账户 /SolanaBotCommand.CANCEL_LISTEN_ACCOUNT address
+     */
+    CANCEL_LISTEN_ACCOUNT
+}
+
+
+
+
+package com.helei.telegramebot.config.command;
+
+public enum TradeSignalCommand {
+    /**
+     * 发送交易信号
+     */
+    ADD_LISTEN_SIGNAL_TYPE,
+    /**
+     * 添加监听的信号类型
+     */
+    SEND_TRADE_SIGNAL
+}
+
+
+package com.helei.telegramebot.config;
+
+import com.helei.telegramebot.bot.AbstractTelegramBot;
+import com.helei.telegramebot.bot.impl.ShinanoTelegramBot;
+import com.helei.telegramebot.manager.ExecutorServiceManager;
+import com.helei.telegramebot.service.ITelegramPersistenceService;
+import com.helei.telegramebot.service.ITradeSignalPersistenceService;
+import com.helei.telegramebot.service.impl.KafkaConsumerService;
+import com.helei.util.NamedThreadFactory;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.redisson.Redisson;
+import org.redisson.api.RedissonClient;
+import org.redisson.config.Config;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.telegram.telegrambots.meta.TelegramBotsApi;
+import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.Executors;
+
+@Slf4j
+@Configuration
+public class SpringConfig {
+
+    private final TelegramBotConfig telegramBotConfig = TelegramBotConfig.INSTANCE;
+
+
+    @Autowired
+    private ITelegramPersistenceService telegramPersistenceService;
+
+    @Autowired
+    private ITradeSignalPersistenceService tradeSignalPersistenceService;
+
+    @Autowired
+    private KafkaConsumerService kafkaConsumerService;
+
+    @Bean
+    public ExecutorServiceManager executorServiceManager() {
+        return new ExecutorServiceManager();
+    }
+
+    @Bean
+    public TelegramBotsApi telegramBotsApi() {
+        try {
+            return new TelegramBotsApi(DefaultBotSession.class);
+        } catch (TelegramApiException e) {
+            throw new RuntimeException("创建TelegramBotsApi出错", e);
+        }
+    }
+
+    @Bean
+    @Qualifier("tgBots")
+    public List<AbstractTelegramBot> tgBots() {
+//        TelegramBotsApi telegramBotsApi = telegramBotsApi();
+
+        List<AbstractTelegramBot> list = new ArrayList<>();
+        for (TelegramBotConfig.TelegramBotBaseConfig botBaseConfig : telegramBotConfig.getBots()) {
+            String botUsername = botBaseConfig.getBotUsername();
+
+            try {
+//                    log.info("开始注册[{}]tg机器人", botUsername);
+                ShinanoTelegramBot bot = new ShinanoTelegramBot(
+                        botUsername,
+                        botBaseConfig.getToken(),
+                        telegramPersistenceService,
+                        kafkaConsumerService,
+                        Executors.newThreadPerTaskExecutor(new NamedThreadFactory(botUsername + "处理线程池"))
+                );
+
+                bot.setTradeSignalPersistenceService(tradeSignalPersistenceService);
+
+                list.add(bot);
+//                    telegramBotsApi.registerBot(bot);
+            } catch (Exception e) {
+                log.error("注册tg机器人[{}]发生错误", botUsername, e);
+            }
+        }
+        return list;
+    }
+
+    @Bean
+    public Map<String, Object> tgbotKafkaConfigs() {
+        Map<String, Object> configProps = new HashMap<>();
+        configProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, telegramBotConfig.getKafka().getBootstrap_servers());
+        configProps.put(ConsumerConfig.GROUP_ID_CONFIG, telegramBotConfig.getKafka().getGroup_id());  // 消费者组ID
+        configProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        configProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        configProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
+        return configProps;
+    }
+
+//    @Bean
+//    public ConsumerFactory<String, String> consumerFactory() {
+//        return new DefaultKafkaConsumerFactory<>(kafkaConfigs());
+//    }
+
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory() {
+        ConcurrentKafkaListenerContainerFactory<String, String> factory = new ConcurrentKafkaListenerContainerFactory<>();
+//        factory.setConsumerFactory(consumerFactory());
+        return factory;
+    }
+
+
+    @Bean
+    public RedissonClient redissonClient() {
+        Config config = new Config();
+        config.useSingleServer().setAddress(telegramBotConfig.getRedis().getUrl());
+        return Redisson.create(config);
+    }
+}
+
+
+package com.helei.telegramebot.config;
+
+
+
+/**
+ * tg 机器人命令
+ * start - 启动
+ * TRADE_SIGNAL_COMMAND.add_listen_signal_type - 添加监听的信号类型，参数[runEnv, tradeType, cexType, symbol, signalName]
+ *
+ */
+public enum TelegramBotCommand {
+
+    /**
+     * 用户第一次点bot时发送的start命令
+     */
+    START,
+    ;
+
+}
+
+
+
+package com.helei.telegramebot.config;
+
+import com.helei.telegramebot.config.command.SolanaBotCommand;
+import com.helei.telegramebot.config.command.TradeSignalCommand;
+
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+public interface TelegramBotNameSpaceCommand {
+
+    Set<String> getAllCommand();
+
+    boolean isContainsCommand(String command);
+
+
+    /**
+     * 判断是否含有命令
+     *
+     * @param namespace namespace
+     * @param command   command
+     * @return  是否含有命令
+     */
+    static boolean isContainCommand(String namespace, String command) {
+        try {
+            NameSpace space = NameSpace.valueOf(namespace);
+            return space.isContainsCommand(command);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    enum NameSpace implements TelegramBotNameSpaceCommand {
+        TRADE_SIGNAL_COMMAND {
+            private final Set<String> commands = Arrays.stream(TradeSignalCommand.values()).map(TradeSignalCommand::name).collect(Collectors.toSet());
+
+            @Override
+            public Set<String> getAllCommand() {
+                return new HashSet<>(commands);
+            }
+
+            @Override
+            public boolean isContainsCommand(String command) {
+                return commands.contains(command);
+            }
+        },
+        SOLANA_BOT_COMMAND {
+            private final Set<String> commands = Arrays.stream(SolanaBotCommand.values()).map(SolanaBotCommand::name).collect(Collectors.toSet());
+
+            @Override
+            public Set<String> getAllCommand() {
+                return new HashSet<>(commands);
+            }
+
+            @Override
+            public boolean isContainsCommand(String command) {
+                return commands.contains(command);
+            }
+        }
+    }
+}
+
+
+
+package com.helei.telegramebot.config;
+
+import com.helei.telegramebot.config.command.SolanaBotCommand;
+import com.helei.telegramebot.config.command.TradeSignalCommand;
+
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+public interface TelegramBotNameSpaceCommand {
+
+    Set<String> getAllCommand();
+
+    boolean isContainsCommand(String command);
+
+
+    /**
+     * 判断是否含有命令
+     *
+     * @param namespace namespace
+     * @param command   command
+     * @return  是否含有命令
+     */
+    static boolean isContainCommand(String namespace, String command) {
+        try {
+            NameSpace space = NameSpace.valueOf(namespace);
+            return space.isContainsCommand(command);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    enum NameSpace implements TelegramBotNameSpaceCommand {
+        TRADE_SIGNAL_COMMAND {
+            private final Set<String> commands = Arrays.stream(TradeSignalCommand.values()).map(TradeSignalCommand::name).collect(Collectors.toSet());
+
+            @Override
+            public Set<String> getAllCommand() {
+                return new HashSet<>(commands);
+            }
+
+            @Override
+            public boolean isContainsCommand(String command) {
+                return commands.contains(command);
+            }
+        },
+        SOLANA_BOT_COMMAND {
+            private final Set<String> commands = Arrays.stream(SolanaBotCommand.values()).map(SolanaBotCommand::name).collect(Collectors.toSet());
+
+            @Override
+            public Set<String> getAllCommand() {
+                return new HashSet<>(commands);
+            }
+
+            @Override
+            public boolean isContainsCommand(String command) {
+                return commands.contains(command);
+            }
+        }
+    }
+}
+
+
+package com.helei.telegramebot.service.impl;
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.dto.base.Result;
+import com.helei.solanarpc.dto.SolanaAddress;
+import com.helei.telegramebot.service.ISolanaATBotPersistenceService;
+import com.helei.telegramebot.util.TelegramRedisUtil;
+import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RMap;
+import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.stereotype.Service;
+
+@Slf4j
+@Service
+public class SolanaATBotPersistenceServiceImpl implements ISolanaATBotPersistenceService {
+
+    @Lazy
+    @Autowired
+    private RedissonClient redissonClient;
+
+
+
+    @Override
+    public Result bindWalletAddress(String botUsername, String chatId, String address) {
+        try {
+            String key = TelegramRedisUtil.chatIdSolanaWalletInfoHashKey(chatId, botUsername);
+
+            RMap<String, String> map = redissonClient.getMap(key);
+
+            if (map.containsKey(address)) {
+                return Result.fail("已绑定过钱包地址[" + address.substring(0, 8) + "]");
+            } else {
+                // TODO 可以存对象，放钱包信息
+                map.put(address, "");
+                return Result.ok();
+            }
+        } catch (Exception e) {
+            String format = String.format("绑定chatId[%s]的钱包地址失败, %s", chatId, e.getMessage());
+            log.error(format, e);
+            return Result.fail(format);
+        }
+    }
+
+
+
+    @Override
+    public Result updateChatListenAddress(String botUsername, String chatId, SolanaAddress solanaAddress) {
+        try {
+            String key = TelegramRedisUtil.chatIdSolanaWalletTraceHashKey(chatId, botUsername);
+
+            RMap<String, String> map = redissonClient.getMap(key);
+
+            map.put(solanaAddress.getAccountAddress(), JSONObject.toJSONString(solanaAddress));
+
+            return Result.ok();
+        } catch (Exception e){
+            String format = String.format("更新chatId[%s]跟踪的地址信息失败, %s", chatId, e.getMessage());
+            log.error(format, e);
+            return Result.fail(format);
+        }
+    }
+
+    @Override
+    public Result deleteChatListenAddress(String botUsername, String chatId, String solanaAddress) {
+
+        try {
+            String key = TelegramRedisUtil.chatIdSolanaWalletTraceHashKey(chatId, botUsername);
+            RMap<String, String> map = redissonClient.getMap(key);
+            map.remove(solanaAddress);
+            return Result.ok();
+        } catch (Exception e) {
+            String format = String.format("删除chatId[%s]跟踪的地址信息失败, %s", chatId, e.getMessage());
+            log.error(format, e);
+            return Result.fail(format);
+        }
+    }
+}
+
+
+package com.helei.telegramebot.service.impl;
+
+import com.helei.dto.base.Result;
+import com.helei.telegramebot.bot.menu.TelegramBotMenuType;
+import com.helei.telegramebot.service.ITelegramPersistenceService;
+import com.helei.telegramebot.util.TelegramRedisUtil;
+import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RSet;
+import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.stereotype.Service;
+import org.telegram.telegrambots.meta.api.objects.Chat;
+import org.telegram.telegrambots.meta.api.objects.User;
+
+
+
+@Slf4j
+@Service
+public class TelegramPersistenceServiceImpl implements ITelegramPersistenceService {
+
+    @Autowired
+    @Lazy
+    private RedissonClient redissonClient;
+
+    @Override
+    public Result saveChatInBot(String botUsername, Long chatId, User user) {
+        try {
+            String key = TelegramRedisUtil.botListenChatIdSetKey(botUsername);
+            RSet<String> set = redissonClient.getSet(key);
+            set.add(chatId.toString());
+
+            log.info("bot[{}]保存用户[{}]信息成功", botUsername, chatId);
+        } catch (Exception e) {
+            String errorMsg = String.format("保存连接用户[%s]-[%s]发生错误, %s", chatId, user.getUserName(), e.getMessage());
+            log.error(errorMsg);
+            return Result.fail(errorMsg);
+        }
+        return Result.ok();
+    }
+
+    @Override
+    public Result isSavedChatInBot(String botUsername, Long chatId) {
+        try {
+            String key = TelegramRedisUtil.botListenChatIdSetKey(botUsername);
+            RSet<String> set = redissonClient.getSet(key);
+            if (set.contains(chatId.toString())) {
+                return Result.ok();
+            } else {
+                return Result.fail(String.format("bot[%s]中没有chat[%s]的相关信息", botUsername, chatId));
+            }
+        } catch (Exception e) {
+            String errorMsg = String.format("bot[%s]查询chat[%s]相关信息出错[%s]", botUsername, chatId, e.getMessage());
+            log.error(errorMsg);
+            return Result.fail(errorMsg);
+        }
+    }
+
+    @Override
+    public Result saveGroupChat(Chat chat) {
+        return Result.ok();
+    }
+
+    @Override
+    public Result saveChatMenuState(String botUsername, String chatId, TelegramBotMenuType menuType) {
+        String name = menuType.getName();
+        try {
+           String key = TelegramRedisUtil.chatIdSolanaBotMenuKey(botUsername, chatId);
+
+           redissonClient.getBucket(key).set(name);
+
+           return Result.ok(name);
+        } catch (Exception e) {
+            String errorMsg = String.format("bot[%s]保存chat[%s]菜单状态[%s]出错[%s]", botUsername, chatId, name, e.getMessage());
+            log.error(errorMsg);
+            return Result.fail(errorMsg);
+        }
+    }
+
+    @Override
+    public Result getChatMenuState(String botUsername, String chatId) {
+        try {
+            String key = TelegramRedisUtil.chatIdSolanaBotMenuKey(botUsername, chatId);
+            return Result.ok(redissonClient.getBucket(key).get());
+        } catch (Exception e) {
+            String errorMsg = String.format("bot[%s]获取chat[%s]菜单状态出错[%s]", botUsername, chatId, e.getMessage());
+            log.error(errorMsg);
+            return Result.fail(errorMsg);
+        }
+    }
+}
+
+
+package com.helei.telegramebot.service.impl;
+
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.base.Result;
+import com.helei.telegramebot.service.ITradeSignalPersistenceService;
+import com.helei.telegramebot.util.TelegramRedisUtil;
+import org.redisson.api.RKeys;
+import org.redisson.api.RSet;
+import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.stereotype.Service;
+
+import java.util.HashSet;
+import java.util.Set;
+
+@Service
+public class TradeSignalPersistenceServiceImpl implements ITradeSignalPersistenceService {
+
+    @Autowired
+    @Lazy
+    private RedissonClient redissonClient;
+
+    @Override
+    public Result saveChatListenTradeSignal(String botUsername, String chatId, RunEnv runEnv, TradeType tradeType, CEXType cexType, String symbol, String signalName) {
+        String key = TelegramRedisUtil.tradeSignalListenChatIdSetKey(botUsername, runEnv, tradeType, cexType, symbol, signalName);
+        RSet<String> set = redissonClient.getSet(key);
+        set.add(chatId);
+        return Result.ok();
+    }
+
+
+
+    @Override
+    public Result queryTradeSignalListenedChatId(String botUsername, RunEnv runEnv, TradeType tradeType, CEXType cexType, String symbol) {
+        String keyPattern = "";
+        Set<String> result = new HashSet<>();
+
+        try {
+            keyPattern = TelegramRedisUtil.tradeSignalListenChatIdSetKey(botUsername, runEnv, tradeType, cexType, symbol, "*");
+
+            RKeys keys = redissonClient.getKeys();
+
+            keys.getKeysStreamByPattern(keyPattern).forEach(key -> {
+                RSet<String> set = redissonClient.getSet(key);
+                result.addAll(set.readAll());
+            });
+
+            return Result.ok(result, result.size());
+        } catch (Exception e) {
+            return Result.fail(String.format("查询监听信号[%s]的chatId失败", keyPattern));
+        }
+    }
+}
+
+
+
+package com.helei.telegramebot.service;
+
+import com.helei.dto.base.Result;
+import com.helei.solanarpc.dto.SolanaAddress;
+
+public interface ISolanaATBotPersistenceService {
+
+
+    /**
+     * 绑定钱包地址
+     *
+     * @param chatId  chatId
+     * @param address address
+     * @return Result
+     */
+    Result bindWalletAddress(String botUsername, String chatId, String address);
+
+
+    /**
+     * 保存chatId跟踪的钱包地址
+     *
+     * @param chatId        chatId
+     * @param solanaAddress 钱包地址
+     * @return Result
+     */
+    Result updateChatListenAddress(String botUsername, String chatId, SolanaAddress solanaAddress);
+
+
+    /**
+     * 删除chatId跟踪的钱包地址
+     *
+     * @param chatId        chatId
+     * @param address 钱包地址
+     * @return Result
+     */
+    Result deleteChatListenAddress(String botUsername, String chatId, String address);
+
+}
+
+
+
+
+package com.helei.telegramebot.service;
+
+import com.helei.dto.base.Result;
+import com.helei.telegramebot.bot.menu.TelegramBotMenuType;
+import org.telegram.telegrambots.meta.api.objects.Chat;
+import org.telegram.telegrambots.meta.api.objects.User;
+
+
+public interface ITelegramPersistenceService {
+
+
+    /**
+     * 保存聊天用户信息
+     *
+     * @param botUsername 机器人用户名
+     * @param chatId      聊天id
+     * @param user        用户
+     * @return 是否保存成功
+     */
+    Result saveChatInBot(String botUsername, Long chatId, User user);
+
+
+    /**
+     * 查询指定的chatId是否被注册过
+     *
+     * @param botUsername botUsername
+     * @param chatId      chatId
+     * @return 是否被注册过
+     */
+    Result isSavedChatInBot(String botUsername, Long chatId);
+
+
+    /**
+     * 保存群组信息
+     *
+     * @param chat 群组信息
+     * @return 是否成功
+     */
+    Result saveGroupChat(Chat chat);
+
+
+    /**
+     * 保存聊天菜单状态
+     *
+     * @param botUsername botUsername
+     * @param chatId      chatId
+     * @param menuType    menuType
+     * @return Result
+     */
+    Result saveChatMenuState(String botUsername, String chatId, TelegramBotMenuType menuType);
+
+
+    /**
+     * 获取菜单状态
+     *
+     * @param botUsername botUsername
+     * @param chatId      chatId
+     * @return Result
+     */
+    Result getChatMenuState(String botUsername, String chatId);
+}
+
+
+package com.helei.telegramebot.service;
+
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+import com.helei.dto.base.Result;
+
+public interface ITradeSignalPersistenceService {
+    /**
+     * 保存chat监听的交易信号
+     *
+     * @param botUsername 机器人用户名
+     * @param chatId      chatId
+     * @param runEnv      runEnv
+     * @param tradeType   tradeType
+     * @param cexType     cexType
+     * @param symbol     symbol
+     * @param signalName     signalName
+     * @return 是否成功
+     */
+    Result saveChatListenTradeSignal(String botUsername, String chatId, RunEnv runEnv, TradeType tradeType, CEXType cexType, String symbol, String signalName);
+
+
+    /**
+     * 查询监听交易对信号的tg chatId
+     *
+     * @param botUsername 机器人用户名
+     * @param runEnv      runEnv
+     * @param tradeType   tradeType
+     * @param cexType     cexType
+     * @param symbol      symbol
+     * @return chatId list
+     */
+    Result queryTradeSignalListenedChatId(String botUsername, RunEnv runEnv, TradeType tradeType, CEXType cexType, String symbol);
+}
+
+
+
+package com.helei.telegramebot.util;
+
+import com.helei.constants.CEXType;
+import com.helei.constants.RunEnv;
+import com.helei.constants.trade.TradeType;
+
+public class TelegramRedisUtil {
+
+    private static final String REDIS_KEY_PREFIX = "telegram:bot:";
+
+    /**
+     * 监听交易信号的chatId的redis key，set类型
+     *
+     * @param botUsername 机器人用户名
+     * @param runEnv      runEnv
+     * @param tradeType   tradeType
+     * @param cexType     cexType
+     * @param symbol      symbol
+     * @return key
+     */
+    public static String tradeSignalListenChatIdSetKey(String botUsername, RunEnv runEnv, TradeType tradeType, CEXType cexType, String symbol, String signalName) {
+        return REDIS_KEY_PREFIX + botUsername + ":signal:" + cexType.name() + ":" + runEnv.name() + ":" + tradeType.name() + ":" + symbol + ":" + signalName;
+    }
+
+
+    /**
+     * bot关注的chatId的redis key， set类型
+     *
+     * @param botUsername 机器人名字
+     * @return key
+     */
+    public static String botListenChatIdSetKey(String botUsername) {
+        return REDIS_KEY_PREFIX + botUsername + ":listenChatIdSet";
+    }
+
+    /**
+     * chatId solana钱包信息的前缀
+     *
+     * @param botUsername botUsername
+     * @param chatId      chatId
+     * @return key
+     */
+    public static String chatIdSolanaWalletPrefix(String botUsername, String chatId) {
+        return REDIS_KEY_PREFIX + botUsername + "solana:wallet:" + chatId + ":";
+    }
+
+    /**
+     * chatId solana钱包，追踪地址的key
+     *
+     * @param chatId chatId
+     * @return key
+     */
+    public static String chatIdSolanaWalletTraceHashKey(String botUsername, String chatId) {
+        return chatIdSolanaWalletPrefix(botUsername, chatId) + "trace";
+    }
+
+
+    /**
+     * chatId solana钱包地址
+     *
+     * @param chatId chatId
+     * @return key
+     */
+    public static String chatIdSolanaWalletInfoHashKey(String botUsername, String chatId) {
+        return chatIdSolanaWalletPrefix(botUsername, chatId) + "info";
+    }
+
+    /**
+     * 获取菜单状态
+     *
+     * @param botUsername botUsername
+     * @param chatId      chatId
+     * @return key
+     */
+    public static String chatIdSolanaBotMenuKey(String botUsername, String chatId) {
+        return chatIdSolanaWalletPrefix(botUsername, chatId) + "menu";
+    }
+}
+
+
+
