@@ -1,0 +1,118 @@
+import com.alibaba.excel.EasyExcel;
+import com.alibaba.excel.read.listener.ReadListener;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.util.List;
+
+public class ExcelToDatabase {
+    private static final String DB_URL = "jdbc:mysql://localhost:3306/your_database";
+    private static final String DB_USER = "root";
+    private static final String DB_PASSWORD = "password";
+
+    public static void main(String[] args) throws Exception {
+        String excelFilePath = "path/to/your/excel/file.xlsx";
+
+        // 读取表名和字段信息
+        TableData tableData = EasyExcel.read(excelFilePath).headRowNumber(2).sheet(0)
+                .doReadSync(new TableReadListener());
+
+        // 将数据插入数据库
+        writeToDatabase(tableData);
+    }
+
+    public static void writeToDatabase(TableData tableData) throws Exception {
+        try (Connection connection = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
+            // 创建表
+            String createTableSql = buildCreateTableSql(tableData);
+            connection.createStatement().execute(createTableSql);
+
+            // 插入数据
+            String insertSql = buildInsertSql(tableData);
+            try (PreparedStatement preparedStatement = connection.prepareStatement(insertSql)) {
+                for (List<Object> row : tableData.getData()) {
+                    for (int i = 0; i < row.size(); i++) {
+                        preparedStatement.setObject(i + 1, row.get(i));
+                    }
+                    preparedStatement.addBatch();
+                }
+                preparedStatement.executeBatch();
+            }
+        }
+    }
+
+    private static String buildCreateTableSql(TableData tableData) {
+        StringBuilder sql = new StringBuilder("CREATE TABLE IF NOT EXISTS ");
+        sql.append(tableData.getTableName()).append(" (");
+        for (String column : tableData.getColumns()) {
+            sql.append(column).append(" VARCHAR(255),");
+        }
+        sql.setLength(sql.length() - 1);
+        sql.append(")");
+        return sql.toString();
+    }
+
+    private static String buildInsertSql(TableData tableData) {
+        StringBuilder sql = new StringBuilder("INSERT INTO ");
+        sql.append(tableData.getTableName()).append(" (");
+        for (String column : tableData.getColumns()) {
+            sql.append(column).append(",");
+        }
+        sql.setLength(sql.length() - 1);
+        sql.append(") VALUES (");
+        sql.append("?,".repeat(tableData.getColumns().size()));
+        sql.setLength(sql.length() - 1);
+        sql.append(")");
+        return sql.toString();
+    }
+
+    static class TableReadListener implements ReadListener<List<String>> {
+        private final TableData tableData = new TableData();
+
+        @Override
+        public void invoke(List<String> data, AnalysisContext context) {
+            int rowIndex = context.readRowHolder().getRowIndex();
+            if (rowIndex == 0) {
+                tableData.setTableName(data.get(0));
+            } else if (rowIndex == 1) {
+                tableData.setColumns(data);
+            } else {
+                tableData.getData().add(data);
+            }
+        }
+
+        @Override
+        public void doAfterAllAnalysed(AnalysisContext context) {}
+
+        public TableData getTableData() {
+            return tableData;
+        }
+    }
+
+    static class TableData {
+        private String tableName;
+        private List<String> columns;
+        private final List<List<Object>> data = new ArrayList<>();
+
+        public String getTableName() {
+            return tableName;
+        }
+
+        public void setTableName(String tableName) {
+            this.tableName = tableName;
+        }
+
+        public List<String> getColumns() {
+            return columns;
+        }
+
+        public void setColumns(List<String> columns) {
+            this.columns = columns;
+        }
+
+        public List<List<Object>> getData() {
+            return data;
+        }
+    }
+}
