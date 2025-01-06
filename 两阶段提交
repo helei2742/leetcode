@@ -1,110 +1,291 @@
-import org.apache.flink.api.common.serialization.SimpleStringSchema;
-import org.apache.flink.api.common.state.ListState;
-import org.apache.flink.api.common.state.ListStateDescriptor;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.runtime.state.FunctionInitializationContext;
-import org.apache.flink.runtime.state.FunctionSnapshotContext;
-import org.apache.flink.streaming.api.CheckpointingMode;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.sink.TwoPhaseCommitSinkFunction;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerRecord;
+with temp as (
+select 	t1.*
+		,case when t1.status not in ('4','20','30') then t1.curr_processor end as to_do_person
+		,case when t1.status not in ('4','20','30') and t1.curr_processor = t1.created_by then t1.created_by    end  as  to_do_applicant
+		,case when (t1.status not in ('4','20','30') or (t1.status  = '3' and t2.status not in ('4'))) and t1.curr_processor != t1.created_by then t1.created_by
+		 end as tmp_trace_person
+		,case when (t1.status not in ('4','20','30') or (t1.status  = '3' and t2.status not in ('4'))) and t1.curr_processor != t1.created_by then t1.created_by
+		 end as tmp_trace_upgrade
+		,t3.relate_user
+	from ipd_ops_dwi.dwi_v2_t_ticket_td_order_hi t1
+		left join
+		(select	service_id,
+				case when nvl(length(trim(status)),0) = 0 then null else status end as status
+			from ipd_ops_dwi.dwi_v2_t_importal_service_request_hi
+		) t2
+		on t1.related_service_order = t2.service_id
+		left join
+		(select *
+			from ipd_ops_dwr_pub.dwr_pub_td_im_sub_order_full
+			where order_type = 'TD'
+			and rel_type = 'SD') t3
+		on t1.related_service_order = t3.rel_busi_no
+	where nvl(trim(t1.related_service_order),'') != ''
+	and t1.status not in ('4','20','30')
+),
+close_detail as (
+select	td_order_id
+	from ipd_ops_sdi.sdi_t_ticket_td_order_operation_record
+	where to_status in  ('4','20','30')
+	group by td_order_id
+),
+not_close_detail as (
+select	td_order_id
+		,to_status
+		,operate_datetime
+		,sum(case
+			when to_status = nvl(lag_to_status,to_status) then 0
+			else 1
+		end ) over(partition by td_order_id order by operate_datetime asc) as label
+	from
+		(select	td_order_id
+				,to_status
+				,operate_datetime
+				,lag(nvl(to_status,'-1')) over(partition by td_order_id order by operate_datetime asc) as lag_to_status
+			from ipd_ops_sdi.sdi_t_ticket_td_order_operation_record t1
+			where not exists(select 1
+								from close_detail t2
+								where t2.td_order_id = t1.td_order_id)
+		) t2
+),
+temp2 as
+(select	t1.td_order_id as busi_no
+		,t1.title
+		,t1.issue_desc
+		,t1.status
+		,t1.td_type
+		,biz_domain
+		,t1.request_user_id  as user_by
+		,case
+			when nvl(d.l1_dept_code,'-1') = nvl(d.l0_dept_code,'-1')
+			then '-1' else nvl(d.l1_dept_code,'-1')
+		end	as l1_dept_code
+		,case
+			when nvl(d.l1_dept_cn_name,'异常部门') = nvl(d.l0_dept_cn_name,'异常部门')
+			then '异常部门'	 else d.l1_dept_cn_name
+		end	as l1_dept_cn_name
+		,case
+			when nvl(d.l2_dept_code,'-1') = nvl(d.l1_dept_code,'-1')
+			then '-1' else nvl(d.l2_dept_code,'-1')
+		end	as l2_dept_code
+		,case
+			when nvl(d.l2_dept_cn_name,'异常部门') = nvl(d.l1_dept_cn_name,'异常部门')
+			then '异常部门' else nvl(d.l2_dept_cn_name,'异常部门')
+		end	as l2_dept_cn_name
+		,case
+			when nvl(d.l3_dept_code,'-1') = nvl(d.l2_dept_code,'-1')
+			then '-1' else nvl(d.l3_dept_code,'-1')
+		end	as l3_dept_code
+		,case
+			when nvl(d.l3_dept_cn_name,'异常部门') = nvl(d.l2_dept_cn_name,'异常部门')
+			then '异常部门' else nvl(d.l3_dept_cn_name,'异常部门')
+		end	as l3_dept_cn_name
+		,case
+			when nvl(d.l4_dept_code,'-1') = nvl(d.l3_dept_code,'-1')
+			then '-1' else nvl(d.l4_dept_code,'-1')
+		end	as l4_dept_code
+		,case
+			when nvl(d.l4_dept_cn_name,'异常部门') = nvl(d.l3_dept_cn_name,'异常部门')
+			then '异常部门' else nvl(d.l4_dept_cn_name,'异常部门')
+		end	as l4_dept_cn_name
+		,case
+			when nvl(d.l5_dept_code,'-1') = nvl(d.l4_dept_code,'-1')
+			then '-1' else nvl(d.l5_dept_code,'-1')
+		end	as l5_dept_code
+		,case
+			when nvl(d.l5_dept_cn_name,'异常部门') = nvl(d.l4_dept_cn_name,'异常部门')
+			then '异常部门' else nvl(d.l5_dept_cn_name,'异常部门')
+		end	as l5_dept_cn_name
+		,case
+			when nvl(d.l6_dept_code,'-1') = nvl(d.l5_dept_code,'-1')
+			then '-1' else nvl(d.l6_dept_code,'-1')
+		end	as l6_dept_code
+		,case
+			when nvl(d.l6_dept_cn_name,'异常部门') = nvl(d.l5_dept_cn_name,'异常部门')
+			then '异常部门' else nvl(d.l6_dept_cn_name,'异常部门')
+		end	as l6_dept_cn_name
+		,t2.dimension_code as product_code
+		,t2.dimension_cn_name as product_name
+		,case
+			when nvl(t2.prod_fm_code,'-1') = nvl(t2.parent_code,'-1')
+			then null else t2.prod_fm_code
+		end as spdt_code
+		,case
+			when nvl(t2.prod_fm_code,'-1') = nvl(t2.parent_code,'-1')
+			then null else t2.prod_fm_cn_name
+		end as spdt_name
+		,case
+			when nvl(t2.prod_code,'-1') = nvl(t2.prod_fm_code,'-1')
+			then null else t2.prod_code
+		end	as pdt_code
+		,case
+			when nvl(t2.prod_code,'-1') = nvl(t2.prod_fm_code,'-1')
+			then null else t2.prod_cn_name
+		end as pdt_name
+		,case
+			when nvl(t2.sub_prod_code,'-1') = nvl(t2.prod_code,'-1')
+			then null else t2.sub_prod_code
+		end as sub_product_code
+		,case
+			when nvl(t2.sub_prod_code,'-1') = nvl(t2.prod_code,'-1')
+			then null else t2.sub_prod_cn_name
+		end sub_product_name
+		,case
+			when nvl(t2.app_module_id,'-1') = nvl(t2.sub_prod_code,'-1')
+			then null else t2.app_module_id
+		end module_code
+		,case
+			when nvl(t2.app_module_id,'-1') = nvl(t2.sub_prod_code,'-1')
+			then null else t2.app_module_cn_name
+		end as module_cn_name
+		,case
+			when nvl(t2.app_id,'-1') = nvl(t2.app_module_id,'-1')
+			then null else t2.app_id
+		end as app_id
+		,case
+			when nvl(t2.app_id,'-1') = nvl(t2.app_module_id,'-1')
+			then null else t2.app_cn_name
+		end as app_cn_name
+		,created_by
+		,curr_processor as curr_process_user
+		,opened_by as opened_user
+		,open_datetime as open_time
+		,null as deal_time
+		, upgrade_cnt - 1 as sla_upgrade_cnt
+		,case
+			when sla_status >= 2    then 1 else 0
+		end as sla_break_flag
+		,case
+			when sla_status = '11'  then '分析中'
+		end as  respond_sla_status
+		,case
+			when sla_status = '2'   then '处理中'
+		end as closed_sla_status
+		,round((unix_timestamp(current_timestamp) - unix_timestamp(open_datetime))/(60*60*24),2)  as saty_time
+		,related_service_order as relate_order_no
+		,null as sla_warn
+		,case
+			when t1.status in ('11','2')  then from_unixtime(unix_timestamp(t1.status_sla_break_datetime_only) + 8*60*60,'yyyy-MM-dd HH:mm:ss')
+		end as sla_time
+		,to_do_person as to_do_person
+        ,to_do_applicant as to_do_applicant
+        ,t1.tmp_trace_person as trace_person
+        ,t1.tmp_trace_upgrade as trace_upgrade
+		,operate_datetime
+		,dense_rank() over(partition by t1.td_order_id order by t3.label desc) as parent_rn
+		,row_number() over(partition by t1.td_order_id,t3.label order by t3.operate_datetime asc) as sub_rn
+		,t1.relate_user
+		,t1.related_service_order
+		,t1.sla_status
+	from temp t1
+		left join
+		ipd_ops_dim.dim_pub_rels_emp_dept_t d
+		on lower(created_by) = lower(d.w3_account)
+		left join
+		ipd_ops_dim.dim_pub_ci_ciinfo ci  --取 app_id
+		on t1.request_ci_id = ci.ci_id
+		left join
+		(select	service_id
+				,case when nvl(trim(request_ci_id),'') = '' then null else request_ci_id end as request_ci_id
+				,case when nvl(trim(ci_module_id),'') = '' then null else ci_module_id end as ci_module_id
+			from ipd_ops_dwi.dwi_v2_t_importal_service_request_hi
+		) sd
+		on t1.related_service_order = sd.service_id
+		left join
+		ipd_ops_dim.dim_pub_ci_ciinfo t4
+		on sd.request_ci_id = t4.ci_id
+		left join
+		ipd_ops_dim.dim_pub_dimension_ipmt t2
+		on coalesce(ci.app_id,t1.module_id,t4.app_id,sd.ci_module_id) = t2.dimension_code
+		left join
+		not_close_detail t3
+		on t1.td_order_id = t3.td_order_id
+		and t1.status = t3.to_status
+)
 
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.SQLException;
-import java.util.Properties;
-
-public class TwoPhaseCommitExample {
-
-    public static void main(String[] args) throws Exception {
-        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.enableCheckpointing(5000, CheckpointingMode.EXACTLY_ONCE);
-
-        // 示例数据流
-        DataStream<String> stream = ...;
-
-        // 添加两阶段提交的自定义 Sink
-        stream.addSink(new MyTwoPhaseCommitSink()).name("TwoPhaseCommitSink");
-
-        env.execute("Flink Two-Phase Commit Example");
-    }
-
-    // 自定义的两阶段提交 Sink
-    public static class MyTwoPhaseCommitSink extends TwoPhaseCommitSinkFunction<String, Connection, Void> {
-
-        private static final String DB_URL = "jdbc:mysql://localhost:3306/database";
-        private static final String USER = "username";
-        private static final String PASSWORD = "password";
-        private transient KafkaProducer<String, String> producer;
-
-        public MyTwoPhaseCommitSink() {
-            super(TypeInformation.of(Connection.class));
-        }
-
-        @Override
-        protected Connection beginTransaction() throws Exception {
-            // 开始事务，创建数据库连接
-            Connection conn = DriverManager.getConnection(DB_URL, USER, PASSWORD);
-            conn.setAutoCommit(false); // 禁用自动提交，确保事务性
-            return conn;
-        }
-
-        @Override
-        protected void invoke(Connection transaction, String value, Context context) throws Exception {
-            // 将数据写入数据库，未提交
-            PreparedStatement statement = transaction.prepareStatement("INSERT INTO target_table (data) VALUES (?)");
-            statement.setString(1, value);
-            statement.executeUpdate();
-            statement.close();
-        }
-
-        @Override
-        protected void preCommit(Connection transaction) throws Exception {
-            // 此处无需操作，等待提交阶段
-        }
-
-        @Override
-        protected void commit(Connection transaction) {
-            try {
-                transaction.commit(); // 提交数据库事务
-                transaction.close();  // 关闭连接
-            } catch (SQLException e) {
-                throw new RuntimeException("Failed to commit transaction", e);
-            }
-            // 将数据写入 Kafka
-            producer.send(new ProducerRecord<>("output_topic", "value"));
-        }
-
-        @Override
-        protected void abort(Connection transaction) {
-            try {
-                transaction.rollback(); // 回滚事务
-                transaction.close();  // 关闭连接
-            } catch (SQLException e) {
-                throw new RuntimeException("Failed to abort transaction", e);
-            }
-        }
-
-        @Override
-        public void open(Configuration parameters) throws Exception {
-            super.open(parameters);
-            // 初始化 Kafka 生产者
-            Properties props = new Properties();
-            props.put("bootstrap.servers", "localhost:9092");
-            props.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
-            props.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
-            producer = new KafkaProducer<>(props);
-        }
-
-        @Override
-        public void close() throws Exception {
-            super.close();
-            if (producer != null) {
-                producer.close();
-            }
-        }
-    }
-}
+insert overwrite table ipd_ops_dwr_pub.dwr_pub_yygzt_v2_td_order_full
+select	 busi_no
+        ,title
+        ,issue_desc
+        ,case
+			when status = '0' then '起草中'
+			when status = '1' then '待确认'
+			when status = '2' then '处理中'
+			when status = '3' then '待验证'
+			when status = '4' then '已关闭'
+			when status = '11' then '分析中'
+			when status = '12' then '拒绝待确认'
+			when status = '20' then '已拒绝'
+			when status = '30' then '已取消'
+		end as status
+		,case
+			when td_type = 1 then '工程能力类'
+			when td_type = 2 then '数据类'
+			when td_type = 3 then '流程类'
+			when td_type = 4 then '业务部门类' else '其他'
+		end as order_type
+		,biz_domain as issue_domain
+        ,nvl(user_by,'--') as  user_by
+        ,l1_dept_code
+        ,l1_dept_cn_name
+        ,l2_dept_code
+        ,l2_dept_cn_name
+        ,l3_dept_code
+        ,l3_dept_cn_name
+        ,l4_dept_code
+        ,l4_dept_cn_name
+        ,l5_dept_code
+        ,l5_dept_cn_name
+        ,l6_dept_code
+        ,l6_dept_cn_name
+		,product_code
+        ,product_name
+        ,spdt_code
+        ,spdt_name
+        ,pdt_code
+        ,pdt_name
+        ,sub_product_code
+        ,sub_product_name
+        ,module_code
+        ,module_cn_name
+        ,app_id
+        ,app_cn_name
+		,created_by
+        ,curr_process_user
+        ,opened_user
+        ,open_time
+		,deal_time
+        ,sla_upgrade_cnt
+        ,sla_break_flag
+        ,respond_sla_status
+		,closed_sla_status
+		,saty_time
+		,relate_order_no
+		,sla_warn
+		,sla_time
+		,sla_status
+		,to_do_person
+		,to_do_applicant
+		,trace_person
+		,trace_upgrade
+		,case
+			when to_do_person is not null   then '未处理'
+			else '其他'
+		end as label_priority_01
+		,case
+			when (trace_person is not null or trace_upgrade is not null) and sla_upgrade_cnt = 3 then '三次升级'
+			when (trace_person is not null or trace_upgrade is not null) and sla_upgrade_cnt = 2 then '二次升级'
+			when (trace_person is not null or trace_upgrade is not null) and sla_upgrade_cnt = 1 then '一次升级'
+			when (trace_person is not null or trace_upgrade is not null) and sla_upgrade_cnt = 0 and sla_status  - 1 >=0 then '即将打破SLA'
+			when (trace_person is not null or trace_upgrade is not null) and user_by = trace_upgrade then '待其它环节处理'
+			when trace_person is not null or trace_upgrade is not null then   '其他'
+		end as label_priority_02
+		,operate_datetime as status_start_time
+		,round((unix_timestamp() - unix_timestamp(operate_datetime))/(24*60*60),2) as status_stay_duration
+		,case
+			when related_service_order regexp 'SD' then relate_user  else created_by
+		end as team_dept_user
+		,cast(current_timestamp as string) as ops_insert_time
+	from temp2
+	where parent_rn = 1
+	and sub_rn = 1;
