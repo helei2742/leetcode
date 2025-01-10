@@ -1,0 +1,846 @@
+package com.helei.ads.api;
+
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import com.helei.ads.dto.AdsBrowserAddress;
+import com.helei.ads.dto.AdsResponse;
+import com.helei.ads.dto.query.AdsBaseQuery;
+import com.helei.ads.dto.query.AdsBrowserStartQuery;
+import com.helei.util.RestApiClient;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+
+/**
+ * adsPower 浏览器相关api
+ */
+@Slf4j
+public class AdsBrowserApi {
+
+    /**
+     * ads power api url
+     */
+    private final String localUrl;
+
+    private final ExecutorService executorService;
+
+    public AdsBrowserApi(String localUrl, ExecutorService executorService) {
+        this.localUrl = localUrl;
+        this.executorService = executorService;
+    }
+
+
+    /**
+     * 启动ads浏览器
+     *
+     * @param startQuery 启动参数
+     * @return adsResponse
+     */
+    public CompletableFuture<AdsBrowserAddress> startAdsBrowser(AdsBrowserStartQuery startQuery) {
+        return RestApiClient.DEFAULT.request(localUrl + "/api/v1/browser/start", "GET", JSONObject.parseObject(JSONObject.toJSONString(startQuery)), null)
+                .thenApplyAsync(responseStr -> {
+                    AdsResponse adsResponse = JSONObject.parseObject(responseStr, AdsResponse.class);
+
+                    if (adsResponse.getCode() == 0) {
+                        JSONObject data = adsResponse.getData();
+                        JSONObject ws = data.getJSONObject("ws");
+                        return AdsBrowserAddress
+                                .builder()
+                                .userId(startQuery.getUser_id())
+                                .puppeteerWSUrl(ws.getString("puppeteer"))
+                                .seleniumUrl(ws.getString("selenium"))
+                                .debugPort(data.getString("debug_port"))
+                                .webdriver(data.getString("webdriver"))
+                                .build();
+                    }
+                    else {
+                        throw new RuntimeException(String.format("启动ads浏览器失败, %s, apiUrl[%s], params[%s]",
+                                localUrl, startQuery, adsResponse.getMsg()));
+                    }
+                }, executorService);
+    }
+
+
+    /**
+     * 关闭ads浏览器
+     *
+     * @param stopQuery 关闭参数
+     * @return adsResponse
+     */
+    public CompletableFuture<Boolean> stopAdsBrowser(AdsBaseQuery stopQuery) {
+        return RestApiClient.DEFAULT.request(localUrl + "/api/v1/browser/stop", "GET", JSONObject.parseObject(JSONObject.toJSONString(stopQuery)), null)
+                .thenApplyAsync(responseStr -> {
+                    AdsResponse adsResponse = JSONObject.parseObject(responseStr, AdsResponse.class);
+
+                    if (adsResponse.getCode() == 0) return true;
+                    else {
+                        log.error("关闭ads浏览器失败, {}, apiUrl[{}], params[{}]", adsResponse.getMsg(), localUrl, stopQuery);
+                        return false;
+                    }
+                }, executorService);
+    }
+
+
+    /**
+     * 检查ads浏览器状态
+     *
+     * @param query 参数
+     * @return adsResponse
+     */
+    public CompletableFuture<AdsBrowserAddress> checkAdsBrowserActive(AdsBaseQuery query) {
+        return RestApiClient.DEFAULT.request(localUrl + "/api/v1/browser/active", "GET", JSONObject.parseObject(JSONObject.toJSONString(query)), null)
+                .thenApplyAsync(responseStr -> {
+                    AdsResponse adsResponse = JSONObject.parseObject(responseStr, AdsResponse.class);
+
+                    if (adsResponse.getCode() == 0) {
+                        JSONObject data = adsResponse.getData();
+                        JSONObject ws = data.getJSONObject("ws");
+                        return AdsBrowserAddress
+                                .builder()
+                                .userId(query.getUser_id())
+                                .puppeteerWSUrl(ws.getString("puppeteer"))
+                                .seleniumUrl(ws.getString("selenium"))
+                                .build();
+                    }
+                    else {
+                        throw new RuntimeException(String.format("检查ads浏览器状态失败, %s, apiUrl[%s], params[%s]", adsResponse.getMsg()
+                                , localUrl, query));
+                    }
+                }, executorService);
+    }
+
+    /**
+     * 获取已启动的浏览器列表
+     *
+     * @return adsResponse
+     */
+    public CompletableFuture<List<AdsBrowserAddress>> queryActiveBrowserList() {
+        return RestApiClient.DEFAULT.request(localUrl + "/api/v1/browser/local-active", "GET", null, null)
+                .thenApplyAsync(responseStr -> {
+                    AdsResponse adsResponse = JSONObject.parseObject(responseStr, AdsResponse.class);
+
+                    if (adsResponse.getCode() == 0) {
+                        JSONArray list = adsResponse.getData().getJSONArray("list");
+
+                        return list.stream().map(item->{
+                            JSONObject jb = (JSONObject) item;
+                            JSONObject ws = jb.getJSONObject("ws");
+
+                            return AdsBrowserAddress
+                                    .builder()
+                                    .userId(jb.getString("user_id"))
+                                    .puppeteerWSUrl(ws.getString("puppeteer"))
+                                    .seleniumUrl(ws.getString("selenium"))
+                                    .debugPort(jb.getString("debug_port"))
+                                    .webdriver(jb.getString("webdriver"))
+                                    .build();
+
+                        }).toList();
+                    } else {
+                        throw new RuntimeException(String.format("获取已启动的浏览器失败, %s, apiUrl[%s]",
+                                adsResponse.getMsg(), localUrl));
+                    }
+                }, executorService);
+    }
+
+}
+package com.helei.ads.config;
+
+import cn.hutool.core.io.resource.ClassPathResource;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
+
+@Data
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+public class AdsPowerConfig {
+    private static final String CONFIG_FILE = "adsPowerConfig.yaml";
+
+    public static final AdsPowerConfig INSTANCE;
+
+    static {
+        Yaml yaml = new Yaml();
+        try (InputStream inputStream = new ClassPathResource(CONFIG_FILE).getStream()) {
+            Map<String, Object> yamlData = yaml.load(inputStream);
+            Map<String, Object> adsPower = (Map<String, Object>) yamlData.get("adsPower");
+
+            INSTANCE = yaml.loadAs(yaml.dump(adsPower), AdsPowerConfig.class);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * ads power 本地url
+     */
+    private String localUrl;
+
+    /**
+     * ads power 环境的userId列表
+     */
+    private List<String> userIds;
+
+}
+package com.helei.ads.dto.query;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+public class AdsBaseQuery {
+    /**
+     * 通过环境id启动，创建环境成功后生成的唯一id
+     */
+    private String user_id;
+
+    /**
+     * 通过环境编号启动，如果已传递环境id则有效环境id
+     */
+    private String serial_number;
+
+}
+package com.helei.ads.dto.query;
+
+
+import lombok.*;
+
+@EqualsAndHashCode(callSuper = true)
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@Builder
+public class AdsBrowserStartQuery extends AdsBaseQuery {
+
+
+    /**
+     * 是否打开平台和历史页面， 0 打开默认， 1 不打开
+     */
+    private String open_tabs = "0";
+
+    /**
+     * 是否打开ip检测页面，0 不打开， 1 打开
+     */
+    private String ip_tab = "1";
+
+    /**
+     * 是否使用新版ip检测，1：新版，0：旧版
+     */
+    private String new_first_tab = "0";
+
+
+    private String launch_arg = "";
+
+    /**
+     * 是否启动headless浏览器 0 否 1 是
+     */
+    private String headless = "0";
+
+    /**
+     * 是否启动账户密码默认填充功能 0 否 1 是
+     */
+    private String disable_password_filling = "0";
+
+    /**
+     * 关闭浏览器后是否清除缓存 0 否 1 是
+     */
+    private String clear_cache_after_closing = "0";
+
+    /**
+     * 是否允许保存密码 0 否 1 是
+     */
+    private String enable_password_saving = "0";
+
+
+    /**
+     * 是否屏蔽cbd检测  1 是  0 否
+     */
+    private String cdp_mask = "1";
+}
+package com.helei.ads.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+public class AdsBrowserAddress {
+
+    private String userId;
+
+    private String seleniumUrl;
+
+    private String puppeteerWSUrl;
+
+    private String debugPort;
+
+    private String webdriver;
+}
+package com.helei.ads.dto;
+
+import com.alibaba.fastjson.JSONObject;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+public class AdsResponse {
+
+    private int code;
+
+    private String msg;
+
+    private JSONObject data;
+}
+package com.helei.ads;
+
+
+import com.alibaba.fastjson.JSONObject;
+import com.helei.ads.api.AdsBrowserApi;
+import com.helei.ads.config.AdsPowerConfig;
+import com.helei.ads.dto.AdsResponse;
+import com.helei.util.ExecutorManager;
+import com.helei.util.RestApiClient;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.chrome.ChromeDriver;
+import org.openqa.selenium.chrome.ChromeOptions;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+
+/**
+ * AdsPower 客户端
+ */
+@Slf4j
+public class AdsPowerClient {
+
+    /**
+     * adsPower 设置
+     */
+    private final AdsPowerConfig adsPowerConfig;
+
+    /**
+     * 异步任务执行线程池
+     */
+    private final ExecutorService executorService;
+
+    /**
+     * 浏览器相关api
+     */
+    @Getter
+    private final AdsBrowserApi browserApi;
+
+
+
+    public AdsPowerClient(AdsPowerConfig adsPowerConfig) {
+        this.adsPowerConfig = adsPowerConfig;
+        this.executorService = ExecutorManager.adsPowerClientExecutor;
+
+        this.browserApi = new AdsBrowserApi(adsPowerConfig.getLocalUrl(), executorService);
+    }
+
+
+    /**
+     * 检查api接口状态
+     *
+     * @return 正常返回true，否则false
+     */
+    public CompletableFuture<Boolean> checkApiStatus() {
+        return RestApiClient.DEFAULT.request(adsPowerConfig.getLocalUrl() + "/status",
+                        "GET", null, null)
+                .thenApplyAsync(responseStr -> {
+                    AdsResponse adsResponse = JSONObject.parseObject(responseStr, AdsResponse.class);
+                    return adsResponse.getCode() == 0;
+                }, executorService);
+    }
+
+    /**
+     * 获取WebDriver
+     *
+     * @param chromeDriverPath chromeDriver的路径
+     * @param seleniumHttpUrl  ads调试地址
+     * @return CompletableFuture<WebDriver>
+     */
+    public CompletableFuture<WebDriver> getWebDriver(String chromeDriverPath, String seleniumHttpUrl) {
+        return CompletableFuture.supplyAsync(() -> {
+            System.setProperty("webdriver.chrome.driver", chromeDriverPath);
+
+            ChromeOptions chromeOptions = new ChromeOptions();
+            chromeOptions.setExperimentalOption("debuggerAddress", seleniumHttpUrl);
+
+            return new ChromeDriver(chromeOptions);
+        }, executorService);
+    }
+}
+
+package com.helei.dto.account;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.Set;
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+public class Account {
+
+    /**
+     * 谷歌账号
+     */
+    private GoogleAccount google;
+
+    /**
+     * 推特账号
+     */
+    private TwitterAccount twitter;
+
+    /**
+     * discard账号
+     */
+    private DiscardAccount discard;
+
+    /**
+     * 钱包
+     */
+    private Set<Wallet> wallets;
+
+    @Data
+    public static class TwitterAccount {
+        private String email;
+        private String password;
+    }
+
+    @Data
+    public static class GoogleAccount {
+        private String email;
+        private String password;
+    }
+
+    @Data
+    public static class DiscardAccount {
+        private String email;
+        private String password;
+    }
+}
+package com.helei.dto.account;
+
+import lombok.Data;
+
+
+
+/**
+ * sol 钱包
+ */
+@Data
+public class Wallet {
+
+    /**
+     * 钱包类型
+     */
+    private WalletType walletType;
+
+    /**
+     * 公匙地址
+     */
+    private String pubKey;
+
+    /**
+     * 助记词
+     */
+    private String mnemonicWord;
+
+
+    /**
+     * 钱包类型
+     */
+    public enum WalletType {
+        ETH,
+        SOL,
+        BSC,
+        TON
+    }
+}
+package com.helei.util;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+public class ExecutorManager {
+
+    /**
+     * adsPower client 使用的线程池
+     */
+    public static final ExecutorService adsPowerClientExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("ads-power-client"));
+}
+package com.helei.util;
+
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class NamedThreadFactory implements ThreadFactory {
+
+    private final String namePrefix;
+    private final AtomicInteger threadNumber = new AtomicInteger(1);
+
+    public NamedThreadFactory(String namePrefix) {
+        this.namePrefix = namePrefix;
+    }
+
+    @Override
+    public Thread newThread(Runnable r) {
+        // 使用指定的名称前缀和自动编号来创建线程名称
+        Thread thread = new Thread(r, namePrefix + "-" + threadNumber.getAndIncrement());
+        // 设置为守护线程（可选）
+        thread.setDaemon(false);
+        return thread;
+    }
+}
+package com.helei.util;
+
+import com.alibaba.fastjson.JSONObject;
+import lombok.extern.slf4j.Slf4j;
+import okhttp3.FormBody;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
+import java.net.SocketTimeoutException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+@Slf4j
+public class RestApiClient {
+
+    private static final int RETRY_TIMES = 3;
+
+    public static final RestApiClient DEFAULT = new RestApiClient(null, Executors.newThreadPerTaskExecutor(new NamedThreadFactory("rest-request-client")));
+
+    private final OkHttpClient okHttpClient;
+
+    private final ExecutorService executorService;
+
+    public RestApiClient(
+            InetSocketAddress proxy,
+            ExecutorService executorService
+    ) {
+        this.executorService = executorService;
+        OkHttpClient.Builder builder = new OkHttpClient.Builder();
+        if (proxy != null) {
+            builder.proxy(new Proxy(Proxy.Type.HTTP, proxy));
+        }
+        this.okHttpClient = builder.build();
+    }
+
+
+    /**
+     * 发送请求，如果有asKey参数不为null，则会鉴权
+     *
+     * @param method method
+     * @param params params
+     * @param body   body
+     * @return CompletableFuture<JSONObject>
+     */
+    public CompletableFuture<String> request(
+            String url,
+            String method,
+            JSONObject params,
+            JSONObject body
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            // 创建表单数据
+            StringBuilder queryString = new StringBuilder();
+
+
+            if (params != null) {
+                params.keySet().forEach(key -> {
+                    queryString.append(key).append("=").append(params.get(key)).append("&");
+                });
+
+                if (!queryString.isEmpty()) {
+                    queryString.deleteCharAt(queryString.length() - 1);
+                }
+            }
+
+            String requestUrl = url + "?" + queryString;
+            FormBody.Builder bodyBuilder = new FormBody.Builder();
+
+            if (body != null) {
+                body.forEach((k, v) -> bodyBuilder.add(k, String.valueOf(v)));
+            }
+
+            Request.Builder builder = new Request.Builder();
+            builder.header("Content-Type", "application/json");
+
+            // 创建 POST 请求
+            builder.url(requestUrl);
+            String upperCase = method.toUpperCase();
+            if (upperCase.equals("GET")) {
+                builder.get();
+            } else {
+                builder.method(upperCase, bodyBuilder.build());
+            }
+
+            Request request = builder.build();
+
+            log.info("创建请求 url[{}], method[{}]成功，开始请求服务器", url, method);
+
+            for (int i = 0; i < RETRY_TIMES; i++) {
+                // 发送请求并获取响应
+                try (Response response = okHttpClient.newCall(request).execute()) {
+                    if (response.isSuccessful()) {
+                        return response.body() == null ? "{}" : response.body().string();
+                    } else {
+                        log.error("请求url [{}] 失败， code [{}]， {}", url, response.code(), response.body());
+                        break;
+                    }
+                } catch (SocketTimeoutException e) {
+                    log.warn("请求[{}]超时，尝试重新请求 [{}/{}]", url, i, RETRY_TIMES);
+                } catch (IOException e) {
+                    log.error("请求url [{}] 失败", url, e);
+                    throw new RuntimeException(e);
+                }
+            }
+
+            return null;
+        }, executorService);
+    }
+}
+package com.helei;
+
+
+import com.helei.ads.config.AdsPowerConfig;
+import com.helei.dto.account.Account;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.HashSet;
+import java.util.Set;
+
+@Slf4j
+public abstract class AdsAutoSyncApplication {
+
+    /**
+     * 账户列表
+     */
+    private final Set<Account> accounts = new HashSet<>();
+
+    /**
+     * AdsPower 设置
+     */
+    private final AdsPowerConfig adsPowerConfig = AdsPowerConfig.INSTANCE;
+
+
+    /**
+     * 设置账户信息
+     * @param accounts accounts
+     */
+    protected abstract void initAccountInfo(Set<Account> accounts);
+
+
+
+}
+adsPower:
+  localUrl:  test
+  userIds:
+    - test1
+    - test2
+    - test3
+    - test4
+package com.helei.ads;
+
+import com.helei.ads.config.AdsPowerConfig;
+import com.helei.ads.dto.query.AdsBaseQuery;
+import com.helei.ads.dto.query.AdsBrowserStartQuery;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Test;
+
+import java.util.concurrent.ExecutionException;
+
+
+class AdsPowerClientTest {
+
+    private static AdsPowerClient adsPowerClient =
+            new AdsPowerClient(AdsPowerConfig.INSTANCE);
+
+    @BeforeEach
+    void setUp() {
+    }
+
+    @Test
+    @Order(1)
+    void checkApiStatus() {
+        adsPowerClient.checkApiStatus().thenAccept(System.out::println).join();
+    }
+
+    @Test
+    @Order(2)
+    void testStartBrowser() throws ExecutionException, InterruptedException {
+        String first = adsPowerClient.getAdsPowerConfig().getUserIds().getFirst();
+
+        AdsBrowserStartQuery startQuery = new AdsBrowserStartQuery();
+        startQuery.setUser_id(first);
+
+        adsPowerClient.getBrowserApi().startAdsBrowser(startQuery).thenAccept(System.out::println).get();
+    }
+
+
+    @Test
+    @Order(4)
+    void testStopBrowser() throws ExecutionException, InterruptedException {
+        String first = adsPowerClient.getAdsPowerConfig().getUserIds().getFirst();
+        adsPowerClient.getBrowserApi().stopAdsBrowser(new AdsBaseQuery(first, null)).thenAccept(System.out::println).get();
+    }
+
+
+    @Test
+    @Order(3)
+    void testCheckAdsBrowserActive() throws ExecutionException, InterruptedException {
+        String first = adsPowerClient.getAdsPowerConfig().getUserIds().getFirst();
+        adsPowerClient.getBrowserApi().checkAdsBrowserActive(new AdsBaseQuery(first, null)).thenAccept(System.out::println).get();
+    }
+
+    @Test
+    @Order(5)
+    void queryActiveBrowserListTest() throws ExecutionException, InterruptedException {
+        adsPowerClient.getBrowserApi().queryActiveBrowserList().thenAccept(System.out::println).get();
+    }
+
+
+    @Test
+    @Order(6)
+    void getWebDriver() throws ExecutionException, InterruptedException {
+        String first = adsPowerClient.getAdsPowerConfig().getUserIds().getFirst();
+
+        AdsBrowserStartQuery startQuery = new AdsBrowserStartQuery();
+        startQuery.setUser_id(first);
+
+        String testUrl = "www.baidu.com";
+
+        adsPowerClient.getBrowserApi().startAdsBrowser(startQuery).thenAccept(adsBrowserAddress -> {
+            adsPowerClient
+                    .getWebDriver(adsBrowserAddress.getWebdriver(), adsBrowserAddress.getSeleniumUrl())
+                    .thenAccept(webDriver -> {
+                        webDriver.get(testUrl);
+                    });
+        });
+    }
+}
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.helei</groupId>
+    <artifactId>adsautosyncapp</artifactId>
+    <version>1.0-SNAPSHOT</version>
+
+    <properties>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+
+        <gsonn.version>2.9.1</gsonn.version>
+        <guava.version>19.0</guava.version>
+        <lombok.version>1.18.30</lombok.version>
+        <hutool.version>5.8.21</hutool.version>
+        <mapstruct.version>1.6.0</mapstruct.version>
+        <slf4j.version>2.0.4</slf4j.version>
+        <snakeyaml.version>2.2</snakeyaml.version>
+        <mapstruct.version>1.6.0</mapstruct.version>
+        <junit.version>5.9.1</junit.version>
+        <okhttp.version>4.11.0</okhttp.version>
+        <logback.version>1.3.7</logback.version>
+        <fastjson.version>1.2.83</fastjson.version>
+    </properties>
+
+
+    <dependencies>
+        <dependency>
+            <groupId>org.seleniumhq.selenium</groupId>
+            <artifactId>selenium-java</artifactId>
+            <version>4.12.0</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>${lombok.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>fastjson</artifactId>
+            <version>${fastjson.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>cn.hutool</groupId>
+            <artifactId>hutool-all</artifactId>
+            <version>${hutool.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <version>${snakeyaml.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct</artifactId>
+            <version>${mapstruct.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.9.1</version>
+            <scope>${junit.version}</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+            <version>${okhttp.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>${logback.version}</version>
+        </dependency>
+
+    </dependencies>
+
+</project>
