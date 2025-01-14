@@ -1,1 +1,152 @@
 
+package com.helei.tool.excel;
+
+import com.alibaba.excel.EasyExcel;
+import com.alibaba.excel.ExcelWriter;
+import com.alibaba.excel.annotation.ExcelProperty;
+import com.alibaba.excel.write.metadata.WriteSheet;
+import com.google.common.io.Files;
+import lombok.Builder;
+import lombok.Data;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Paths;
+import java.util.List;
+
+public class BuildAccountExcel {
+
+    public static void main(String[] args) throws IOException {
+        String outputFilename = "D:\\workspace\\ADSAutoSyncApp\\adsautosyncapp\\src\\main\\resources\\account\\account.xlsx";
+        List<TwitterInfo> twitterInfos = buildTwitterInfos("D:\\workspace\\ADSAutoSyncApp\\adsautosyncapp\\src\\main\\resources\\account\\twitter.txt");
+        List<GoogleInfo> googleInfos = buildGoogleInfos("D:\\workspace\\ADSAutoSyncApp\\adsautosyncapp\\src\\main\\resources\\account\\gmail.txt");
+        List<DiscardInfo> discardInfos = buildDiscardInfos("D:\\workspace\\ADSAutoSyncApp\\adsautosyncapp\\src\\main\\resources\\account\\discard.txt");
+
+
+        try (ExcelWriter writer = EasyExcel.write(outputFilename).build()) {
+
+            WriteSheet googleSheet = EasyExcel.writerSheet(0, "google").head(GoogleInfo.class).build();
+            WriteSheet twitterSheet = EasyExcel.writerSheet(1, "twitter").head(TwitterInfo.class).build();
+            WriteSheet discardSheet = EasyExcel.writerSheet(2, "discard").head(DiscardInfo.class).build();
+
+            writer.write(googleInfos, googleSheet);
+            writer.write(twitterInfos, twitterSheet);
+            writer.write(discardInfos, discardSheet);
+        }
+    }
+
+    public static List<TwitterInfo> buildTwitterInfos(String filePath) throws IOException {
+        List<String> lines = Files.readLines(new File(filePath), StandardCharsets.UTF_8);
+
+        return lines.stream().map(line -> {
+            String[] split = line.split(":");
+            StringBuilder date = new StringBuilder();
+            for (int i = 6; i < split.length; i++) {
+                if (!split[i].isBlank()) {
+                    date.append(split[i]).append(":");
+                }
+            }
+
+            return TwitterInfo
+                    .builder()
+                    .username(split[0])
+                    .password(split[1])
+                    .email(split[2])
+                    .emailPassword(split[3])
+                    .token(split[4])
+                    .token2fa(split[5])
+                    .registerDate(date.toString())
+                    .build();
+        }).toList();
+    }
+
+    public static List<GoogleInfo> buildGoogleInfos(String filePath) throws IOException {
+        List<String> lines = Files.readLines(new File(filePath), StandardCharsets.UTF_8);
+
+        return lines.stream().map(line -> {
+            String[] split = line.split("----");
+
+            return GoogleInfo
+                    .builder()
+                    .email(split[0])
+                    .password(split[1])
+                    .supportEmail(split[2])
+                    .build();
+        }).toList();
+    }
+
+
+    public static List<DiscardInfo> buildDiscardInfos(String filePath) throws IOException {
+        List<String> lines = Files.readLines(new File(filePath), StandardCharsets.UTF_8);
+
+
+        return lines.stream().map(line -> {
+            String[] split = line.split(":");
+
+            return DiscardInfo
+                    .builder()
+                    .email(split[0])
+                    .password(split[1])
+                    .token(split[2])
+                    .build();
+        }).toList();
+    }
+
+    @Data
+    @Builder
+    static class TwitterInfo {
+        @ExcelProperty("用户名")
+        private String username;
+
+        @ExcelProperty("密码")
+        private String password;
+
+        @ExcelProperty("邮箱")
+        private String email;
+
+        @ExcelProperty("邮箱密码")
+        private String emailPassword;
+
+        @ExcelProperty("token")
+        private String token;
+
+        @ExcelProperty("2fa密钥")
+        private String token2fa;
+
+        @ExcelProperty("注册日期")
+        private String registerDate;
+    }
+
+    @Data
+    @Builder
+    static class DiscardInfo {
+        @ExcelProperty("邮箱")
+        private String email;
+
+        @ExcelProperty("密码")
+        private String password;
+
+        @ExcelProperty("token")
+        private String token;
+    }
+
+    @Data
+    @Builder
+    static class GoogleInfo {
+        @ExcelProperty("邮箱")
+        private String email;
+
+        @ExcelProperty("密码")
+        private String password;
+
+        @ExcelProperty("辅助邮箱")
+        private String supportEmail;
+    }
+}
+
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>easyexcel</artifactId>
+            <version>3.2.0</version>
+        </dependency>
