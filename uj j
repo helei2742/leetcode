@@ -1,94 +1,2070 @@
+package cn.com.helei.depin.core.dto;
+
+
+import cn.com.helei.depin.core.env.BrowserEnv;
+import cn.com.helei.depin.core.network.NetworkProxy;
+import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.HttpHeaders;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+public abstract class DepinClientAccount {
+
+    private String name;
+
+    private Integer proxyId;
+
+    private NetworkProxy networkProxy;
+
+    private Integer browserEnvId;
+
+    private BrowserEnv browserEnv;
+
+    public HttpHeaders getHeaders() {
+        return new DefaultHttpHeaders();
+    }
+
+    public String getConnectUrl() {
+        return "";
+    }
+}
+
+
+package cn.com.helei.depin.core.env;
+
+import lombok.Data;
+
+import java.util.Map;
+
+@Data
+public class BrowserEnv {
+
+    private Integer id;
+
+    private Map<String, String> headers;
+
+}
+
+
+package cn.com.helei.depin.core.env;
+
+
+import lombok.Setter;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+public class BrowserEnvPool {
+
+    @Setter
+    private Set<BrowserEnv> envs;
+
+    private ConcurrentMap<Integer, BrowserEnv> idMapEnv;
+
+    public static BrowserEnvPool loadYamlBrowserEnvPool(String classpath) {
+        Yaml yaml = new Yaml();
+        try (InputStream inputStream = BrowserEnvPool.class.getClassLoader().getResourceAsStream(classpath)) {
+            Map<String, Object> yamlData = yaml.load(inputStream);
+            Map<String, Object> depin = (Map<String, Object>) yamlData.get("depin");
+            Map<String, Object> browser = (Map<String, Object>) depin.get("browser");
+
+            BrowserEnvPool envPool = yaml.loadAs(yaml.dump(browser), BrowserEnvPool.class);
+            envPool.idMapEnv = new ConcurrentHashMap<>();
+            envPool.envs.forEach(browserEnv -> envPool.idMapEnv.put(browserEnv.getId(), browserEnv));
+            return envPool;
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public BrowserEnv getBrowserEnv(Integer id) {
+        return idMapEnv.get(id);
+    }
+}
+
+
+
+package cn.com.helei.depin.core.netty.base;
+
+
+import cn.com.helei.depin.core.netty.handler.WSCloseHandler;
+import cn.com.helei.depin.core.network.NetworkProxy;
+import cn.com.helei.depin.core.netty.constants.NettyConstants;
+import cn.com.helei.depin.core.netty.constants.WebsocketClientStatus;
 import com.alibaba.fastjson.JSON;
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.*;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.HttpClientCodec;
+import io.netty.handler.codec.http.HttpHeaders;
+import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.websocketx.*;
+import io.netty.handler.proxy.Socks5ProxyHandler;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import io.netty.handler.stream.ChunkedWriteHandler;
+import io.netty.handler.timeout.IdleStateHandler;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
 
-public class SolanaTransactionParser {
+import javax.net.ssl.SSLException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
-    public static void main(String[] args) {
-        // 示例 JSON 响应
-        String jsonResponse = "{"
-                + "  \"jsonrpc\": \"2.0\","
-                + "  \"id\": 1,"
-                + "  \"result\": {"
-                + "    \"transaction\": {"
-                + "      \"signatures\": [\"...\"],"
-                + "      \"message\": {"
-                + "        \"accountKeys\": ["
-                + "          \"SourceAddress\","
-                + "          \"TargetAddress\","
-                + "          \"TokenAccount\","
-                + "          \"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA\""
-                + "        ],"
-                + "        \"instructions\": ["
-                + "          {"
-                + "            \"programId\": \"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA\","
-                + "            \"accounts\": [\"TokenAccount\", \"TargetAddress\", \"SourceAddress\"],"
-                + "            \"data\": \"3Bxs4f8AAAAAA==\""
-                + "          }"
-                + "        ]"
-                + "      }"
-                + "    },"
-                + "    \"meta\": {"
-                + "      \"preTokenBalances\": ["
-                + "        {"
-                + "          \"accountIndex\": 2,"
-                + "          \"mint\": \"TokenMintAddress\","
-                + "          \"uiTokenAmount\": {"
-                + "            \"uiAmount\": 100,"
-                + "            \"decimals\": 6"
-                + "          }"
-                + "        }"
-                + "      ],"
-                + "      \"postTokenBalances\": ["
-                + "        {"
-                + "          \"accountIndex\": 2,"
-                + "          \"mint\": \"TokenMintAddress\","
-                + "          \"uiTokenAmount\": {"
-                + "            \"uiAmount\": 90,"
-                + "            \"decimals\": 6"
-                + "          }"
-                + "        }"
-                + "      ]"
-                + "    }"
-                + "  }"
-                + "}";
+/**
+ * Websocket客户端
+ *
+ * @param <P> 请求体的类型
+ * @param <T> 返回值的类型
+ */
+@Slf4j
+public abstract class AbstractWebsocketClient<P, T> {
 
-        // 解析 JSON 响应
-        JSONObject response = JSON.parseObject(jsonResponse);
-        JSONObject result = response.getJSONObject("result");
+    private static final int MAX_FRAME_SIZE = 10 * 1024 * 1024;  // 10 MB or set to your desired size
 
-        // 获取币种信息 (mint 地址)
-        JSONArray preBalances = result.getJSONObject("meta").getJSONArray("preTokenBalances");
-        JSONArray postBalances = result.getJSONObject("meta").getJSONArray("postTokenBalances");
+    /**
+     * websocket的url字符串
+     */
+    protected String url;
 
-        if (preBalances.size() > 0 && postBalances.size() > 0) {
-            JSONObject preBalance = preBalances.getJSONObject(0);
-            JSONObject postBalance = postBalances.getJSONObject(0);
+    /**
+     * netty pipeline 最后一个执行的handler
+     */
+    protected final AbstractWebSocketClientHandler<P, T> handler;
 
-            // 获取 Token Mint 地址 (币种)
-            String tokenMint = preBalance.getString("mint");
+    /**
+     * 执行回调的线程池
+     */
+    @Getter
+    protected final ExecutorService callbackInvoker;
 
-            // 获取数量变化
-            double preAmount = preBalance.getJSONObject("uiTokenAmount").getDoubleValue("uiAmount");
-            double postAmount = postBalance.getJSONObject("uiTokenAmount").getDoubleValue("uiAmount");
-            double amountTransferred = preAmount - postAmount;
+    /**
+     * 代理
+     */
+    @Setter
+    protected NetworkProxy proxy = null;
 
-            System.out.println("Token Mint: " + tokenMint);
-            System.out.println("Amount Transferred: " + amountTransferred);
+    @Setter
+    protected HttpHeaders headers = new DefaultHttpHeaders();
+
+    /**
+     * 空闲时间
+     */
+    @Setter
+    protected int allIdleTimeSecond = 10;
+
+    /**
+     * 重链接次数
+     */
+    private final AtomicInteger reconnectTimes = new AtomicInteger(0);
+
+    /**
+     * 重连锁
+     */
+    private final ReentrantLock reconnectLock = new ReentrantLock();
+
+    /**
+     * 启动中阻塞的condition
+     */
+    private final Condition startingWaitCondition = reconnectLock.newCondition();
+
+    /**
+     * 客户端当前状态
+     */
+    @Getter
+    private volatile WebsocketClientStatus clientStatus = WebsocketClientStatus.NEW;
+
+
+    /**
+     * 关闭时的回调列表
+     */
+    private final List<WSCloseHandler> closeHandlerList = new ArrayList<>();
+
+    @Setter
+    @Getter
+    private String name;
+
+    private Bootstrap bootstrap;
+
+    private EventLoopGroup eventLoopGroup;
+
+    private URI uri;
+
+    private String host;
+
+    private int port;
+
+    private boolean useSSL;
+
+    private Channel channel;
+
+    public AbstractWebsocketClient(
+            String url,
+            AbstractWebSocketClientHandler<P, T> handler
+    ) {
+        this.url = url;
+        this.handler = handler;
+        this.handler.websocketClient = this;
+
+        this.callbackInvoker = Executors.newVirtualThreadPerTaskExecutor();
+    }
+
+    private void init() throws SSLException, URISyntaxException {
+
+        resolveParamFromUrl();
+
+        WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(
+                uri, WebSocketVersion.V13, null, true, headers, MAX_FRAME_SIZE
+        );
+        handler.init(handshaker);
+
+        final SslContext sslCtx;
+        if (useSSL) {
+            sslCtx = SslContextBuilder.forClient()
+                    .trustManager(InsecureTrustManagerFactory.INSTANCE).build();
         } else {
-            System.out.println("No token balances found.");
+            sslCtx = null;
         }
 
-        // 检查是否为 SOL 转账
-        JSONArray preBalancesLamports = result.getJSONObject("meta").getJSONArray("preBalances");
-        JSONArray postBalancesLamports = result.getJSONObject("meta").getJSONArray("postBalances");
+        bootstrap = new Bootstrap();
 
-        if (preBalancesLamports != null && postBalancesLamports != null) {
-            long preLamports = preBalancesLamports.getLongValue(0);
-            long postLamports = postBalancesLamports.getLongValue(0);
-            long solTransferred = preLamports - postLamports;
+        eventLoopGroup = new NioEventLoopGroup();
+        bootstrap.group(eventLoopGroup)
+                .channel(NioSocketChannel.class)
+                .remoteAddress(host, port)
+                .option(ChannelOption.TCP_NODELAY, true)
+                .option(ChannelOption.SO_KEEPALIVE, true)
+                .handler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override
+                    protected void initChannel(NioSocketChannel ch) {
+                        ChannelPipeline p = ch.pipeline();
+                        if (proxy != null) {
+                            p.addLast(new Socks5ProxyHandler(proxy.getAddress(), proxy.getUsername(), proxy.getPassword()));
+                        }
 
-            System.out.println("SOL Transferred (lamports): " + solTransferred);
+                        if (sslCtx != null) {
+                            p.addLast(sslCtx.newHandler(ch.alloc(), uri.getHost(), port));
+                        }
+
+                        p.addLast("http-chunked", new ChunkedWriteHandler()); // 支持大数据流
+
+
+                        p.addLast(new HttpClientCodec());
+                        p.addLast(new HttpObjectAggregator(81920));
+                        p.addLast(new IdleStateHandler(0, 0, allIdleTimeSecond, TimeUnit.SECONDS));
+                        p.addLast(new ChunkedWriteHandler());
+
+                        p.addLast(new WebSocketFrameAggregator(MAX_FRAME_SIZE));  // 设置聚合器的最大帧大小
+
+
+                        p.addLast(handler);
+                    }
+                });
+    }
+    /**
+     * 链接服务端
+     */
+    public CompletableFuture<Boolean> connect() {
+        return connect(null);
+    }
+
+    /**
+     * 链接服务端
+     */
+    public CompletableFuture<Boolean> connect(WSCloseHandler wsCloseHandler) {
+
+        /*
+         * 添加关闭的回调
+         */
+        if(wsCloseHandler != null) {
+            synchronized (closeHandlerList) {
+                closeHandlerList.add(wsCloseHandler);
+            }
+        }
+
+        return switch (clientStatus) {
+            case NEW, STOP -> reconnect();
+            case STARTING -> waitForStarting();
+            case RUNNING -> {
+                log.warn("WS客户端[{}}正在运行, clientStatus[{}]", url, clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN -> throw new RuntimeException("");
+        };
+    }
+
+
+    /**
+     * 重链接
+     *
+     * @return CompletableFuture<Void>
+     */
+    public CompletableFuture<Boolean> reconnect() {
+        return switch (clientStatus) {
+            case NEW, STOP -> doReconnect();
+            case STARTING -> waitForStarting();
+            case RUNNING -> {
+                log.warn("WS客户端[{}}正在启动或运行, 不能reconnect. clientStatus[{}]", url, clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN ->  CompletableFuture.supplyAsync(()->{
+                log.error("client[{}] already shutdown", name);
+                return false;
+            });
+        };
+    }
+
+    /**
+     * 执行重连接，带重试逻辑
+     *
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Boolean> doReconnect() {
+        clientStatus = WebsocketClientStatus.STARTING;
+
+        return CompletableFuture.supplyAsync(() -> {
+            //Step 1 重连次数超过限制，关闭
+            if (reconnectTimes.get() > NettyConstants.RECONNECT_LIMIT) {
+                log.error("reconnect times out of limit [{}], close websocket client", NettyConstants.RECONNECT_LIMIT);
+                close();
+                return false;
+            }
+
+            AtomicBoolean isSuccess = new AtomicBoolean(false);
+
+            //Step 2 重连逻辑
+            //Step 2.1 加锁保证只要一个线程进行重连
+            reconnectLock.lock();
+            try {
+
+                //Step 2.2 已经再running状态，直接返回true。变为shutdown、stop状态，直接返回false
+                if (clientStatus.equals(WebsocketClientStatus.RUNNING)) {
+                    log.info("client started by other thread");
+                    return true;
+                } else if(clientStatus.equals(WebsocketClientStatus.SHUTDOWN) || clientStatus.equals(WebsocketClientStatus.STOP)) {
+                    log.error("clint stop/shutdown when client starting");
+                    return false;
+                }
+
+                //Step 3 初始化
+                log.info("开始初始化WS客户端");
+                try {
+                    init();
+                } catch (SSLException | URISyntaxException e) {
+                    throw new RuntimeException("初始化WS客户端发生错误", e);
+                }
+                log.info("初始化WS客户端完成，开始链接服务器 [{}]", url);
+
+
+                //Step 4 链接服务器
+                while (reconnectTimes.incrementAndGet() <= NettyConstants.RECONNECT_LIMIT) {
+
+                    //Step 4.1 每进行重连都会先将次数加1并设置定时任务将重连次数减1
+                    eventLoopGroup.schedule(() -> {
+                        reconnectTimes.decrementAndGet();
+                    }, 180, TimeUnit.SECONDS);
+
+                    log.info("start connect client [{}], url[{}], current times [{}]", name, url, reconnectTimes.get());
+
+                    //Step 4.2 latch用于同步等等链接完成
+                    CountDownLatch latch = new CountDownLatch(1);
+
+                    //Step 4.3 延迟再进行连接
+                    eventLoopGroup.schedule(() -> {
+                        try {
+                            channel = bootstrap.connect().sync().channel();
+
+                            handler.handshakeFuture().sync();
+
+                            channel.attr(NettyConstants.CLIENT_NAME).set(name);
+
+                            //Step 4.4 连接成功设置标识
+                            isSuccess.set(true);
+                        } catch (Exception e) {
+                            log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(), e);
+                        } finally {
+                            latch.countDown();
+                        }
+                    }, NettyConstants.RECONNECT_DELAY_SECONDS, TimeUnit.SECONDS);
+
+                    //Step 4.5 等待链接完成
+                    try {
+                        latch.await();
+                    } catch (InterruptedException e) {
+                        log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(), e);
+                    }
+
+                    //Step 4.6 链接成功则跳出循环
+                    if (isSuccess.get()) {
+                        log.info("connect client [{}], url[{}] success, current times [{}]", name, url, reconnectTimes.get());
+
+                        clientStatus = WebsocketClientStatus.RUNNING;
+
+                        reconnectTimes.set(0);
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                //exception 遇到未处理异常，直接关闭
+                close();
+                throw new RuntimeException(String.format("connect client [%s] appear unknown error", name), e);
+            } finally {
+                //Step 5 释放等待启动的线程
+                startingWaitCondition.signalAll();
+                reconnectLock.unlock();
+            }
+
+            //Step 6 未成功启动，关闭并抛出异常
+            if (!isSuccess.get()) {
+                log.error("reconnect times out of limit [{}], close websocket client", NettyConstants.RECONNECT_LIMIT);
+                close();
+                throw new RuntimeException("reconnect times out of limit");
+            }
+
+            return true;
+        }, callbackInvoker);
+    }
+
+
+    /**
+     * 停止WebSocketClient
+     */
+    public void close() {
+        synchronized (closeHandlerList) {
+            log.info("closing websocket client [{}]", name);
+            if (channel != null) {
+                channel.close();
+            }
+
+            if (eventLoopGroup != null) {
+                eventLoopGroup.shutdownGracefully();
+            }
+            reconnectTimes.set(0);
+
+            clientStatus = WebsocketClientStatus.STOP;
+
+            //执行关闭回调
+            Iterator<WSCloseHandler> iterator = closeHandlerList.iterator();
+            while (iterator.hasNext()) {
+                WSCloseHandler closeHandler = iterator.next();
+                iterator.remove();
+
+                CompletableFuture.runAsync(closeHandler::onClosed, callbackInvoker);
+            }
+
+            log.warn("web socket client [{}] closed", name);
+        }
+    }
+
+    /**
+     * 彻底关闭客户端
+     */
+    public void shutdown() {
+        close();
+        clientStatus = WebsocketClientStatus.SHUTDOWN;
+        log.warn("web socket client [{}] already shutdown !", name);
+    }
+
+    /**
+     * 等待启动完成
+     *
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Boolean> waitForStarting() {
+        return CompletableFuture.supplyAsync(() -> {
+            log.warn("client [{}] is starting, waiting for complete", name);
+            reconnectLock.lock();
+            try {
+                while (clientStatus.equals(WebsocketClientStatus.RUNNING)) {
+                    startingWaitCondition.await();
+                }
+
+                if (clientStatus.equals(WebsocketClientStatus.STOP) || clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+                    log.error("启动WS客户端[{}]失败, ClientStatus [{}}", name, clientStatus);
+                    return false;
+                }
+                return true;
+            } catch (InterruptedException e) {
+                log.error("waiting for start client [{}] error", name);
+                throw new RuntimeException(e);
+            } finally {
+                reconnectLock.unlock();
+            }
+        }, callbackInvoker);
+    }
+
+    /**
+     * 发送请求, 注册响应监听
+     *
+     * @param request 请求体
+     */
+    public CompletableFuture<T> sendRequest(P request) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (request == null) {
+                log.error("request is null");
+                return null;
+            }
+
+            CountDownLatch latch = new CountDownLatch(1);
+            AtomicReference<T> jb = new AtomicReference<>(null);
+
+            boolean flag = handler.registryRequest(request, response -> {
+                latch.countDown();
+                jb.set(response);
+            });
+
+            if (flag) {
+                log.info("send request [{}]", request);
+                channel.writeAndFlush(new TextWebSocketFrame(JSON.toJSONString(request)));
+                log.debug("send request [{}] success", request);
+            } else {
+                log.error("request id registered");
+                return null;
+            }
+
+            try {
+                if (!latch.await(NettyConstants.REQUEST_WAITE_SECONDS, TimeUnit.SECONDS)) return null;
+
+                return jb.get();
+            } catch (InterruptedException e) {
+                log.error("send request interrupted", e);
+                return null;
+            }
+        }, callbackInvoker);
+    }
+
+    /**
+     * 发送ping
+     */
+    public void sendPing() {
+        log.debug("client [{}] send ping {}", name, url);
+        channel.writeAndFlush(new PingWebSocketFrame());
+    }
+
+    /**
+     * 发送pong
+     */
+    public void sendPong() {
+        log.debug("client [{}] send pong {}", name, url);
+        channel.writeAndFlush(new PongWebSocketFrame());
+    }
+
+    /**
+     * 解析参数
+     *
+     * @throws URISyntaxException url解析错误
+     */
+    private void resolveParamFromUrl() throws URISyntaxException {
+        uri = new URI(url);
+        String scheme = uri.getScheme() == null ? "ws" : uri.getScheme();
+        host = uri.getHost() == null ? "127.0.0.1" : uri.getHost();
+        if (uri.getPort() == -1) {
+            if ("ws".equalsIgnoreCase(scheme)) {
+                port = 80;
+            } else if ("wss".equalsIgnoreCase(scheme)) {
+                port = 443;
+            } else {
+                port = -1;
+            }
+        } else {
+            port = uri.getPort();
+        }
+
+        if (!"ws".equalsIgnoreCase(scheme) && !"wss".equalsIgnoreCase(scheme)) {
+            log.error("Only WS(S) is supported.");
+            throw new IllegalArgumentException("url error, Only WS(S) is supported.");
+        }
+
+        useSSL = "wss".equalsIgnoreCase(scheme);
+    }
+}
+
+
+package cn.com.helei.depin.core.netty.base;
+
+import cn.com.helei.depin.core.netty.constants.NettyConstants;
+import cn.hutool.core.util.StrUtil;
+import io.netty.channel.*;
+
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+
+
+/**
+ * WebSocket客户端处理器抽象类
+ * 能够处理请求响应类型的消息。
+ * 其它类型的消息要通过handleOtherMessage()抽象方法处理
+ *
+ * @param <Resp>
+ */
+@Slf4j
+@ChannelHandler.Sharable
+public abstract class AbstractWebSocketClientHandler<Req, Resp> extends BaseWebSocketClientHandler<Req, Resp> {
+
+
+    /**
+     * 存放请求响应的回调
+     */
+    protected final ConcurrentMap<String, HandlerEntity<Resp>> requestIdMap = new ConcurrentHashMap<>();
+
+
+    @Override
+    protected void whenReceiveMessage(String text) {
+        Resp message = convertMessageToRespType(text);
+
+        String responseId = getResponseId(message);
+
+        if (StrUtil.isNotBlank(responseId)) {
+            //有id，是发送请求的响应
+            //提交response
+            handleResponseMessage(responseId, message);
+        } else {
+            //没有id，按其它格式处理
+            handleOtherMessage(message);
+        }
+    }
+
+
+    /**
+     * 注册request
+     *
+     * @param request request
+     * @return 是否注册成功
+     */
+    public boolean registryRequest(Req request, Consumer<Resp> callback) {
+        AtomicBoolean res = new AtomicBoolean(false);
+        String requestId = getRequestId(request);
+
+        if (StrUtil.isBlank(requestId)) return false;
+
+        requestIdMap.compute(requestId, (k, v) -> {
+            if (v == null) {
+                res.set(true);
+                long expireTime = System.currentTimeMillis() + NettyConstants.REQUEST_WAITE_SECONDS * 1000;
+                v = new HandlerEntity<>(expireTime, callback);
+                log.debug("registry request id[{}] success, expire time [{}]", requestId, expireTime);
+            }
+            return v;
+        });
+
+        return res.get();
+    }
+
+    /**
+     * 处理请求响应的消息
+     *
+     * @param id       id
+     * @param response 响应消息体
+     */
+    protected void handleResponseMessage(String id, Resp response) {
+        HandlerEntity<Resp> handlerEntity = requestIdMap.get(id);
+
+        if (System.currentTimeMillis() > handlerEntity.getExpireTime()) {
+            log.warn("请求[{}]得到响应超时", id);
+        } else {
+            websocketClient.callbackInvoker.execute(() -> handlerEntity.getCallback().accept(response));
+        }
+    }
+
+    /**
+     * 处理其他类型消息
+     *
+     * @param message 消息
+     */
+    protected abstract void handleOtherMessage(Resp message);
+
+
+    /**
+     * 将websocket收到的文本消息转换为响应类型 T
+     *
+     * @param message websocket收到的原始消息
+     * @return typedMessage
+     */
+    public abstract Resp convertMessageToRespType(String message);
+
+
+    /**
+     * 获取请求id
+     *
+     * @param request request
+     * @return id
+     */
+    public abstract String getRequestId(Req request);
+
+    /**
+     * 获取响应id
+     *
+     * @param response 响应
+     * @return id
+     */
+    public abstract String getResponseId(Resp response);
+}
+
+
+package cn.com.helei.depin.core.netty.base;
+
+import cn.com.helei.depin.core.netty.constants.NettyConstants;
+import io.netty.channel.*;
+import io.netty.handler.codec.http.FullHttpResponse;
+import io.netty.handler.codec.http.websocketx.*;
+import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.util.CharsetUtil;
+import lombok.extern.slf4j.Slf4j;
+
+
+/**
+ * WebSocket客户端处理器基础类
+ * 处理连接握手
+ *
+ * @param <P>
+ * @param <T>
+ */
+@Slf4j
+@ChannelHandler.Sharable
+public abstract class BaseWebSocketClientHandler<P, T> extends SimpleChannelInboundHandler<Object> {
+    private WebSocketClientHandshaker handshaker;
+
+    private ChannelPromise handshakeFuture;
+
+    protected AbstractWebsocketClient<P, T> websocketClient;
+
+    /**
+     * 收到消息处理
+     *
+     * @param text 消息字符串
+     */
+    protected abstract void whenReceiveMessage(String text);
+
+
+    public void init(WebSocketClientHandshaker handshaker) {
+        this.handshaker = handshaker;
+    }
+
+    @Override
+    public void handlerAdded(ChannelHandlerContext ctx) {
+        handshakeFuture = ctx.newPromise();
+    }
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) {
+        Channel channel = ctx.channel();
+        log.info("WebSocket Client [{}] connected!", websocketClient.getName());
+        channel.attr(NettyConstants.CLIENT_NAME).set(websocketClient.getName());
+        handshaker.handshake(channel);
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+        log.warn("WebSocket Client [{}] disconnected!", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
+
+        websocketClient.close();
+    }
+
+    @Override
+    public void channelUnregistered(ChannelHandlerContext ctx) throws Exception {
+        log.warn("WebSocket Client [{}] unregistered!, start reconnect", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
+
+        websocketClient.reconnect();
+    }
+
+    @Override
+    public void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
+        Channel ch = ctx.channel();
+        // 如果握手未完成，处理 FullHttpResponse
+        if (!handshaker.isHandshakeComplete()) {
+            if (msg instanceof FullHttpResponse response) {
+                try {
+                    handshaker.finishHandshake(ch, response);
+                    log.info("WebSocket client [{}] Handshake complete!", ch.attr(NettyConstants.CLIENT_NAME).get());
+                    handshakeFuture.setSuccess();
+                } catch (WebSocketHandshakeException e) {
+                    log.info("WebSocket client [{}] Handshake failed!", ch.attr(NettyConstants.CLIENT_NAME).get());
+                    handshakeFuture.setFailure(e);
+                }
+                return;
+            }
+        }
+
+        if (msg instanceof FullHttpResponse response) {
+            if (response.status().code() / 100 > 3) {
+                throw new IllegalStateException(
+                        "Unexpected FullHttpResponse (getStatus=" + response.status() +
+                                ", content=" + response.content().toString(CharsetUtil.UTF_8) + ')');
+            }
+        } else if (msg instanceof WebSocketFrame frame) {
+            switch (frame) {
+                case TextWebSocketFrame textFrame -> {
+                    log.debug("websocket client [{}] 接收到的消息：{}", ch.attr(NettyConstants.CLIENT_NAME).get(), textFrame.text());
+                    whenReceiveMessage(textFrame.text());
+                }
+                case PongWebSocketFrame pongWebSocketFrame -> handlerPong(ch, pongWebSocketFrame);
+                case PingWebSocketFrame pingWebSocketFrame -> handlerPing(ch, pingWebSocketFrame);
+                case CloseWebSocketFrame closeWebSocketFrame -> handlerClose(ch, closeWebSocketFrame);
+                default -> {
+                    log.warn("channel[{}]收到位置类型的消息[{}]", ch.attr(NettyConstants.CLIENT_NAME).get(), frame.getClass().getName());
+                }
+            }
+        }
+    }
+
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        if (!handshakeFuture.isDone()) {
+            handshakeFuture.setFailure(cause);
+        }
+        ctx.close();
+        log.error("业务处理错误，websocket client关闭", cause);
+    }
+
+    @Override
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+        // IdleStateHandler 所产生的 IdleStateEvent 的处理逻辑.
+        if (evt instanceof IdleStateEvent e) {
+            switch (e.state()) {
+                case READER_IDLE:
+                    handleReaderIdle(ctx);
+                    break;
+                case WRITER_IDLE:
+                    handleWriterIdle(ctx);
+                    break;
+                case ALL_IDLE:
+                    handleAllIdle(ctx);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+
+    /**
+     * 处理close消息
+     *
+     * @param ch                  Channel ch
+     * @param closeWebSocketFrame closeWebSocketFrame
+     */
+    protected void handlerClose(Channel ch, CloseWebSocketFrame closeWebSocketFrame) {
+        log.warn("websocket client关闭");
+        ch.close();
+    }
+
+
+    /**
+     * 处理pong消息
+     *
+     * @param ch                 Channel ch
+     * @param pongWebSocketFrame pongWebSocketFrame
+     */
+    protected void handlerPong(Channel ch, PongWebSocketFrame pongWebSocketFrame) {
+        log.debug("WebSocket Client [{}] received pong", ch.attr(NettyConstants.CLIENT_NAME).get());
+
+    }
+
+
+    /**
+     * 处理ping消息
+     *
+     * @param ch                 ch
+     * @param pingWebSocketFrame pingWebSocketFrame
+     */
+    protected void handlerPing(Channel ch, PingWebSocketFrame pingWebSocketFrame) {
+        log.debug("WebSocket Client [{}] received ping", ch.attr(NettyConstants.CLIENT_NAME).get());
+        websocketClient.sendPong();
+    }
+
+    /**
+     * 超过限定时间channel没有读时触发
+     *
+     * @param ctx ctx
+     */
+    protected void handleReaderIdle(ChannelHandlerContext ctx) {
+    }
+
+    /**
+     * 超过限定时间channel没有写时触发
+     *
+     * @param ctx ctx
+     */
+    protected void handleWriterIdle(ChannelHandlerContext ctx) {
+    }
+
+    /**
+     * 超过限定时间channel没有读写时触发
+     *
+     * @param ctx ctx
+     */
+    protected void handleAllIdle(ChannelHandlerContext ctx) {
+        websocketClient.sendPing();
+    }
+
+    public ChannelFuture handshakeFuture() {
+        return handshakeFuture;
+    }
+}
+
+
+package cn.com.helei.depin.core.netty.base;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+
+import java.util.function.Consumer;
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@EqualsAndHashCode
+public class HandlerEntity<T> {
+    private long expireTime;
+
+    private Consumer<T> callback;
+}
+
+
+package cn.com.helei.depin.core.netty.base;
+
+
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandlerContext;
+
+/**
+ * netty事件处理器
+ */
+public interface NettyClientEventHandler {
+
+    /**
+     * 激活事件
+     * @param ctx ctx
+     */
+    default void activeHandler(ChannelHandlerContext ctx){}
+
+    /**
+     * 关闭事件
+     * @param channel channel
+     */
+    default void closeHandler(Channel channel){}
+
+    /**
+     * 异常事件
+     * @param ctx ctx
+     * @param cause cause
+     */
+    void exceptionHandler(ChannelHandlerContext ctx, Throwable cause);
+}
+
+
+
+package cn.com.helei.depin.core.netty.constants;
+
+import io.netty.util.AttributeKey;
+
+public class NettyConstants {
+
+    /**
+     * 一朕的最大长度
+     */
+    public final static int MAX_FRAME_LENGTH = 1024;
+
+
+    /**
+     * 放在netty channel 里的 client_name 的 key
+     */
+    public static final AttributeKey<String> CLIENT_NAME = AttributeKey.valueOf("client_name");
+
+    /**
+     * 请求等待时间
+     */
+    public static final long REQUEST_WAITE_SECONDS = 60;
+
+    /**
+     * netty客户端断线重连时间
+     */
+    public static final int RECONNECT_DELAY_SECONDS = 5;
+
+
+    /**
+     * netty客户端断线重连次数
+     */
+    public static final int RECONNECT_LIMIT = 3;
+}
+
+
+package cn.com.helei.depin.core.netty.constants;
+
+
+/**
+ * WS客户端状态
+ */
+public enum WebsocketClientStatus {
+
+    /**
+     * 新建
+     */
+    NEW,
+
+    /**
+     * 正在启动
+     */
+    STARTING,
+
+    /**
+     * 正在运行
+     */
+    RUNNING,
+
+    /**
+     * 已暂停
+     */
+    STOP,
+
+    /**
+     * 已禁止使用
+     */
+    SHUTDOWN
+}
+
+
+package cn.com.helei.depin.core.netty.handler;
+
+import cn.com.helei.depin.core.netty.constants.NettyConstants;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+
+
+@Slf4j
+public class RequestResponseHandler<T> {
+
+    private final ConcurrentMap<String, HandlerEntity<T>> requestIdMap = new ConcurrentHashMap<>();
+
+
+    /**
+     * 注册request
+     *
+     * @param id request的id
+     * @return 是否注册成功
+     */
+    public boolean registryRequest(String id, Consumer<T> callback) {
+        AtomicBoolean res = new AtomicBoolean(false);
+        requestIdMap.compute(id, (k, v) -> {
+            if (v == null) {
+                res.set(true);
+                long expireTime = System.currentTimeMillis() + NettyConstants.REQUEST_WAITE_SECONDS * 1000;
+                v = new HandlerEntity<>(expireTime, callback);
+                log.debug("registry request id[{}] success, expire time [{}]", id, expireTime);
+            }
+            return v;
+        });
+
+        return res.get();
+    }
+
+    /**
+     * 提交resoonse
+     *
+     * @param id       id
+     * @param response response
+     */
+    public boolean submitResponse(String id, T response) {
+        HandlerEntity<T> entity = requestIdMap.get(id);
+        if (entity == null) {
+            log.warn("request id[{}} didn't exist", id);
+            return false;
+        } else {
+            long currentTimeMillis = System.currentTimeMillis();
+            if (entity.expireTime < currentTimeMillis) {
+                log.warn("request id[{}] expired, expire time[{}], currentTime[{}] cancel invoke callback",
+                        id, entity.expireTime, currentTimeMillis);
+                return false;
+            } else {
+                entity.callback.accept(response);
+                log.debug("invoke request id[{}] callback success", id);
+                return true;
+            }
+        }
+    }
+
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    @EqualsAndHashCode
+    static class HandlerEntity<T> {
+        private long expireTime;
+
+        private Consumer<T> callback;
+    }
+}
+
+
+package cn.com.helei.depin.core.netty.handler;
+
+public interface WSCloseHandler {
+
+
+    void onClosed();
+}
+
+
+package cn.com.helei.depin.core.network;
+
+import lombok.Data;
+
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+
+@Data
+public class NetworkProxy {
+    private Integer id;
+
+    private String host;
+
+    private int port;
+
+    private String username;
+
+    private String password;
+
+    public SocketAddress getAddress() {
+        return new InetSocketAddress(host, port);
+    }
+}
+
+package cn.com.helei.depin.core.network;
+
+import lombok.Setter;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+public class NetworkProxyPool {
+
+    @Setter
+    private HashSet<NetworkProxy> pool;
+
+    private ConcurrentMap<Integer, NetworkProxy> idMapProxy;
+
+    public static NetworkProxyPool loadYamlNetworkPool(String filename) {
+        Yaml yaml = new Yaml();
+        try (InputStream inputStream = NetworkProxyPool.class.getClassLoader().getResourceAsStream(filename)) {
+            Map<String, Object> yamlData = yaml.load(inputStream);
+            Map<String, Object> depin = (Map<String, Object>) yamlData.get("depin");
+            Map<String, Object> network = (Map<String, Object>) depin.get("network");
+            Map<String, Object> proxy = (Map<String, Object>) network.get("proxy");
+
+            NetworkProxyPool networkProxyPool = yaml.loadAs(yaml.dump(proxy), NetworkProxyPool.class);
+
+            ConcurrentMap<Integer, NetworkProxy> map = new ConcurrentHashMap<>();
+            networkProxyPool.pool.forEach(networkProxy -> map.put(networkProxy.getId(), networkProxy));
+            networkProxyPool.idMapProxy = map;
+
+            return networkProxyPool;
+        } catch (IOException e) {
+            throw new RuntimeException(String.format("价值配置网络代理池文件[%s]发生错误", filename));
+        }
+    }
+
+
+    public NetworkProxy getProxy(Integer id) {
+        return idMapProxy.get(id);
+    }
+
+}
+
+
+
+
+package cn.com.helei.depin.core.util;
+
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class NamedThreadFactory implements ThreadFactory {
+
+    private final String namePrefix;
+    private final AtomicInteger threadNumber = new AtomicInteger(1);
+
+    public NamedThreadFactory(String namePrefix) {
+        this.namePrefix = namePrefix;
+    }
+
+    @Override
+    public Thread newThread(Runnable r) {
+        // 使用指定的名称前缀和自动编号来创建线程名称
+        Thread thread = new Thread(r, namePrefix + "-" + threadNumber.getAndIncrement());
+        // 设置为守护线程（可选）
+        thread.setDaemon(false);
+        return thread;
+    }
+}
+
+
+package cn.com.helei.depin.core.util;
+
+import cn.com.helei.depin.core.network.NetworkProxy;
+import com.alibaba.fastjson.JSONObject;
+import lombok.extern.slf4j.Slf4j;
+import okhttp3.*;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.io.IOException;
+import java.net.Proxy;
+import java.net.SocketTimeoutException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+
+@Slf4j
+public class RestApiClient {
+
+    private static final int RETRY_TIMES = 3;
+
+    private final OkHttpClient okHttpClient;
+
+    private final ExecutorService executorService;
+
+    public RestApiClient(
+            NetworkProxy proxy,
+            ExecutorService executorService
+    ) {
+        this.executorService = executorService;
+        OkHttpClient.Builder builder = new OkHttpClient.Builder();
+        if (proxy != null) {
+            builder.proxy(new Proxy(Proxy.Type.HTTP, proxy.getAddress()))
+                    .authenticator(new Authenticator() {
+                        @NotNull
+                        @Override
+                        public Request authenticate(@Nullable Route route, @NotNull Response response) throws IOException {
+                            String credential = Credentials.basic(proxy.getUsername(), proxy.getPassword());
+                            return response.request().newBuilder()
+                                    .header("Authorization", credential)
+                                    .build();
+                        }
+                    });
+        }
+        this.okHttpClient = builder.build();
+    }
+
+
+    /**
+     * 发送请求，如果有asKey参数不为null，则会鉴权
+     *
+     * @param method method
+     * @param params params
+     * @param body   body
+     * @return CompletableFuture<JSONObject>
+     */
+    public CompletableFuture<String> request(
+            String url,
+            String method,
+            JSONObject params,
+            JSONObject body
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            // 创建表单数据
+            StringBuilder queryString = new StringBuilder();
+
+
+            if (params != null) {
+                params.keySet().forEach(key -> {
+                    queryString.append(key).append("=").append(params.get(key)).append("&");
+                });
+
+                if (!queryString.isEmpty()) {
+                    queryString.deleteCharAt(queryString.length() - 1);
+                }
+            }
+
+            String requestUrl = url + "?" + queryString;
+            FormBody.Builder bodyBuilder = new FormBody.Builder();
+
+            if (body != null) {
+                body.forEach((k, v) -> bodyBuilder.add(k, String.valueOf(v)));
+            }
+
+            Request.Builder builder = new Request.Builder();
+            builder.header("Content-Type", "application/json");
+
+            // 创建 POST 请求
+            builder.url(requestUrl);
+            String upperCase = method.toUpperCase();
+            if (upperCase.equals("GET")) {
+                builder.get();
+            } else {
+                builder.method(upperCase, bodyBuilder.build());
+            }
+
+            Request request = builder.build();
+
+            log.info("创建请求 url[{}], method[{}]成功，开始请求服务器", url, method);
+
+            for (int i = 0; i < RETRY_TIMES; i++) {
+                // 发送请求并获取响应
+                try (Response response = okHttpClient.newCall(request).execute()) {
+                    if (response.isSuccessful()) {
+                        return response.body() == null ? "{}" : response.body().string();
+                    } else {
+                        log.error("请求url [{}] 失败， code [{}]， {}", url, response.code(), response.body());
+                        break;
+                    }
+                } catch (SocketTimeoutException e) {
+                    log.warn("请求[{}]超时，尝试重新请求 [{}/{}]", url, i, RETRY_TIMES);
+                } catch (IOException e) {
+                    log.error("请求url [{}] 失败", url, e);
+                    throw new RuntimeException(e);
+                }
+            }
+
+            return null;
+        }, executorService);
+    }
+}
+
+
+package cn.com.helei.depin.core.util;
+
+import java.util.*;
+
+public class UserAgentPool {
+
+    public static final UserAgentPool DEFAULT = new UserAgentPool();
+
+    private volatile boolean isInit = false;
+
+    private final Map<String, Integer> userAgentPool = new HashMap<>();
+
+
+    public UserAgentPool() {
+        init();
+    }
+
+
+    public synchronized String getUserAgent() {
+
+        String res = "";
+        Optional<String> first = userAgentPool.entrySet().stream().sorted((e1, e2) -> e1.getValue().compareTo(e2.getValue()))
+                .map(Map.Entry::getKey).findFirst();
+
+        if (first.isPresent()) {
+            userAgentPool.compute(first.get(), (k, v) -> (v == null ? 0 : v) + 1);
+            res = first.get();
+        }
+
+        return res;
+    }
+
+
+    public synchronized void backUserAgent(String userAgent) {
+        userAgentPool.compute(userAgent, (k, v) -> Math.max((v == null ? 0 : v) - 1, 0));
+    }
+
+
+    private void init() {
+        if (isInit) return;
+
+        synchronized (this) {
+            if (isInit) return;
+            userAgentPool.put("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36", 0);
+
+            isInit = true;
         }
     }
 }
+
+package cn.com.helei.depin.core;
+
+import cn.com.helei.depin.core.dto.DepinClientAccount;
+import cn.com.helei.depin.core.netty.base.AbstractWebsocketClient;
+import cn.com.helei.depin.core.util.RestApiClient;
+import cn.com.helei.depin.core.util.UserAgentPool;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+
+@Slf4j
+@Getter
+public class AbstractDepinClient<T extends DepinClientAccount, Req, Resp> extends AbstractWebsocketClient<Req, Resp> {
+
+    public static final UserAgentPool userAgentPool = UserAgentPool.DEFAULT;
+
+    private final RestApiClient restApiClient;
+
+    private final T depinClientAccount;
+
+    public AbstractDepinClient(
+            T depinClientAccount,
+            AbstractDepinWSClientHandler<Req, Resp> handler
+    ) {
+        super(
+                depinClientAccount.getConnectUrl(),
+                handler
+        );
+        super.setName(depinClientAccount.getName());
+        super.setProxy(depinClientAccount.getNetworkProxy());
+        super.setHeaders(depinClientAccount.getHeaders());
+
+        this.depinClientAccount = depinClientAccount;
+        this.restApiClient = new RestApiClient(depinClientAccount.getNetworkProxy(), super.getCallbackInvoker());
+    }
+}
+
+
+package cn.com.helei.depin.core;
+
+import cn.com.helei.depin.core.netty.base.AbstractWebSocketClientHandler;
+import io.netty.channel.ChannelHandlerContext;
+
+public abstract class AbstractDepinWSClientHandler<Req, Resp> extends AbstractWebSocketClientHandler<Req, Resp> {
+
+
+    @Override
+    protected void handleAllIdle(ChannelHandlerContext ctx) {
+        websocketClient.sendRequest(heartBeatMessage());
+    }
+
+
+    protected abstract Req heartBeatMessage();
+}
+
+
+package cn.com.helei.depin.project.openLedger;
+
+import cn.com.helei.depin.core.dto.DepinClientAccount;
+import cn.com.helei.depin.core.env.BrowserEnvPool;
+import cn.com.helei.depin.core.network.NetworkProxyPool;
+import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.HttpHeaders;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
+
+@Data
+public class OpenLedgerConfig {
+
+    /**
+     * 并发数量
+     */
+    private int concurrentCount = 20;
+
+
+    /**
+     * 网络代理池配置文件名
+     */
+    private String networkPoolConfig = "network-proxy.yaml";
+
+    /**
+     * 网络代理池
+     */
+    private NetworkProxyPool networkProxyPool;
+
+    /**
+     * 浏览器环境池配置文件名
+     */
+    private String browserEnvPoolConfig = "browser-env.yaml";
+
+    /**
+     * 浏览器环境池
+     */
+    private BrowserEnvPool browserEnvPool;
+
+    /**
+     * 连接url
+     */
+    private String baseUrl;
+
+    /**
+     * 浏览器标识
+     */
+    private String origin;
+
+    /**
+     * 账户列表
+     */
+    private List<OpenLedgerAccount> accounts;
+
+
+    public static void main(String[] args) {
+        OpenLedgerConfig openLedgerConfig = loadYamlConfig("openledger.yaml");
+        System.out.println(openLedgerConfig);
+    }
+
+    public static OpenLedgerConfig loadYamlConfig(String classpath) {
+        Yaml yaml = new Yaml();
+        try (InputStream inputStream = OpenLedgerConfig.class.getClassLoader().getResourceAsStream(classpath)) {
+            Map<String, Object> yamlData = yaml.load(inputStream);
+            Map<String, Object> depin = (Map<String, Object>) yamlData.get("depin");
+            Map<String, Object> openledger = (Map<String, Object>) depin.get("openledger");
+
+            //Step 1 基础配置文件
+            OpenLedgerConfig openLedgerConfig = yaml.loadAs(yaml.dump(openledger), OpenLedgerConfig.class);
+
+            //Step 2 网络代理池
+            NetworkProxyPool loadedYamlNetworkProxyPool = NetworkProxyPool.loadYamlNetworkPool(openLedgerConfig.getNetworkPoolConfig());
+            openLedgerConfig.setNetworkProxyPool(loadedYamlNetworkProxyPool);
+
+            //Step 3 环境池
+            BrowserEnvPool loadedYamlBrowserEnvPool = BrowserEnvPool.loadYamlBrowserEnvPool(openLedgerConfig.getBrowserEnvPoolConfig());
+            openLedgerConfig.setBrowserEnvPool(loadedYamlBrowserEnvPool);
+
+
+            //Step 4 账户列表完善
+            openLedgerConfig.getAccounts().forEach(openLedgerAccount -> {
+                openLedgerAccount.setOpenLedgerConfig(openLedgerConfig);
+
+                openLedgerAccount.setNetworkProxy(loadedYamlNetworkProxyPool.getProxy(openLedgerAccount.getProxyId()));
+                openLedgerAccount.setBrowserEnv(loadedYamlBrowserEnvPool.getBrowserEnv(openLedgerAccount.getBrowserEnvId()));
+            });
+
+            return openLedgerConfig;
+        } catch (IOException e) {
+            throw new RuntimeException(String.format("价值配置网络代理池文件[%s]发生错误", classpath));
+        }
+    }
+
+
+    @EqualsAndHashCode(callSuper = true)
+    @Data
+    public static class OpenLedgerAccount extends DepinClientAccount {
+
+        private OpenLedgerConfig openLedgerConfig;
+
+        private String token;
+
+        @Override
+        public String getConnectUrl() {
+            return openLedgerConfig.baseUrl + "?authToken=" + token;
+        }
+
+        @Override
+        public HttpHeaders getHeaders() {
+            HttpHeaders headers = new DefaultHttpHeaders();
+            headers.add("Upgrade", "websocket")
+                    .add("Origin", openLedgerConfig.origin)
+                    .add("Cache-Control", "no-cache")
+                    .add("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                    .add("Pragma", "no-cache")
+                    .add("Connection", "Upgrade");
+            return headers;
+        }
+
+        @Override
+        public String toString() {
+            return "OpenLedgerAccount{" +
+                    "token='" + token + '\'' +
+                    '}';
+        }
+    }
+}
+
+
+package cn.com.helei.depin.project.openLedger;
+
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+import java.util.concurrent.Semaphore;
+
+@Slf4j
+public class OpenLedgerDepinApp {
+
+    private final OpenLedgerConfig openLedgerConfig;
+
+    private final Semaphore semaphore;
+
+    public OpenLedgerDepinApp(String configClasspath) {
+        this.openLedgerConfig = OpenLedgerConfig.loadYamlConfig(configClasspath);
+
+        this.semaphore = new Semaphore(openLedgerConfig.getConcurrentCount());
+    }
+
+
+    public void startAll() {
+        log.info("开始创建OpenLedger客户端");
+
+        List<OpenLedgerDepinClient> ledgerDepinClients = openLedgerConfig.getAccounts().stream().map(OpenLedgerDepinClient::new).toList();
+
+        log.info("OpenLedger客户端创建完毕");
+
+        for (OpenLedgerDepinClient ledgerDepinClient : ledgerDepinClients) {
+            try {
+                String name = ledgerDepinClient.getName();
+
+                log.info("账号[{}]开始连接", name);
+                ledgerDepinClient
+                        .connect()
+                        .thenAcceptAsync(success -> {
+                            if (!success) {
+                                log.error("账号[{}]连接失败", name);
+                            } else {
+                                log.info("账号[{}]连接成功", name);
+                            }
+                        });
+
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+}
+
+package cn.com.helei.depin.project.openLedger;
+
+import cn.com.helei.depin.core.AbstractDepinWSClientHandler;
+
+public class OpenLedgerDepinAutoAppHandler extends AbstractDepinWSClientHandler<String, String> {
+
+    private final OpenLedgerConfig.OpenLedgerAccount openLedgerAccount;
+
+    public OpenLedgerDepinAutoAppHandler(OpenLedgerConfig.OpenLedgerAccount openLedgerAccount) {
+        this.openLedgerAccount = openLedgerAccount;
+    }
+
+    @Override
+    protected void handleOtherMessage(String message) {
+
+    }
+
+    @Override
+    public String convertMessageToRespType(String message) {
+        return message;
+    }
+
+    @Override
+    public String getRequestId(String request) {
+        return "";
+    }
+
+    @Override
+    public String getResponseId(String response) {
+        return "";
+    }
+
+    @Override
+    protected String heartBeatMessage() {
+        return "";
+    }
+}
+
+
+package cn.com.helei.depin.project.openLedger;
+
+
+import cn.com.helei.depin.core.AbstractDepinClient;
+import lombok.extern.slf4j.Slf4j;
+
+
+
+@Slf4j
+public class OpenLedgerDepinClient extends AbstractDepinClient<OpenLedgerConfig.OpenLedgerAccount, String, String> {
+
+    public OpenLedgerDepinClient(OpenLedgerConfig.OpenLedgerAccount openLedgerAccount) {
+        super(openLedgerAccount, new OpenLedgerDepinAutoAppHandler(openLedgerAccount));
+    }
+
+
+}
+
+
+depin:
+  browser:
+    envs:
+      - id: 1
+        headers:
+          User-Agent:
+          Cache-Control:  no-cache
+          Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
+
+
+depin:
+  network:
+    proxy:
+      pool:
+        - id: 1
+          host: 172.0.0.1
+          port: 12135
+          username: 12321
+          password: 412312
+
+depin:
+  openledger:
+    browserEnvPoolConfig: browser-env.yaml
+    networkPoolConfig: network-proxy.yaml
+
+    baseUrl: wss://apitn.openledger.xyz/ws/v1/orch
+    origin: chrome-extension://ekbbplmjjgoobhdlffmgeokalelnmjjc
+
+    accounts:
+      - name: 914577981@qq.com
+        token: 123
+        proxyId: 1
+        browserEnvId: 1
+
+
+
+//package cn.com.helei.depin.core;
+//
+//import java.io.IOException;
+//
+//import com.alibaba.fastjson.JSONObject;
+//import okhttp3.*;
+//import org.junit.jupiter.api.Test;
+//
+//public class OpenLeaguedTest {
+//
+//
+//    @Test
+//    public void set() throws IOException {
+//
+//        OkHttpClient client = new OkHttpClient();
+//
+//        String requestBody = "{\"key\":\"043fa106e6bee656626ebb7936c36796d118b24a30b8a4e3b94371d2d1c7d75384dccaff9deff284130ddb0cdb32ee47e045ee0e4b783762e5084a318cf4d032c6\",\"data\":\"{\\\"iv\\\":\\\"d0bfebc08fb341686b00e3b047c6530b\\\",\\\"ephemPublicKey\\\":\\\"04a8036d01e65fd79eedef56083bfb66af9d7acb50b64e3bf8efa91b02ccde51699a2bb0ef2cf64c3491dd1d226e4f429300b4f544dc24f5c064e14e1a7caafe79\\\",\\\"ciphertext\\\":\\\"50934155e39629561c602945a3c7866e7afc21b18eb3f49873782fd3438c19b5a1764470439c6f5bb78cf94932f39e35491762600843151ac3278cc944218de86770fc1c84b060cba558a0cf0db5823ce507b0a2a4759dc54df9662f4a88fc27258b3784a2cca27faeffe9ad4683da06bcefed7e0781842caa868a1fe5b983bf967edcca07aa5c56480228dcc32296b21ed77abd5eee306b4c62e49f1138fbe482d998a8b8b71e6a6bd828e374be392037a16d2578e3c52d5d043853480d54cd9816c8aa3c256e4c9835d956b411c530c12c4ad13969d10d7a4f76a002470b71126215dcbbcbebd10df228c4128325a565d0d966ed47cbd5bbf9e93cc90527ed974b9bbbed19227729b60b86abd445af4cc51858d7c417106aecbf46e87a4cf97a134dc97e7d077b2934638811d969f3704052ff9194f78d15a788008d95f05f611f11be39145851c060a302f093367ec79fbe59735bec0aa6bbb9fff113dc8a0587ed0a752e238a47512fe54cdbfe43b37e86155691dda3dd0dfa7a8e65251c0ed3ff3fcd23b78c5fdf9f4570d561195bff9d6014303139ac87fd9c490c5fdb34928af987664e95291318ba413dba41585d43187c92aca589e2d8065dcd199dd727ec0c2d01e1acd0304ee3a66b6294d0401c4405aa239e259a2cea0ebcbace1ee419a02349adc818738819fae950bd3085802c659688d11ccbd57b16b382d0f0825e4a991be8f4a2f0bc4533f648e3b3cdd158ccaed174f0d1cdbda1c1978aec606300a1381281064596b95de9f633981cc0c7066e3ecf6da4cab7a526ba66ded05e7e7289d77803ef329fe4da4f55f534f0dfeedc0646c216e7eddf981b44823039ebca8bfdcbc62928a9d9d2aff4057b9588d8cadf95deb9607450ca210291f3d327af33fdd2eac0abc527369494953bae449de4453abda0b7b826e0fc48e435b103ce5516eeb05a32fe69f68432aba70394c7656e0dd79e410e9fcdf599a7e5dfbab1deefe4bdeb9113cf5de9dccd386b6964a540645ca2bd7ff6639a0129e2d93d19a72845b95e6a30d80479c17e427fb8dd384f6faca2343d44fd568e62909d32f91a7463f68ebc65206a7bec678fee9c20dc5b596aafe6ce6d11f5e94538bc1c64ce5efe1e735f7892965494a9230102cb77bc4f22df30e6b986fdc0694926ab5236eca6e4d0d18e4b93fd29df0684da07b09036dfe6ea43921346d943bf7795fcb1d5047043233ff4d7f6f52594521c8d301e0dcf2073ae4049e40c76f0f5f27e527127e615a66983e924b8ed1f37279821522284eca5e084a3e4a79016a948ade72ae3ba258340837bb90cc1e8a2667fe883be6edffc8e09b00d456b8ac89998452e1687b3946f867062327c693aac4c6800d87cb76e5af8a92997c5a74ff11618a0faab1e307f338a355a2b13911cc42fe6be6c6c3264612aeff77d3eaa984ea71b834d3deda8d2d7c79d890a6d371f4e336f655fd692ba1070d43e3740e886b29367ed35890e89ac184b80905894dd1a1c3930e4f6bea8fcc9a12875e8717adbd9f356baa1b06bf256f5001394f1e20d1f72968cdbd6beec1cc21549c5ecd72b4172966ba1450ebf2d7cbc282538bca6c0b6116cd61e4ecd4f7b77b951c411f04988ddf2a3bdc7ab0ed8e2a0a377840c80f4dbe468be38aff51fa5436f5acb1936d0b15dc83780cf0afef74dd695253b4c7a225aefc1bbc057d23f5baa66a507b48e445222e9568c541ff22d7b661ce8f2705762c645907473e66470a2e0027aac4290c1dc18b1b721e013933dbb876ba0a859de6c1f46861d9d9c0c02f817730f099cf2f9f7e06dd136e7b58fe3dade6e305ccbca2f787da366bd966eb78174876b93bfc5fcccce40fe704ae942babf27f6ca4e805ea92a9ca9589ac84070fcb1a76b9e7894ceccdaa470d12a55bdf768d4504f8407e528b222ebf1bd211fbd85cf76bb9b73cd704ceba691e479d1d1831808d97b1a8bcd76b3f3e00b46022208eb947f73ba8b3b0ccede2006f1f67b9ed287853265876e9d34ff7a242e96442c3ce047d1fe2ac10d854c7ec7323c618b7df0f9a135b9533aa48d958663512a3b6e4d0936ba9d45294b93ac288631473e9fa22400455a6912e211b17616b8b720d3224fdfbd732108beba582f19233b9d482a4f79baaebba0586f55ae6a082f1c87e1bafec31c12ace1bb4d63f2b318377ce427bac69988ccc09680abe3c838d144c15c69007d341b5c6f5b3e79a7c25f076cacc67f675a0881f2ca71172bc5fd19e4f368f3552847ccfb3a938aa0a6161a1980ba55c9e7fc8da3f8a39d0c415008002b0624d1d9ea727e4bd286208c93e9f7f3698b7609e9e35cf1b36bdb60e92084c4add567094b1b083267fa7db70c4d9451dc95f699a1c4608157a7c06155850781a2ab18dc789cc2629ad654df8ca37498d1d235723c21f55b2c9c36620f2da4ca2f21e1805e9c0274a6841eab8ad9bc6fcad259332e587cf46d29cb0c76a3fa5d023cc9141487cd0a469e38dc4695c6d58c117bfda43dd016f1920f341bb04987431b84f22d87f89adcedeee14ef83665c9f3aa9387dc03656114c57078c178208e2d6a66f359be6ba4442e04d69d9903dd15bcb4a695c13e47bd3127247e46ad8e2e7a4b0354e1db3b6a19b8220074d72ac2d0e9fb9e662df07c71a437c974e1217af0b15be46fff3c5685460209016e07969587e5e77a0b068baf1bf88901605463d2a1cc9362b492c42ef0bf80ba0b9269e66a171e72e532ff170bcd042fe0068970d84339693bb2454a1e5ea64e85a55c02429d652494026f371ae9a9d0f218860ef1eba61575608e7c5eac31adf57e5d1846d08df2afd7570473a2c5cef75a1346567311ee8e25fe95443303472a92dcad4e1315810a39bd1d129c9ba137fe8316dc1ee3eccb0a75eec2749fb664fbc709edbac4845e5681728aaa3694bc3ccb731c6f786b7243522f7df19e7d0dde0946a684e13dd9435f9e84213aa31fdecf8d3f9f20c7f42bf8e32fd0eb39f660e9016bc0d7a0beb13a2ce07fdba03f18809afa078e2ed4483890f3831834ac6686e4eef4753a651ed3befbbc9a6645529b8e0527a85015f54a7ce51c49fa15da773cc17a194e21abbf19d942c3006d74e7555df8a8adeffb18183e5a828e126e4abe3ec7abae51ba39fb55d9f27cafc381826e4e62d212444618a714fafd156f0272c1a1f2a22422caba40519addf55807d2b938cfb0cdb9ccdc604ce7d191672800ff0c7dda83f9f5f6c536955e081f7a9835434899c1b3100f441bfa72d02ee086a1cf534782ed024a67ffccd6da015bd223e363509c88bd6b2e9db3d9493288b966840deff2a5eeef40e3d99943075bbb197f3226592850d16b6a5caad1bd1bf728ff3f73dd47ef667c142d6e650a2050b53a2442c089a3797038e1c0c4d7c95c71bd1d8925fd8887a60cf4c09248598063992272927a9eca1cd7463f51168b734affdc403d5a34bd6516a6f6e5600b41bc35223342e401834a2615256cdc66aab27dbb4d327f13a9bc09aa7c04e36800fee5f136377d7a42c3b2c4dbd6682c47b90d5c844933ab75b063a53c152542d20ae59e42af616050b68547082137a9cb327ba07f18fffde60dd5d99e6b1a72b1cf8773d7b52f3631fe89d166e94a475d27711654f33490009c7fe7cf747ecb637ef9b0d75544bb36e7225cd0beda755414c4d734d57aea12a7ca829a2221546756aeb73b876e05b579b636109a8a53b856c2cb94c22ea610144efc253742750dfcb688739e14f26849945877d4e8c111695a5b04827857185dae5e0104341aaec74a9f71b6ab74d70a74efcc3f6832b2c86efb59a32010909b72dffabc2b9ac6f55fc7e5dc6d2f1495697df212e7ffaa962947483bec7987711233d57829ef005e2f155734c1d4a94124dc0cc45acff69626d7544946265c39f20676ab45cc34e5fb37f010323a88b0749498d3bab46073a22730c9bc3e5e10242f554041d909dc82a5e9fcee83571194404103e1a64c1cd2a0fab1297e7090319d576b03900f70d12cffcebf9b2b6f8ea32a4ec4224b1a028381a048cbd8b6dedf34c36e739eb3c46c1b6d946020615e80b26428fc99bf1f098f322967f59059dff1bf896ec6dea984c66b621805b1b2ecf4a45506ccd2e7eef6fe0569334328826995b491cee99876915ca0693f550d0664f5c8b96e1456f8ca1ad2fe9e1d77a686c65baf60b575b383c86f4dc0b516533699c57911731ec0bb1b1761cc0a17ad0d83153b04d1a4f1f272d133393ff70da58e8a71dbbbfddc0821900dca6f361972a2ec098dc0cbbd01f975777f0349965996b78e81879c549674a77b94cdf5e01f4a7cb1e0ec6e9c17c80a8f00e7103ab6e393fb28f836a1ce62554ffa05f769da6128673989ae8441538f0259aa9d33ca9c4cc29ce9ce27821ee1a51df8a7e062dda95d6463a1b0f886e2446151c301d1215d6e8030c5fb4f037a11c69b433b8a94fda64c0916e25ec9c3c5e54c0075fc9269a64d74c955b8c27b5af5e8815fa096360971f55b4d6d438da6225783c9ab5ef90c9953fe11022fc85ca6f18f43b60ec474469ddbc23ba0a19091ef6ceb3d0e54486d5ff2d42a6d316a2e3f211bd6a2fb1ad3f37d3109de85a7e735f2f4bdf7f1765f1917b29c2e68476e0e836785cc94ae74a34dc4bac1f66ed153e9ead8cf69144320c57b67834876920849430b296a768f4b5419f4426e4a2e9ae197d429ecf9157ac80b24203a903387ad272f7f21d98ef5cf67e82f95b6d9df23d6d3960340dd330cb4c08e79e2c7bfe4323e517899869014c31e45949dfeb97ac8aed5f7aa8e98538b310aa59f5d0c45e40b63c7c7f2ca17d1119d27d4ba00285ea0b58ad4c2415641e0110318743368c399b268e06440cf4c28a5430c076795273f9a954a5b0b38de621f7d2ff4560613f1d865bf0d8a6d9a0e3f3efc99d0ad54aab8a94af20f867e44e6e9e08fe5d20a37ce8819c98a331342ba3c458c2ed8ecabbe86f79755479e457f69a5ed810a0626ba6e9794fd38a539e333c434dcd5c3b3ee840ea6025dc479342e45517b8312e6c626585daa479333e7a5f9fd3a23353cbf37f2344be5ae03bd45421945db6b5735cc718de43ce7f6bfcb5f8431c5db71f861aec777e61b7b6dbe186372c6235e4d1a18ee2bd073ec36160e2e93900332eee526cad18b53b9f2c45bcfaac68685723465a5c5998c2eb1514100abcb212d038b1234d853467e636de7d67a365546e7398aa9931586d0b77eb772b3593f036bd3da4c48ec2281440979eb900d5f8c68be9b7bfaccf603e65e652f1577b08adc6ac47375f0b68b4be24acdeaf16d58e8421b3f09065c4997958def850213b6e0416bf041be0d495abb67d1c0674a62f506e89f9807ae362c222b90c42f852a7a59a42407de5eb7644e56fcdd81f03a865655807edea3f3c6353fced20a8c89d8fabcff7f3d784fb6df3a9731ad7b88c6360a30b2cdf1b9bb7291e0ca5aabbf8a6ece75e496918b1e048b90a64f664727be31a49e0e5e942ee515e2b13fc9b7fa34c01d30688b28234affc9feb43f21bb29884860fa001f0f568e55028f7ff4673333adac5586642e5329173165e2d5a93c60172d6e220b2e6708643852199d79835fa324697547c5b489c6a7f3d5b778f00fe6135f9b14bef64b424e1ee9d5a0232de52bd76a72e5edc379c3ebb86fe21d206fafc0ea0a15bf86fad3f04d5708819fbd8e9a968963aed2ce160377d29381460a38a23f70f3bd791221b8f57580795215bc619254aaeaa6df7917959321906a18da577aa34b8a65379e9be71faeadf4bd9ceab9127d0a1ba0fda0d9ae57ac23e2a8346778880c91d679a359dd97fcb9e359f8d1724a3b65544dd220c92db41a228569809cb06db7df8fad81d4ec060a241009ed16f1b5f8f73dcf1da00a637e2fc1f8dd1a75569e759279a199dff407c4631a3dc90467641e19f0a855fc501f45396e8983927d34b0d5c9d85486922f78ccb682e115c9186f902f75085004186f2fef08a061160041cb3a7ca9c93258329aa4f2b0e2463027faa5047743956405459dbd36aea8408b59aed7d9c3ef51c85c754cd8ae9aaf1991637156cccbe7ac378af4f1423485a26456c8fd690c7fb9710415e671705c1b29791182a1f6f88e8f1fd07395e8127739990d9298f9078d4540007768768137be7b74874ce6eb55b1228a993752350602fccd528437e2bdb16da17383c2d1862ca9ebabaa10d16ea8d5130170c04c749209e8f8aa109f90ff1d0455426b61d6d7793a017af5d7c3f177ec9b02d802c3a7fddb98685b3489434ede26e2b374d583b4268071aa3909496248c50f2e82af2eb645a89b4a3e26fafe8906ca63250e8204933ca19f6d755f19a5c1765a79384f26ae7198693294bbc94cfa69678f22304b7f73ae413cba309c1d4315b43644462cd8699443a32b8472c54fd7eb6a0065f3bab1e45c7b3807daba347cbb607c76233a1444207b1b76816f61466c60521cf8b86fff53979aaccf8fa48a7e01aef8106675c13306a532f7d8fa14c749efe84c95d959056808d6db2440356912b4d8fee6a9219a4da8716869ad3084527de0b2ea04fd30ec0265ccf40915adabde927c41a3b149f0d81f58044bb4554e05c46708e2ea58f2ae9f5dac1a94897e5bcbe376d35c4fd67b62c9c7aeaec1615e929e0c01a67a9878e11e6268cc6c7412dfa484b99ec29cf862f8f166f3b084b426b4dcc1ca5efcc9aca67770cde0ba78c5a24dd397eb08222c2736e47c52631d3a29ba7117538b28ceee5900778cb2dcfc882fb4280fe2a77f75ea3d979d3d574bdd1a80c88f8dbcedeb1871bf462cbf380f203d04cc8f8076648501354317cb88e638451e662f26db42ae8cea89b4c0c9fad1565389728c2a550479e56fac639884dff67a3396e5e9c3bc607a393b02860d647c1a87c8ff6db2832c9ee6a4e163d9e71bdd41771cad57cf124dbfd34c696b9bd34bd551d22bdfcaab040858dd16d91b991a1370d9b4266c4b52d2b861a19b7bd35bca0d9fb61e8980084127dc0458f7495e23f270389159dee15c8f26c82bee6d869778644f0e2cad9eef7e5beef72b102fbe1f6c594713dc43106d038a502b9cc080a0166cf8e215dd85ddc5d13279b4ae7af5a782945a3cd99e04ed24d9ecfddfc8f331ce4b03367cdf22e3d31744e2530b37bf1e85c65189929d84ab978b434c56da474a13c5b8277d75fdaaefd1d65cf9fa5c05639cc5207633903cbe8f80d7c6401386717a724af40dd1556b7c979b764c7a1c72e5b83730c9d22c633a8a6ef22e32bc3b069ca8cbeb29cecdb3df375a120faec24eb7a3bf221dde880b6c9beb2fa3e4297ec66af2be35ff4819324d27335fa08a6d572ff5b85d691a722bf86536421fa6da275cb0d2048dd69f88dadc7628fcd67e9bd21cdcd2a41aaf41ddb05e6571e56cc6195a8addfa52d238943597d481bfbc7594297efdfeac427e8e060fc1402a3d39c1e81c9c2281494415e05c6feb643412f89b6c5f0ee9e1c3831b1064a1608330c671e88b89c989c4feb287d783f17be4406ef15324f2599ced997bc7a7752b26250b1d9d79a881821b7ecae8f239dcc173aaeb450a5b79e6ecda187e0c3c514c28849bba5d6c547c22900e993f30ea3427b2345158869e4b9119b1ad7b37e7bad4064108d3add9151e93b2c11355b37446f9129988c1007c427822995d3a719ed5f55d016128c80d6179bb71036d4ddbdae65a3115bec90c127217714882196b410b37337604c9c0991721cbd0a442465c634482ad6147d777e475e5bf3b0efb204f3419ddef083481024294180489c858f84a014bdf23447496677acaa322c8ce60fe040d9d697b5e690ea31a9fa503a2ca74a3650f453932a372c67452f54dfffc6edb0b7221bd4a67c8f51c075b76e9dc3d2069d50d408ff5d1f7c2ae909645541f8e424f570ae64723d65b17c90bcc818e8b46bca3ac74682bf2c2a25aae862c244b2bce618221170345d512e808499eeabb1da4db4e2d326d3ead534ead6edd1383094481bd54c52016afa940d0f3b12356be604f35f4526da5fc17e62754570a8ee4244039761c296146ee90e1aff2d7c2f3f8eadbe17ef868563256e1fd4000acbc6d1a0a2c54967c991637b6226f5c1c033981940e637d8a3c50528b1b7e9dbfb43aa24479ee7398fbd084054408fb3ad128f6eb1eb51b5e7a9182c4079ba9662537f341a7a1c42424fad55d174eb0cae871005d450d5ce2c08389c150ff4c8b0111b331727fb34137568e895915dbfcd131cf677477ced4a79015d9e097df7481f453056733623d823e3d\\\",\\\"mac\\\":\\\"2dbf661e60262374607c570d4965c30e2818bbf34587e2c2ead90a618c3d1136\\\"}\",\"signature\":\"304502210092189a957d2d82da6649dde82d9aef818c2a70faa4c7b2832ee56c483ab15c4302205f436d95912d2c359f2fbdb8634aae90361526b7acc43ae1dea5e1435dbde268\",\"timeout\":600,\"allowedOrigin\":\"https://auth.web3auth.io\"}";
+//        JSONObject jb = JSONObject.parseObject(requestBody);
+//        FormBody.Builder bodyBuilder = new FormBody.Builder();
+//
+//        jb.keySet().forEach(key->bodyBuilder.add(key, jb.getString(key)));
+//
+//        Request request = new Request.Builder()
+//                .url("https://api.web3auth.io/session-service/v2/store/set")
+//                .post(bodyBuilder.build())
+//                .header("Accept", "*/*")
+//                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+//                .header("Cache-Control", "no-cache")
+//                .header("Connection", "keep-alive")
+//                .header("Content-Type", "application/json; charset=utf-8")
+//                .header("Cookie", "_ga=GA1.1.398799594.1730295772; _ga_DY71GQK057=GS1.1.1736778675.2.1.1736778863.0.0.0; AWSALBTG=OCIkjRYg+HrdZkhZhJwZrv8xDCUR6o6ayjU6d3/iUr7XQAgeTBxHtYEGqWn8XeLvRaHbWZZXJLf3hR7VcmcycXv0yjtjQn6YVGhBS5HcR9ZEc7Q25EftVBH79trLaCm88Ms6SAs6PH9EwpBGwhlFK25VO7UWuNwOGKZ6Cm6ofdDL; AWSALBTGCORS=OCIkjRYg+HrdZkhZhJwZrv8xDCUR6o6ayjU6d3/iUr7XQAgeTBxHtYEGqWn8XeLvRaHbWZZXJLf3hR7VcmcycXv0yjtjQn6YVGhBS5HcR9ZEc7Q25EftVBH79trLaCm88Ms6SAs6PH9EwpBGwhlFK25VO7UWuNwOGKZ6Cm6ofdDL; AWSALB=e1PEof/Ex57ATBQijmS077jdt2TjizalYLCrH0p32wGx+TEnLAfmjCbfcxQPnV24vSSRFHHZNJeN7PTUtS5+TK4BT9Xo+BesxBjCFtRGu1Fx7ecgIBGOOsHHtQkw; AWSALBCORS=e1PEof/Ex57ATBQijmS077jdt2TjizalYLCrH0p32wGx+TEnLAfmjCbfcxQPnV24vSSRFHHZNJeN7PTUtS5+TK4BT9Xo+BesxBjCFtRGu1Fx7ecgIBGOOsHHtQkw")
+//                .header("Origin", "chrome-extension://ekbbplmjjgoobhdlffmgeokalelnmjjc")
+//                .header("Pragma", "no-cache")
+//                .header("Sec-Fetch-Dest", "empty")
+//                .header("Sec-Fetch-Mode", "cors")
+//                .header("Sec-Fetch-Site", "none")
+//                .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+//                .header("sec-ch-ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"")
+//                .header("sec-ch-ua-mobile", "?0")
+//                .header("sec-ch-ua-platform", "\"macOS\"")
+//                .build();
+//
+//        try (Response response = client.newCall(request).execute()) {
+//            if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
+//            response.body().string();
+//        }
+//    }
+//
+//
+//    @Test
+//    public void get() throws IOException {
+//        OkHttpClient client = new OkHttpClient();
+//
+//        String requestBody = "{\"key\":\"04cacbf9f6923083bb597c9f79b13d37948f1e98307a4f19b0e0f447d6faa7090e61683bb655c99b69e08c2ffa32d68e86530a67e9f5c347c7dd8b25f20f307350\"}";
+//        JSONObject jb = JSONObject.parseObject(requestBody);
+//        FormBody.Builder bodyBuilder = new FormBody.Builder();
+//
+//        jb.keySet().forEach(key->bodyBuilder.add(key, jb.getString(key)));
+//
+//        Request request = new Request.Builder()
+//                .url("https://api.web3auth.io/session-service/v2/store/get")
+//                .post(bodyBuilder.build())
+//                .header("Accept", "*/*")
+//                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+//                .header("Cache-Control", "no-cache")
+//                .header("Connection", "keep-alive")
+//                .header("Content-Type", "application/json; charset=utf-8")
+//                .header("Cookie", "_ga=GA1.1.398799594.1730295772; AWSALBTG=SOvHYZA1GRqHCz1nruHniL27Y8DJYPOiCnQJyCKW8IKMO/JeBbvvTb4cW/QXiJr/fRGLGaZRW+NEs8mMTsA9cwIzVn4h7LgzrqM7sm250p5T4svxiWwXsJ62PRDnKcgvqGfrKRWJuBIXaf4MWAJE+TBIBaofb9ft5uCzazjfClMo; AWSALBTGCORS=SOvHYZA1GRqHCz1nruHniL27Y8DJYPOiCnQJyCKW8IKMO/JeBbvvTb4cW/QXiJr/fRGLGaZRW+NEs8mMTsA9cwIzVn4h7LgzrqM7sm250p5T4svxiWwXsJ62PRDnKcgvqGfrKRWJuBIXaf4MWAJE+TBIBaofb9ft5uCzazjfClMo; AWSALB=GXRSPsMEiUl29mpI7gwYaHBUjjLYDjQZW4E2iIUQxBQhNf36yV44VOWe0rN4dPXe70QewP9ufkcJD2BrQyL/WKIRxc3YbWE/sNJK8P6Oy95drKZEYVSbnZkH/Ovi; AWSALBCORS=GXRSPsMEiUl29mpI7gwYaHBUjjLYDjQZW4E2iIUQxBQhNf36yV44VOWe0rN4dPXe70QewP9ufkcJD2BrQyL/WKIRxc3YbWE/sNJK8P6Oy95drKZEYVSbnZkH/Ovi; _ga_DY71GQK057=GS1.1.1736953824.3.1.1736955051.0.0.0")
+//                .header("Origin", "chrome-extension://ekbbplmjjgoobhdlffmgeokalelnmjjc")
+//                .header("Pragma", "no-cache")
+//                .header("Sec-Fetch-Dest", "empty")
+//                .header("Sec-Fetch-Mode", "cors")
+//                .header("Sec-Fetch-Site", "none")
+//                .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+//                .header("sec-ch-ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"")
+//                .header("sec-ch-ua-mobile", "?0")
+//                .header("sec-ch-ua-platform", "\"macOS\"")
+//                .build();
+//
+//        try (Response response = client.newCall(request).execute()) {
+//            if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
+//            response.body().string();
+//        }
+//    }
+//
+//
+//    public void me() {
+//        import java.io.IOException;
+//import okhttp3.OkHttpClient;
+//import okhttp3.Request;
+//import okhttp3.Response;
+//
+//        OkHttpClient client = new OkHttpClient();
+//
+//        Request request = new Request.Builder()
+//                .url("https://apitn.openledger.xyz/api/v1/users/me")
+//                .header("accept", "application/json, text/plain, */*")
+//                .header("accept-language", "zh-CN,zh;q=0.9,en;q=0.8")
+//                .header("authorization", "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyZXNzIjoiMHgzMmVhZDg0NWRkNGQyY2U0NWQ1ZmFiODFiZDBmOTdjMWI0M2U4OTY0IiwiaWQiOjAsImV4cCI6MTc2ODQ5MjU5NX0.T_gielpE_1CL1GeJXgM3VlQp3pt_HaURu_y5nhbh8yo")
+//                .header("cache-control", "no-cache")
+//                .header("cookie", "_ga=GA1.1.1498815278.1736778795; _gcl_aw=GCL.1736778795.Cj0KCQiAkJO8BhCGARIsAMkswyjwN4CVnn7Bdd8LgfBi9OORTuZZHLwWEyL92Hv4br4iy7uNAsvWL_saAiJiEALw_wcB; _gcl_gs=2.1.k1$i1736778778$u260728712; __adroll_fpc=8ba35f432065f87026fcc1f91d07ae32-1736778795959; _ga_13BNN0Y51H=GS1.1.1736953043.2.0.1736953043.0.0.0")
+//                .header("pragma", "no-cache")
+//                .header("priority", "u=1, i")
+//                .header("sec-ch-ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"")
+//                .header("sec-ch-ua-mobile", "?0")
+//                .header("sec-ch-ua-platform", "\"macOS\"")
+//                .header("sec-fetch-dest", "empty")
+//                .header("sec-fetch-mode", "cors")
+//                .header("sec-fetch-site", "none")
+//                .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+//                .build();
+//
+//        try (Response response = client.newCall(request).execute()) {
+//            if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
+//            response.body().string();
+//        }
+//        {
+//            "status": 200,
+//                "data": {
+//            "address": "0x32ead845dd4d2ce45d5fab81bd0f97c1b43e8964",
+//                    "id": 398731,
+//                    "referral_code": "wzfglgfcgu"
+//        },
+//            "timestamp": "2025-01-15T21:39:01.286856824+05:30"
+//        }
+//    }
+//
+//
+//    public void rewordReltime() {
+//        import java.io.IOException;
+//import okhttp3.OkHttpClient;
+//import okhttp3.Request;
+//import okhttp3.Response;
+//
+//        OkHttpClient client = new OkHttpClient();
+//
+//        Request request = new Request.Builder()
+//                .url("https://rewardstn.openledger.xyz/api/v1/reward_realtime")
+//                .header("accept", "application/json, text/plain, */*")
+//                .header("accept-language", "zh-CN,zh;q=0.9,en;q=0.8")
+//                .header("authorization", "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyZXNzIjoiMHgzMmVhZDg0NWRkNGQyY2U0NWQ1ZmFiODFiZDBmOTdjMWI0M2U4OTY0IiwiaWQiOjAsImV4cCI6MTc2ODQ5MjU5NX0.T_gielpE_1CL1GeJXgM3VlQp3pt_HaURu_y5nhbh8yo")
+//                .header("cache-control", "no-cache")
+//                .header("cookie", "_ga=GA1.1.1498815278.1736778795; _gcl_aw=GCL.1736778795.Cj0KCQiAkJO8BhCGARIsAMkswyjwN4CVnn7Bdd8LgfBi9OORTuZZHLwWEyL92Hv4br4iy7uNAsvWL_saAiJiEALw_wcB; _gcl_gs=2.1.k1$i1736778778$u260728712; __adroll_fpc=8ba35f432065f87026fcc1f91d07ae32-1736778795959; _ga_13BNN0Y51H=GS1.1.1736953043.2.0.1736953043.0.0.0; connect.sid=s%3AGhIwNh0SrA1AvRqbLYIhH-4kSB6KdkAQ.y4esG%2BouhpfXSzoPTWi7S4gzlWzy8F%2B5931%2F5iXha8c; AWSALB=lijvyLQGt8bJvgyRYeClKV/OQnXIDAg8ASt2qJKD4DRjHBk8AQknKBXYrnBANmOj2nVg0k/MeOM/xmzk+7HhoQb2R70OIFM/evIMBlRfIvLjDd32ouXeUnr5j0HZ")
+//                .header("pragma", "no-cache")
+//                .header("priority", "u=1, i")
+//                .header("sec-ch-ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"")
+//                .header("sec-ch-ua-mobile", "?0")
+//                .header("sec-ch-ua-platform", "\"macOS\"")
+//                .header("sec-fetch-dest", "empty")
+//                .header("sec-fetch-mode", "cors")
+//                .header("sec-fetch-site", "none")
+//                .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+//                .build();
+//
+//        try (Response response = client.newCall(request).execute()) {
+//            if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
+//            response.body().string();
+//        }
+//        {
+//            "status": "SUCCESS",
+//                "message": null,
+//                "data": [
+//            {
+//                "date": "2025-01-15",
+//                    "total_heartbeats": "1497",
+//                    "total_scraps": "0",
+//                    "total_prompts": "0"
+//            }
+//    ]
+//        }
+//    }
+//
+//
+//
+//    public void rewordHis() {
+//        import java.io.IOException;
+//import okhttp3.OkHttpClient;
+//import okhttp3.Request;
+//import okhttp3.Response;
+//
+//        OkHttpClient client = new OkHttpClient();
+//
+//        Request request = new Request.Builder()
+//                .url("https://rewardstn.openledger.xyz/api/v1/reward_history")
+//                .header("accept", "application/json, text/plain, */*")
+//                .header("accept-language", "zh-CN,zh;q=0.9,en;q=0.8")
+//                .header("authorization", "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyZXNzIjoiMHgzMmVhZDg0NWRkNGQyY2U0NWQ1ZmFiODFiZDBmOTdjMWI0M2U4OTY0IiwiaWQiOjAsImV4cCI6MTc2ODQ5MjU5NX0.T_gielpE_1CL1GeJXgM3VlQp3pt_HaURu_y5nhbh8yo")
+//                .header("cache-control", "no-cache")
+//                .header("cookie", "_ga=GA1.1.1498815278.1736778795; _gcl_aw=GCL.1736778795.Cj0KCQiAkJO8BhCGARIsAMkswyjwN4CVnn7Bdd8LgfBi9OORTuZZHLwWEyL92Hv4br4iy7uNAsvWL_saAiJiEALw_wcB; _gcl_gs=2.1.k1$i1736778778$u260728712; __adroll_fpc=8ba35f432065f87026fcc1f91d07ae32-1736778795959; _ga_13BNN0Y51H=GS1.1.1736953043.2.0.1736953043.0.0.0; connect.sid=s%3AGhIwNh0SrA1AvRqbLYIhH-4kSB6KdkAQ.y4esG%2BouhpfXSzoPTWi7S4gzlWzy8F%2B5931%2F5iXha8c; AWSALB=ucl6keHuccIqtxDNiaiUFVJfHFyYZmPhKEetgvypoPXhVfD6FTRehdr5xCFDpa9kjMTj7Hw/LQL72y37Z1KiOocstqRK14nMRIEsv+tJdPR+DElVtNRtpq/JJONs")
+//                .header("pragma", "no-cache")
+//                .header("priority", "u=1, i")
+//                .header("sec-ch-ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"")
+//                .header("sec-ch-ua-mobile", "?0")
+//                .header("sec-ch-ua-platform", "\"macOS\"")
+//                .header("sec-fetch-dest", "empty")
+//                .header("sec-fetch-mode", "cors")
+//                .header("sec-fetch-site", "none")
+//                .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+//                .build();
+//
+//        try (Response response = client.newCall(request).execute()) {
+//            if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
+//            response.body().string();
+//        }
+//
+//        {
+//            "status": "SUCCESS",
+//                "message": null,
+//                "data": [
+//            {
+//                "date": "2025-01-15",
+//                    "total_points": 50,
+//                    "details": [
+//                {
+//                    "claim_type": 2,
+//                        "points": 50
+//                }
+//            ]
+//            },
+//            {
+//                "date": "2025-01-13",
+//                    "total_points": 70,
+//                    "details": [
+//                {
+//                    "claim_type": 2,
+//                        "points": 50
+//                },
+//                {
+//                    "claim_type": 5,
+//                        "points": 20
+//                }
+//            ]
+//            },
+//            {
+//                "date": "2025-01-14",
+//                    "total_points": 1704,
+//                    "details": [
+//                {
+//                    "claim_type": 2,
+//                        "points": 50
+//                },
+//                {
+//                    "claim_type": 3,
+//                        "points": 1654
+//                }
+//            ]
+//            }
+//    ]
+//        }
+//    }
+//
+//
+//    public void reword() {
+//        import java.io.IOException;
+//import okhttp3.OkHttpClient;
+//import okhttp3.Request;
+//import okhttp3.Response;
+//
+//        OkHttpClient client = new OkHttpClient();
+//
+//        Request request = new Request.Builder()
+//                .url("https://rewardstn.openledger.xyz/api/v1/reward")
+//                .header("accept", "application/json, text/plain, */*")
+//                .header("accept-language", "zh-CN,zh;q=0.9,en;q=0.8")
+//                .header("authorization", "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyZXNzIjoiMHgzMmVhZDg0NWRkNGQyY2U0NWQ1ZmFiODFiZDBmOTdjMWI0M2U4OTY0IiwiaWQiOjAsImV4cCI6MTc2ODQ5MjU5NX0.T_gielpE_1CL1GeJXgM3VlQp3pt_HaURu_y5nhbh8yo")
+//                .header("cache-control", "no-cache")
+//                .header("cookie", "_ga=GA1.1.1498815278.1736778795; _gcl_aw=GCL.1736778795.Cj0KCQiAkJO8BhCGARIsAMkswyjwN4CVnn7Bdd8LgfBi9OORTuZZHLwWEyL92Hv4br4iy7uNAsvWL_saAiJiEALw_wcB; _gcl_gs=2.1.k1$i1736778778$u260728712; __adroll_fpc=8ba35f432065f87026fcc1f91d07ae32-1736778795959; _ga_13BNN0Y51H=GS1.1.1736953043.2.0.1736953043.0.0.0; connect.sid=s%3AGhIwNh0SrA1AvRqbLYIhH-4kSB6KdkAQ.y4esG%2BouhpfXSzoPTWi7S4gzlWzy8F%2B5931%2F5iXha8c; AWSALB=kJzSrpxtsUgvZRa7xzMiVUXLspZYZROb5VN9ZcVR3+fyvL5wrc3q0JWyL7lpQ3LL5Vn97VzpLbR0QTT01/GZQinvNXt2UCg5r6ruBmnr4nT8WYWMGwU6XvE+H6R5")
+//                .header("pragma", "no-cache")
+//                .header("priority", "u=1, i")
+//                .header("sec-ch-ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"")
+//                .header("sec-ch-ua-mobile", "?0")
+//                .header("sec-ch-ua-platform", "\"macOS\"")
+//                .header("sec-fetch-dest", "empty")
+//                .header("sec-fetch-mode", "cors")
+//                .header("sec-fetch-site", "none")
+//                .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+//                .build();
+//
+//        try (Response response = client.newCall(request).execute()) {
+//            if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
+//            response.body().string();
+//        }
+//
+//        {
+//            "status": "SUCCESS",
+//                "message": null,
+//                "data": {
+//            "totalPoint": "1824.00",
+//                    "point": "1824.00",
+//                    "name": "Epoch 1",
+//                    "endDate": "2025-01-31"
+//        }
+//        }
+//    }
+//
+//    public void ws() {
+//
+//        OkHttpClient client = new OkHttpClient();
+//
+//        Request request = new Request.Builder()
+//                .url("wss://apitn.openledger.xyz/ws/v1/orch?authToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyZXNzIjoiMHgzMmVhZDg0NWRkNGQyY2U0NWQ1ZmFiODFiZDBmOTdjMWI0M2U4OTY0IiwiaWQiOjAsImV4cCI6MTc2ODQ5MjU5NX0.T_gielpE_1CL1GeJXgM3VlQp3pt_HaURu_y5nhbh8yo")
+//                .header("Upgrade", "websocket")
+//                .header("Origin", "chrome-extension://ekbbplmjjgoobhdlffmgeokalelnmjjc")
+//
+//                .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+//
+//                .header("Cache-Control", "no-cache")
+//                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+//                .header("Pragma", "no-cache")
+//                .header("Connection", "Upgrade")
+//                .header("Sec-WebSocket-Key", "+NesbIUcRmBqCnqFzamlJw==")
+//                .header("Sec-WebSocket-Version", "13")
+//                .header("Sec-WebSocket-Extensions", "permessage-deflate; client_max_window_bits")
+//                .build();
+//
+//        try (Response response = client.newCall(request).execute()) {
+//            if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
+//            response.body().string();
+//        }
+//    }
+//}
