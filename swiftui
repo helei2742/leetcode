@@ -1,1567 +1,2278 @@
-package com.huawei.it.scs.entity.input;
+package cn.com.helei.depin.app.openLedger;
+
+import cn.com.helei.depin.core.BaseDepinBotConfig;
+import cn.com.helei.depin.core.dto.DepinClientAccount;
+import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.HttpHeaders;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.ToString;
+import lombok.extern.slf4j.Slf4j;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
+
+@EqualsAndHashCode(callSuper = true)
+@Data
+@Slf4j
+@ToString
+public class OpenLedgerConfig extends BaseDepinBotConfig {
+
+
+    /**
+     * 浏览器标识
+     */
+    private String origin;
+
+    /**
+     * 账户列表
+     */
+    private List<OpenLedgerAccount> openLedgerAccounts;
+
+
+    public static void main(String[] args) {
+        OpenLedgerConfig openLedgerConfig = loadYamlConfig("app/openledger.yaml");
+        System.out.println(openLedgerConfig);
+    }
+
+    public static OpenLedgerConfig loadYamlConfig(String classpath) {
+        Yaml yaml = new Yaml();
+        log.info("开始加载OpenLedger配置信息-file classpath:[{}}", classpath);
+        try (InputStream inputStream = OpenLedgerConfig.class.getClassLoader().getResourceAsStream(classpath)) {
+            Map<String, Object> yamlData = yaml.load(inputStream);
+            Map<String, Object> depin = (Map<String, Object>) yamlData.get("depin");
+            Map<String, Object> openledger = (Map<String, Object>) depin.get("openledger");
+
+            //Step 1 基础配置文件
+            OpenLedgerConfig openLedgerConfig = yaml.loadAs(yaml.dump(openledger), OpenLedgerConfig.class);
+
+            //Step 4 账户列表完善
+            openLedgerConfig.getOpenLedgerAccounts().forEach(openLedgerAccount -> {
+                openLedgerAccount.setOpenLedgerConfig(openLedgerConfig);
+            });
+
+            log.info("OpenLedger配置信息加载完毕: 共{}个账号", openLedgerConfig.getOpenLedgerAccounts().size());
+
+            return openLedgerConfig;
+        } catch (IOException e) {
+            throw new RuntimeException(String.format("价值配置网络代理池文件[%s]发生错误", classpath));
+        }
+    }
+
+    @Override
+    public List<DepinClientAccount> getAccountList() {
+        return openLedgerAccounts.stream().map(openLedgerAccount -> (DepinClientAccount) openLedgerAccount).toList();
+    }
+
+
+    @EqualsAndHashCode(callSuper = true)
+    @Data
+    public static class OpenLedgerAccount extends DepinClientAccount {
+
+        private final static String printTemplate = "%-25s\t%-25s\t%-5s";
+
+        private transient OpenLedgerConfig openLedgerConfig;
+
+        private String token;
+
+        private String identity;
+
+        private String ownerAddress;
+
+
+        public static String printTittle() {
+            return String.format(printTemplate, "账户名", "代理", "环境ID");
+        }
+
+        @Override
+        public String getConnectUrl() {
+            return openLedgerConfig.getWsBaseUrl() + "?authToken=" + token;
+        }
+
+        @Override
+        public HttpHeaders getHeaders() {
+            HttpHeaders headers = new DefaultHttpHeaders();
+            headers.add("Upgrade", "websocket")
+                    .add("Origin", openLedgerConfig.origin)
+                    .add("Cache-Control", "no-cache")
+                    .add("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                    .add("Pragma", "no-cache")
+                    .add("Connection", "Upgrade");
+            return headers;
+        }
+
+        @Override
+        public String toString() {
+            return "OpenLedgerAccount{" +
+                    "token='" + token + '\'' +
+                    ", identity='" + identity + '\'' +
+                    ", ownerAddress='" + ownerAddress + '\'' +
+                    "} " + super.toString();
+        }
+    }
+}
+
+package cn.com.helei.depin.app.openLedger;
+
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+import java.util.concurrent.Semaphore;
+
+@Slf4j
+public class OpenLedgerDepinApp {
+
+    private final OpenLedgerConfig openLedgerConfig;
+
+    private final Semaphore semaphore;
+
+    public OpenLedgerDepinApp(String configClasspath) {
+        this.openLedgerConfig = OpenLedgerConfig.loadYamlConfig(configClasspath);
+
+        this.semaphore = new Semaphore(openLedgerConfig.getConcurrentCount());
+    }
+
+
+    public void startAll() {
+        log.info("开始创建OpenLedger客户端");
+
+        List<OpenLedgerDepinClient> ledgerDepinClients = null;
+
+        log.info("OpenLedger客户端创建完毕");
+
+        for (OpenLedgerDepinClient ledgerDepinClient : ledgerDepinClients) {
+            try {
+                String name = ledgerDepinClient.getName();
+
+                log.info("账号[{}]开始连接", name);
+                ledgerDepinClient
+                        .connect()
+                        .thenAcceptAsync(success -> {
+                            if (!success) {
+                                log.error("账号[{}]连接失败", name);
+                            } else {
+                                log.info("账号[{}]连接成功", name);
+                            }
+                        });
+
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+}
+package cn.com.helei.depin.app.openLedger;
+
+
+import cn.com.helei.depin.core.dto.AccountContext;
+import cn.com.helei.depin.core.dto.ConnectStatusInfo;
+import cn.com.helei.depin.core.AbstractDepinClient;
+import cn.com.helei.depin.core.AbstractDepinWSClientHandler;
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
+
+import java.time.LocalDateTime;
+import java.util.Random;
+
+/**
+ * OpenLedgerDepinClient
+ */
+@Slf4j
+public class OpenLedgerDepinClient extends AbstractDepinClient<String, String> {
+
+    public OpenLedgerDepinClient(AccountContext accountContext) {
+        super(accountContext, new OpenLedgerDepinClientHandler(accountContext));
+    }
+
+
+    /**
+     * OpenLedgerDepinClient 的 Netty Handler
+     */
+    public static class OpenLedgerDepinClientHandler extends AbstractDepinWSClientHandler<String, String> {
+
+        private final Random random = new Random();
+
+        private final AccountContext accountContext;
+
+        public OpenLedgerDepinClientHandler(AccountContext accountContext) {
+            this.accountContext = accountContext;
+        }
+
+        @Override
+        protected void handleOtherMessage(String message) {
+
+        }
+
+        @Override
+        public String convertMessageToRespType(String message) {
+            return message;
+        }
+
+
+        @Override
+        protected String heartBeatMessage() {
+            //发送心跳时更新状态
+            ConnectStatusInfo statusInfo = accountContext.getConnectStatusInfo();
+
+            statusInfo.setUpdateDateTime(LocalDateTime.now());
+            statusInfo.getHeartBeatCount().incrementAndGet();
+
+            JSONObject heartBeatMessage = buildHeartBeatMessageContext();
+
+            return heartBeatMessage.toJSONString();
+        }
+
+
+        /**
+         * 构建心跳消息体
+         *
+         * @return JSONObject
+         */
+        private @NotNull JSONObject buildHeartBeatMessageContext() {
+            OpenLedgerConfig.OpenLedgerAccount openLedgerAccount = (OpenLedgerConfig.OpenLedgerAccount)
+                    accountContext.getClientAccount();
+
+
+            JSONObject heartBeatMessage = new JSONObject();
+            heartBeatMessage.put("msgType", "HEARTBEAT");
+            heartBeatMessage.put("workerType", "LWEXT");
+            heartBeatMessage.put("workerID", openLedgerAccount.getIdentity());
+
+            JSONObject message = new JSONObject();
+            JSONObject worker = new JSONObject();
+            worker.put("Identity", openLedgerAccount.getIdentity());
+            worker.put("ownerAddress", openLedgerAccount.getOwnerAddress());
+            worker.put("type", "LWEXT");
+            worker.put("Host", openLedgerAccount.getOpenLedgerConfig().getOrigin());
+            message.put("Worker", worker);
+
+            JSONObject capacity = new JSONObject();
+            capacity.put("AvailableMemory", randomAM(0.5, 0.99));
+            capacity.put("AvailableStorage", "99.99");
+            capacity.put("AvailableGPU", "");
+            capacity.put("AvailableModels", new JSONArray());
+
+            message.put("Capacity", capacity);
+            heartBeatMessage.put("message", message);
+            return heartBeatMessage;
+        }
+
+
+        /**
+         * 获取随机AvailableMemory
+         */
+        public double randomAM(double min, double max) {
+            // 生成范围内的两位小数
+            double randomValue = min + random.nextDouble((max - min) * 100); // 乘以 100 是为了得到两位小数
+            randomValue = Math.round(randomValue * 100.0) / 100.0; // 四舍五入并保留两位小数
+            return randomValue;
+        }
+    }
+
+}
+package cn.com.helei.depin.core.command;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.Supplier;
+
+@AllArgsConstructor
+@NoArgsConstructor
+@Data
+public class CommandMenuNode {
+
+
+    /**
+     * 当前节点被选择时显示的文本
+     */
+    private String tittle;
+
+    /**
+     * 当前节点进入后的describe
+     */
+    private String describe;
+
+    /**
+     * 当前节点调用的函数, 返回内容会显示在describe 和 子节点选项之间
+     */
+    private Supplier<String> action;
+
+    /**
+     * 当前节点的子节点
+     */
+    private final List<CommandMenuNode> subNodeList = new ArrayList<>();
+
+    public void addSubMenu(CommandMenuNode subMenu) {
+        this.subNodeList.add(subMenu);
+    }
+}
+package cn.com.helei.depin.core.config;
+
+
+public class BotBaseConfig {
+
+
+    /**
+     * 网络代理配置默认classpath
+     */
+    public static final String NETWORK_PROXY_CONFIG_DEFAULT_CLASSPATH = "network-proxy.yaml";
+
+
+    /**
+     * 浏览器环境配置默认classpath
+     */
+    public static final String BROWSER_ENV_CONFIG_DEFAULT_CLASSPATH = "browser-env.yaml";
+
+}
+package cn.com.helei.depin.core.dto;
+
+import cn.com.helei.depin.core.env.BrowserEnv;
+import cn.com.helei.depin.core.network.NetworkProxy;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class AccountContext {
+
+    /**
+     * 账户是否可用
+     */
+    private boolean usable = true;
+
+    /**
+     * client 账户
+     */
+    private DepinClientAccount clientAccount;
+
+    /**
+     * 代理
+     */
+    private NetworkProxy proxy;
+
+    /**
+     * 浏览器环境
+     */
+    private BrowserEnv browserEnv;
+
+    /**
+     * 连接状态
+     */
+    private final ConnectStatusInfo connectStatusInfo = new ConnectStatusInfo();
+}
+package cn.com.helei.depin.core.dto;
+
+/**
+ * 连接状态
+ */
+public enum ConnectStatus {
+    NEW,
+    STARTING,
+    RUNNING,
+    STOP
+}
+
+
+package cn.com.helei.depin.core.dto;
 
 import lombok.Data;
 
+import java.time.LocalDateTime;
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
- * 服务单 sdi数据
- *
- * @author w30063450
- * @since 2024-10-11
+ * Account的连接状态
  */
+@Data
+public class ConnectStatusInfo {
+
+    /**
+     * 开始时间
+     */
+    private volatile LocalDateTime startDateTime;
+
+    /**
+     * 更新时间
+     */
+    private volatile LocalDateTime updateDateTime;
+
+    /**
+     * 心跳数
+     */
+    private volatile AtomicInteger heartBeatCount = new AtomicInteger(0);
+
+    /**
+     * 连接状态
+     */
+    private volatile ConnectStatus connectStatus = ConnectStatus.NEW;
+}
+
+package cn.com.helei.depin.core.dto;
+
+
+import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.HttpHeaders;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+
 
 @Data
-class ServiceRequestDO {
-    public String serviceId;
-    public String tenantId;
-    public String categoryId;
-    public String title;
-    public String requestUserId;
-    public String locationId;
-    public String requestCi;
-    public String levelId;
-    public String status;
-    public String attachment;
-    public String incident;
-    public String createTime;
-    public String modifyTime;
-    public String createUser;
-    public String modifyUser;
-    public String cloudId;
-    public String serviceFlg;
-    public String supporter;
-    public String solution;
-    public String realFilename;
-    public String category;
-    public String subcategoryId;
-    public String subCategory;
-    public String questionTemplate;
-    public String groupId;
-    public String groupName;
-    public String closeType;
-    public String supportLine;
-    public String incidentFlgStatus;
-    public String incidentStatus;
-    public String incidentCloseType;
-    public String downtimeStart;
-    public String downtimeEnd;
-    public String affectedCustomer;
-    public String changeNumber;
-    public String vendor;
-    public String recommendCiSupported;
-    public String pendingCustomerFlag;
-    public String request;
-    public String sourceName;
-    public String callsNO;
-    public String fromWebFlag;
-    public String openTime;
-    public String slaStatus;
-    public String breakUser;
-    public String breakGroup;
-    public String closeTime;
-    public String openGroup;
-    public String label;
-    public String satisfactionEvaluation;
-    public String isRecommend;
-    public String userEvaluation;
-    public String otherSupplements;
-    public String evaluationTime;
-    public String evaluator;
-    public String closeBy;
-    public String closeGroup;
-    public String resolveGroup;
-    public String resolveBy;
-    public String resolveTime;
-    public String responseTime;
-    public String formalFlag;
-    public String internalNote;
-    public String templateId;
-    public String dataSource;
-    public String solveTimely;
-    public String promptResponse;
-    public String caseNumber;
-    public String dfId;
-    public String ciModuleId;
-    public String processFlag;
-    public String complainBy;
-    public String complainTime;
-    public String thirdCategory;
-    public String secondCategory;
-    public String firstCategoryId;
-    public String firstCategory;
-    public String orderType;
-    public String modifyType;
-    public String ciModuleName;
-    public String ciProductId;
-    public String ciProductName;
-    public String w3uuid;
-    public String suggestionId;
-    public String suggestionTitle;
-    public String suggestionEvaluation;
-    public String remark;
-    public String estimatedResolvingTime;
-    public String phoneNo;
-    public String ownerName;
-    public String modelId;
-    public String extendVariable;
-    public String modelName;
-    public String requirementCiModuleId;
-    public String requirementCiModuleName;
-    public String requirementCiProductId;
-    public String requirementCiProductName;
-    public String expectResolvingTime;
-    public String requestDescription;
-    public String rrOwnerName;
-    public String rrDemandId;
-    public String rrDemandLinkAddress;
-    public String rrDemandStatus;
-    public String extendUrl;
-    public String productName;
-    public String productId;
-    public String requestCiId;
-    public String ciId;
-    public String recommendRequestCi;
-    public String recommendRequestCiId;
-    public String solutionViewMode;
-    public String requestViewMode;
-    public String countryName;
-    public String suggestionType;
-    public String eaMapVoiceReceiver;
-    public String eaMapVoice;
-    public String evaluateTag;
-    public String rootReasonCiId;
-    public String rootReasonCiName;
-    public String deliveryDepartName;
-    public String deliveryDepartId;
-    public String domainId;
-    public String nodeName;
-    public String nodeId;
-    public String ciAppId;
-    public String ciAppName;
-    public String sessionId;
-    public String thirdTicketNumber;
-    public String thirdTicketType;
-    public String thirdTicketLink;
-    public String deptNameCn;
-    public String processType;
-    public String whetherToCreate;
-    public String createTicketType;
-    public String reminderCount1;
-    public String reminderCount;
-    public String opsLabels;
-    public String w3todoUuid;
-    public String resolveBy_w3account;
-    public String w3TodoUuid;
-    public String breakTime;
-    public String breakCi;
-    public String breakModuleId;
-    public String estimatedBreakTime;
-    public String alertType;
-    public String developSlaStatus;
-    public String developSlaBreakUser;
-    public String developSlaBreakGroup;
-    public java.sql.Timestamp opsCreateDate;
-    public java.sql.Timestamp opsDt;
-}
-/*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
- */
+@AllArgsConstructor
+@NoArgsConstructor
+public abstract class DepinClientAccount {
 
-package com.huawei.it.scs;
-
-import static org.apache.flink.table.api.Expressions.$;
-import static org.apache.flink.table.api.Expressions.lit;
-
-import com.huawei.it.scs.commons.event.DatasourceInfoResp;
-import com.huawei.it.scs.commons.util.StartupPropertiesUtil;
-import com.huawei.it.scs.commons.util.unidata.UniDataSourceUtil;
-
-import com.alibaba.fastjson.JSONObject;
-
-import lombok.extern.slf4j.Slf4j;
-
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
-import org.apache.flink.api.common.time.Time;
-import org.apache.flink.api.java.utils.ParameterTool;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.source.SourceFunction;
-import org.apache.flink.table.api.DataTypes;
-import org.apache.flink.table.api.EnvironmentSettings;
-import org.apache.flink.table.api.Table;
-import org.apache.flink.table.api.Tumble;
-import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Properties;
-import java.util.concurrent.TimeUnit;
-
-/**
- * flink api 对接公共数据源
- *
- * @author fwx960259
- * @since 2022-12-26
- */
-@Slf4j
-public class FlinkApiCommonDsDemo {
     /**
-     * main
-     *
-     * @param args args
+     * 账户名
      */
-    public static void main(String[] args) {
-        // 测试错误日志上报功能
-        log.error("test scs error log");
-        ParameterTool paraTool = ParameterTool.fromArgs(args);
-        Properties properties = paraTool.getProperties();
-        // 1.添加配置
-        StartupPropertiesUtil.getInstance()
-                             .attachProps(properties);
-        // 2.添加本地调试配置，环境上不需要
-        if (System.getProperty("os.name")
-                  .contains("Windows")) {
-            // 本地调试需要，环境不用 ：群组下的任意一个任务的id  详见readme.docx  2.2.2
-            StartupPropertiesUtil.getInstance()
-                                 .setProperty("flink.rtt.jobId", "4303295730");
-        }
-        // 3.添加需要的数据源列表   获取数据源id详见readme.docx  1.1.2
-        List<String> dsIdList = new ArrayList<>();
-        dsIdList.add("@ipd_ops_kafka_test@Kafka"); // kafka
-        dsIdList.add("ioc3000@KWE022307216001"); // mysql
-        // 4.获取数据源 DatasourceInfoResp 可参考readme.docx  2.2.3
-        List<DatasourceInfoResp> uniDataSource = UniDataSourceUtil.getInstance()
-                                                                  .getUniDataSource(dsIdList);
-        DatasourceInfoResp kafkaInfoResp = uniDataSource.get(0);
-        DatasourceInfoResp pgsqlInfoResp = uniDataSource.get(1);
+    private String name;
 
-        // 5.用户代码
-        EnvironmentSettings fsSettings = EnvironmentSettings.newInstance()
-                                                            .useBlinkPlanner()
-                                                            .inStreamingMode()
-                                                            .build();
+    /**
+     * 代理id
+     */
+    private Integer proxyId;
 
-        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.disableOperatorChaining();
-        env.setRestartStrategy(RestartStrategies.fixedDelayRestart(3, Time.of(5, TimeUnit.SECONDS)));
 
-        StreamTableEnvironment fsTableEnv = StreamTableEnvironment.create(env, fsSettings);
-        try {
-            fsTableEnv.executeSql("CREATE TABLE\n"
-                                  + "  `sdi_v2_t_importal_service_request_hi` (\n"
-                                  + "    `record_id` STRING,\n"
-                                  + "    `user_id` INT,\n"
-                                  + "    `dept_id` STRING,\n"
-                                  + "    `inspect_time` TIMESTAMP(3),\n"
-                                  + "    WATERMARK FOR inspect_time AS inspect_time - INTERVAL '5' SECOND\n"
-                                  + "  )\n"
-                                  + "WITH\n"
-                                  + "  (\n"
-                                  + "    'connector' = 'kafka',\n"
-                                  + "    'topic' = 'ipd_ops_yygzt_sd',\n"
-                                  + "    'properties.bootstrap.servers' = '"
-                                  + kafkaInfoResp.getConnectUrl()
-                                  + "',\n"
-                                  + "    'properties.group.id' = 'weigaoxi_test',\n"
-                                  + "    'scan.startup.mode' = 'latest-offset',\n"
-                                  + "    'format' = 'json'\n"
-                                  + "  )");
+    /**
+     * 浏览器环境id
+     */
+    private Integer browserEnvId;
 
-            fsTableEnv.executeSql("CREATE TABLE dim_product(\n"
-                                  + "\tdept_id STRING,\n"
-                                  + "\tdept_cn_name STRING,\n"
-                                  + "\tdept_en_name STRING\n"
-                                  + ")  WITH (\n"
-                                  + "'connector' = 'jdbc',\n"
-                                  + "'password' = '"
-                                  + pgsqlInfoResp.getPassword()
-                                  + "',\n"
-                                  + "'lookup.cache.max-rows' = '30000000',\n"
-                                  + "'lookup.cache.ttl' = '3000',\n"
-                                  + "'driver' = 'org.postgresql.Driver',\n"
-                                  + "'table-name' = 'ioc3000.dim_pub_dept_t_copy',\n"
-                                  + "'url' = '"
-                                  + pgsqlInfoResp.getConnectUrl()
-                                  + "',\n"
-                                  + "'username' = '"
-                                  + pgsqlInfoResp.getDbAccount()
-                                  + "'\n"
-                                  + ")");
 
-            fsTableEnv.executeSql("CREATE TABLE outSink(\n"
-                                  + "\trecord_id STRING,\n"
-                                  + "\twindow_start_time TIMESTAMP(3),\n"
-                                  + "\twindow_end_time TIMESTAMP(3),\n"
-                                  + "\tdept_id STRING,\n"
-                                  + "\tdept_cn_name STRING,\n"
-                                  + "\tdept_en_name STRING,\n"
-                                  + "\tuser_cnt INT\n"
-                                  + ")  WITH (\n"
-                                  + "'connector' = 'jdbc',\n"
-                                  + "'password' = '"
-                                  + pgsqlInfoResp.getPassword()
-                                  + "',\n"
-                                  + "'driver' = 'org.postgresql.Driver',\n"
-                                  + "'sink.buffer-flush.interval' = '5s',\n"
-                                  + "'sink.buffer-flush.max-rows' = '3000',\n"
-                                  + "'table-name' = 'dev_unidata.dwr_ipd_ops_data_agg_test',\n"
-                                  + "'url' = '"
-                                  + pgsqlInfoResp.getConnectUrl()
-                                  + "',\n"
-                                  + "'username' = '"
-                                  + pgsqlInfoResp.getDbAccount()
-                                  + "'\n"
-                                  + ")");
-
-            Table tmpResult = fsTableEnv.from("ipd_ops_sdi_record_test")
-                                        .window(Tumble.over(lit(10).seconds())
-                                                      .on($("inspect_time"))
-                                                      .as("w"))
-                                        .groupBy($("w"), $("record_id"), $("dept_id"))
-                                        .select($("w").start()
-                                                      .as("window_start"),
-                                                $("w").end()
-                                                      .as("window_end"),
-                                                $("w").proctime()
-                                                      .as("proctime"),
-                                                $("user_id").count()
-                                                            .as("pv"),
-                                                $("user_id").count()
-                                                            .distinct()
-                                                            .cast(DataTypes.INT())
-                                                            .as("uv"),
-                                                $("record_id"),
-                                                $("dept_id").as("a_dept_id"));
-
-            fsTableEnv.createTemporaryView("tmp_result", tmpResult);
-            // 用lookup 实现维表key过期来维护维表的正确性
-            fsTableEnv.executeSql("INSERT INTO outSink\n"
-                                  + "SELECT record_id,\n"
-                                  + "window_start as window_start_time,\n"
-                                  + "window_end as window_end_time,\n"
-                                  + "a_dept_id as dept_id,\n"
-                                  + "dept_cn_name,\n"
-                                  + "dept_en_name,\n"
-                                  + "uv as user_cnt\n"
-                                  + "FROM \n"
-                                  + "tmp_result \n"
-                                  + "LEFT OUTER JOIN\n"
-                                  + " dim_product FOR SYSTEM_TIME AS OF tmp_result.proctime\n"
-                                  + "ON tmp_result.a_dept_id = dim_product.dept_id");
-
-        } catch (Exception exception) {
-            exception.printStackTrace();
-            log.error("main execute exception", exception);
-        }
+    public HttpHeaders getHeaders() {
+        return new DefaultHttpHeaders();
     }
 
-    public static class SimpleStringGenerator implements SourceFunction<String> {
-        private static final long serialVersionUID = 2174904787118597072L;
+    public String getConnectUrl() {
+        return "";
+    }
+}
 
-        boolean running = true;
+package cn.com.helei.depin.core.env;
 
-        long i = 0;
+import lombok.Data;
 
-        @Override
-        public void run(SourceContext<String> ctx) throws Exception {
-            JSONObject jsonObject = new JSONObject();
-            while (running) {
-                jsonObject.put("id", i++);
-                ctx.collect(jsonObject.toJSONString());
-                Thread.sleep(60000);
+import java.util.Map;
+
+@Data
+public class BrowserEnv {
+
+    private Integer id;
+
+    private Map<String, String> headers;
+
+}
+
+
+
+package cn.com.helei.depin.core.env;
+
+
+import com.jakewharton.fliptables.FlipTable;
+import lombok.Getter;
+import lombok.Setter;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+public class BrowserEnvPool {
+
+    private static final String[] BROWSER_ENV_LIST_PRINT_TABLE_HEADER = new String[]{"ID", "Headers"};
+
+    private static final Map<String, BrowserEnvPool> LOADED_POOL_MAP = new ConcurrentHashMap<>();
+
+    @Getter
+    private String configClassPath;
+
+    @Setter
+    private Set<BrowserEnv> envs;
+
+    private ConcurrentMap<Integer, BrowserEnv> idMapEnv;
+
+    public static BrowserEnvPool loadYamlBrowserEnvPool(String classpath) {
+        return LOADED_POOL_MAP.compute(classpath, (k, pool) -> {
+            if (pool == null) {
+                Yaml yaml = new Yaml();
+                try (InputStream inputStream = BrowserEnvPool.class.getClassLoader().getResourceAsStream(classpath)) {
+                    Map<String, Object> yamlData = yaml.load(inputStream);
+                    Map<String, Object> depin = (Map<String, Object>) yamlData.get("depin");
+                    Map<String, Object> browser = (Map<String, Object>) depin.get("browser");
+
+                    BrowserEnvPool envPool = yaml.loadAs(yaml.dump(browser), BrowserEnvPool.class);
+                    envPool.idMapEnv = new ConcurrentHashMap<>();
+                    envPool.envs.forEach(browserEnv -> envPool.idMapEnv.put(browserEnv.getId(), browserEnv));
+                    envPool.configClassPath = classpath;
+
+                    pool = envPool;
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            return pool;
+        });
+    }
+
+    public BrowserEnv getBrowserEnv(Integer id) {
+        return idMapEnv.get(id);
+    }
+
+    public String printPool() {
+        String[][] table = new String[envs.size()][BROWSER_ENV_LIST_PRINT_TABLE_HEADER.length];
+
+        List<BrowserEnv> list = envs.stream().toList();
+        for (int i = 0; i < list.size(); i++) {
+            BrowserEnv env = list.get(i);
+            table[i] = new String[]{String.valueOf(env.getId()), env.getHeaders().toString()};
+        }
+
+        return FlipTable.of(BROWSER_ENV_LIST_PRINT_TABLE_HEADER, table);
+    }
+}
+
+
+package cn.com.helei.depin.core.netty.base;
+
+
+import cn.com.helei.depin.core.netty.handler.WSCloseHandler;
+import cn.com.helei.depin.core.network.NetworkProxy;
+import cn.com.helei.depin.core.netty.constants.NettyConstants;
+import cn.com.helei.depin.core.netty.constants.WebsocketClientStatus;
+import com.alibaba.fastjson.JSON;
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.*;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.HttpClientCodec;
+import io.netty.handler.codec.http.HttpHeaders;
+import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.websocketx.*;
+import io.netty.handler.proxy.Socks5ProxyHandler;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import io.netty.handler.stream.ChunkedWriteHandler;
+import io.netty.handler.timeout.IdleStateHandler;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+import javax.net.ssl.SSLException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
+
+/**
+ * Websocket客户端
+ *
+ * @param <P> 请求体的类型
+ * @param <T> 返回值的类型
+ */
+@Slf4j
+public abstract class AbstractWebsocketClient<P, T> {
+
+    private static final int MAX_FRAME_SIZE = 10 * 1024 * 1024;  // 10 MB or set to your desired size
+
+    /**
+     * websocket的url字符串
+     */
+    protected String url;
+
+    /**
+     * netty pipeline 最后一个执行的handler
+     */
+    protected final AbstractWebSocketClientHandler<P, T> handler;
+
+    /**
+     * 执行回调的线程池
+     */
+    @Getter
+    protected final ExecutorService callbackInvoker;
+
+    /**
+     * 代理
+     */
+    @Setter
+    protected NetworkProxy proxy = null;
+
+    @Setter
+    protected HttpHeaders headers = new DefaultHttpHeaders();
+
+    /**
+     * 空闲时间
+     */
+    @Setter
+    protected int allIdleTimeSecond = 10;
+
+    /**
+     * 重链接次数
+     */
+    private final AtomicInteger reconnectTimes = new AtomicInteger(0);
+
+    /**
+     * 重连锁
+     */
+    private final ReentrantLock reconnectLock = new ReentrantLock();
+
+    /**
+     * 启动中阻塞的condition
+     */
+    private final Condition startingWaitCondition = reconnectLock.newCondition();
+
+    /**
+     * 客户端当前状态
+     */
+    @Getter
+    private volatile WebsocketClientStatus clientStatus = WebsocketClientStatus.NEW;
+
+    /**
+     * clientStatus更新的回调
+     */
+    @Setter
+    private Consumer<WebsocketClientStatus> clientStatusChangeHandler = socketCloseStatus -> {
+    };
+
+
+    /**
+     * 关闭时的回调列表
+     */
+    private final List<WSCloseHandler> closeHandlerList = new ArrayList<>();
+
+    @Setter
+    @Getter
+    private String name;
+
+    private Bootstrap bootstrap;
+
+    private EventLoopGroup eventLoopGroup;
+
+    private URI uri;
+
+    private String host;
+
+    private int port;
+
+    private boolean useSSL;
+
+    private Channel channel;
+
+    public AbstractWebsocketClient(
+            String url,
+            AbstractWebSocketClientHandler<P, T> handler
+    ) {
+        this.url = url;
+        this.handler = handler;
+        this.handler.websocketClient = this;
+
+        this.callbackInvoker = Executors.newVirtualThreadPerTaskExecutor();
+    }
+
+    private void init() throws SSLException, URISyntaxException {
+
+        resolveParamFromUrl();
+
+        WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(
+                uri, WebSocketVersion.V13, null, true, headers, MAX_FRAME_SIZE
+        );
+        handler.init(handshaker);
+
+        final SslContext sslCtx;
+        if (useSSL) {
+            sslCtx = SslContextBuilder.forClient()
+                    .trustManager(InsecureTrustManagerFactory.INSTANCE).build();
+        } else {
+            sslCtx = null;
+        }
+
+        bootstrap = new Bootstrap();
+
+        eventLoopGroup = new NioEventLoopGroup();
+        bootstrap.group(eventLoopGroup)
+                .channel(NioSocketChannel.class)
+                .remoteAddress(host, port)
+                .option(ChannelOption.TCP_NODELAY, true)
+                .option(ChannelOption.SO_KEEPALIVE, true)
+                .handler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override
+                    protected void initChannel(NioSocketChannel ch) {
+                        ChannelPipeline p = ch.pipeline();
+                        if (proxy != null) {
+                            p.addLast(new Socks5ProxyHandler(proxy.getAddress(), proxy.getUsername(), proxy.getPassword()));
+                        }
+
+                        if (sslCtx != null) {
+                            p.addLast(sslCtx.newHandler(ch.alloc(), uri.getHost(), port));
+                        }
+
+                        p.addLast("http-chunked", new ChunkedWriteHandler()); // 支持大数据流
+
+
+                        p.addLast(new HttpClientCodec());
+                        p.addLast(new HttpObjectAggregator(81920));
+                        p.addLast(new IdleStateHandler(0, 0, allIdleTimeSecond, TimeUnit.SECONDS));
+                        p.addLast(new ChunkedWriteHandler());
+
+                        p.addLast(new WebSocketFrameAggregator(MAX_FRAME_SIZE));  // 设置聚合器的最大帧大小
+
+
+                        p.addLast(handler);
+                    }
+                });
+    }
+
+    /**
+     * 链接服务端
+     */
+    public CompletableFuture<Boolean> connect() {
+        return connect(null);
+    }
+
+    /**
+     * 链接服务端
+     */
+    public CompletableFuture<Boolean> connect(WSCloseHandler wsCloseHandler) {
+
+        /*
+         * 添加关闭的回调
+         */
+        if (wsCloseHandler != null) {
+            synchronized (closeHandlerList) {
+                closeHandlerList.add(wsCloseHandler);
             }
         }
 
-        @Override
-        public void cancel() {
-            running = false;
+        return switch (clientStatus) {
+            case NEW, STOP -> reconnect();
+            case STARTING -> waitForStarting();
+            case RUNNING -> {
+                log.warn("WS客户端[{}}正在运行, clientStatus[{}]", url, clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN -> throw new RuntimeException("");
+        };
+    }
+
+
+    /**
+     * 重链接
+     *
+     * @return CompletableFuture<Void>
+     */
+    public CompletableFuture<Boolean> reconnect() {
+        return switch (clientStatus) {
+            case NEW, STOP -> doReconnect();
+            case STARTING -> waitForStarting();
+            case RUNNING -> {
+                log.warn("WS客户端[{}}正在启动或运行, 不能reconnect. clientStatus[{}]", url, clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN -> CompletableFuture.supplyAsync(() -> {
+                log.error("client[{}] already shutdown", name);
+                return false;
+            });
+        };
+    }
+
+    /**
+     * 执行重连接，带重试逻辑
+     *
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Boolean> doReconnect() {
+        updateClientStatus(WebsocketClientStatus.STARTING);
+
+        return CompletableFuture.supplyAsync(() -> {
+            //Step 1 重连次数超过限制，关闭
+            if (reconnectTimes.get() > NettyConstants.RECONNECT_LIMIT) {
+                log.error("reconnect times out of limit [{}], close websocket client", NettyConstants.RECONNECT_LIMIT);
+                close();
+                return false;
+            }
+
+            AtomicBoolean isSuccess = new AtomicBoolean(false);
+
+            //Step 2 重连逻辑
+            //Step 2.1 加锁保证只要一个线程进行重连
+            reconnectLock.lock();
+            try {
+
+                //Step 2.2 已经再running状态，直接返回true。变为shutdown、stop状态，直接返回false
+                if (clientStatus.equals(WebsocketClientStatus.RUNNING)) {
+                    log.info("client started by other thread");
+                    return true;
+                } else if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN) || clientStatus.equals(WebsocketClientStatus.STOP)) {
+                    log.error("clint stop/shutdown when client starting");
+                    return false;
+                }
+
+                //Step 3 初始化
+                log.info("开始初始化WS客户端");
+                try {
+                    init();
+                } catch (SSLException | URISyntaxException e) {
+                    throw new RuntimeException("初始化WS客户端发生错误", e);
+                }
+                log.info("初始化WS客户端完成，开始链接服务器 [{}]", url);
+
+
+                //Step 4 链接服务器
+                while (reconnectTimes.incrementAndGet() <= NettyConstants.RECONNECT_LIMIT) {
+
+                    //Step 4.1 每进行重连都会先将次数加1并设置定时任务将重连次数减1
+                    eventLoopGroup.schedule(() -> {
+                        reconnectTimes.decrementAndGet();
+                    }, 180, TimeUnit.SECONDS);
+
+                    log.info("start connect client [{}], url[{}], current times [{}]", name, url, reconnectTimes.get());
+
+                    //Step 4.2 latch用于同步等等链接完成
+                    CountDownLatch latch = new CountDownLatch(1);
+
+                    //Step 4.3 延迟再进行连接
+                    eventLoopGroup.schedule(() -> {
+                        try {
+                            channel = bootstrap.connect().sync().channel();
+
+                            handler.handshakeFuture().sync();
+
+                            channel.attr(NettyConstants.CLIENT_NAME).set(name);
+
+                            //Step 4.4 连接成功设置标识
+                            isSuccess.set(true);
+                        } catch (Exception e) {
+                            log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(), e);
+                        } finally {
+                            latch.countDown();
+                        }
+                    }, NettyConstants.RECONNECT_DELAY_SECONDS, TimeUnit.SECONDS);
+
+                    //Step 4.5 等待链接完成
+                    try {
+                        latch.await();
+                    } catch (InterruptedException e) {
+                        log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(), e);
+                    }
+
+                    //Step 4.6 链接成功则跳出循环
+                    if (isSuccess.get()) {
+                        log.info("connect client [{}], url[{}] success, current times [{}]", name, url, reconnectTimes.get());
+
+                        updateClientStatus(WebsocketClientStatus.RUNNING);
+                        reconnectTimes.set(0);
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                //exception 遇到未处理异常，直接关闭
+                close();
+                throw new RuntimeException(String.format("connect client [%s] appear unknown error", name), e);
+            } finally {
+                //Step 5 释放等待启动的线程
+                startingWaitCondition.signalAll();
+                reconnectLock.unlock();
+            }
+
+            //Step 6 未成功启动，关闭并抛出异常
+            if (!isSuccess.get()) {
+                log.error("reconnect times out of limit [{}], close websocket client", NettyConstants.RECONNECT_LIMIT);
+                close();
+                throw new RuntimeException("reconnect times out of limit");
+            }
+
+            return true;
+        }, callbackInvoker);
+    }
+
+
+    /**
+     * 停止WebSocketClient
+     */
+    public void close() {
+        synchronized (closeHandlerList) {
+            log.info("closing websocket client [{}]", name);
+            if (channel != null) {
+                channel.close();
+            }
+
+            if (eventLoopGroup != null) {
+                eventLoopGroup.shutdownGracefully();
+            }
+            reconnectTimes.set(0);
+
+            updateClientStatus(WebsocketClientStatus.STOP);
+
+            //执行关闭回调
+            Iterator<WSCloseHandler> iterator = closeHandlerList.iterator();
+            while (iterator.hasNext()) {
+                WSCloseHandler closeHandler = iterator.next();
+                iterator.remove();
+
+                CompletableFuture.runAsync(closeHandler::onClosed, callbackInvoker);
+            }
+
+            log.warn("web socket client [{}] closed", name);
         }
     }
+
+    /**
+     * 彻底关闭客户端
+     */
+    public void shutdown() {
+        close();
+        updateClientStatus(WebsocketClientStatus.SHUTDOWN);
+        log.warn("web socket client [{}] already shutdown !", name);
+    }
+
+    /**
+     * 等待启动完成
+     *
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Boolean> waitForStarting() {
+        return CompletableFuture.supplyAsync(() -> {
+            log.warn("client [{}] is starting, waiting for complete", name);
+            reconnectLock.lock();
+            try {
+                while (clientStatus.equals(WebsocketClientStatus.RUNNING)) {
+                    startingWaitCondition.await();
+                }
+
+                if (clientStatus.equals(WebsocketClientStatus.STOP) || clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+                    log.error("启动WS客户端[{}]失败, ClientStatus [{}}", name, clientStatus);
+                    return false;
+                }
+                return true;
+            } catch (InterruptedException e) {
+                log.error("waiting for start client [{}] error", name);
+                throw new RuntimeException(e);
+            } finally {
+                reconnectLock.unlock();
+            }
+        }, callbackInvoker);
+    }
+
+
+    /**
+     * 发送消息，没有回调
+     *
+     * @param message message
+     * @return CompletableFuture<Void>
+     */
+    public CompletableFuture<Void> sendMessage(P message) {
+        return CompletableFuture.runAsync(() -> {
+            if (message == null) {
+                throw new IllegalArgumentException("message is null");
+            }
+
+            try {
+                channel.writeAndFlush(new TextWebSocketFrame(JSON.toJSONString(message)));
+            } catch (Exception e) {
+                throw new RuntimeException("send message [" + message + "] error");
+            }
+        }, callbackInvoker);
+    }
+
+    ;
+
+    /**
+     * 发送请求, 注册响应监听
+     *
+     * @param request 请求体
+     */
+    public CompletableFuture<T> sendRequest(P request) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (request == null) {
+                log.error("request is null");
+                return null;
+            }
+
+            CountDownLatch latch = new CountDownLatch(1);
+            AtomicReference<T> jb = new AtomicReference<>(null);
+
+            boolean flag = handler.registryRequest(request, response -> {
+                latch.countDown();
+                jb.set(response);
+            });
+
+            if (flag) {
+                log.info("send request [{}]", request);
+                channel.writeAndFlush(new TextWebSocketFrame(JSON.toJSONString(request)));
+                log.debug("send request [{}] success", request);
+            } else {
+                log.error("request id registered");
+                return null;
+            }
+
+            try {
+                if (!latch.await(NettyConstants.REQUEST_WAITE_SECONDS, TimeUnit.SECONDS)) return null;
+
+                return jb.get();
+            } catch (InterruptedException e) {
+                log.error("send request interrupted", e);
+                return null;
+            }
+        }, callbackInvoker);
+    }
+
+    /**
+     * 发送ping
+     */
+    public void sendPing() {
+        log.debug("client [{}] send ping {}", name, url);
+        channel.writeAndFlush(new PingWebSocketFrame());
+    }
+
+    /**
+     * 发送pong
+     */
+    public void sendPong() {
+        log.debug("client [{}] send pong {}", name, url);
+        channel.writeAndFlush(new PongWebSocketFrame());
+    }
+
+
+    /**
+     * 更新status
+     *
+     * @param newStatus newStatus
+     */
+    public void updateClientStatus(WebsocketClientStatus newStatus) {
+        synchronized ("CLIENT_STATUS_LOCK") {
+            try {
+                if (clientStatusChangeHandler != null) {
+                    clientStatusChangeHandler.accept(newStatus);
+                }
+            } finally {
+                clientStatus = newStatus;
+            }
+        }
+    }
+
+    /**
+     * 解析参数
+     *
+     * @throws URISyntaxException url解析错误
+     */
+    private void resolveParamFromUrl() throws URISyntaxException {
+        uri = new URI(url);
+        String scheme = uri.getScheme() == null ? "ws" : uri.getScheme();
+        host = uri.getHost() == null ? "127.0.0.1" : uri.getHost();
+        if (uri.getPort() == -1) {
+            if ("ws".equalsIgnoreCase(scheme)) {
+                port = 80;
+            } else if ("wss".equalsIgnoreCase(scheme)) {
+                port = 443;
+            } else {
+                port = -1;
+            }
+        } else {
+            port = uri.getPort();
+        }
+
+        if (!"ws".equalsIgnoreCase(scheme) && !"wss".equalsIgnoreCase(scheme)) {
+            log.error("Only WS(S) is supported.");
+            throw new IllegalArgumentException("url error, Only WS(S) is supported.");
+        }
+
+        useSSL = "wss".equalsIgnoreCase(scheme);
+    }
 }
-package com.huawei.it.scs;
 
-/**
- * 功能描述
- *
- * @author w30063450
- * @since 2024-10-17
- */
-interface GraphBuilder {
-    GraphBuilder buildSourceGraph();
+package cn.com.helei.depin.core.netty.base;
 
-    GraphBuilder buildTransformGraph();
-
-    GraphBuilder buildSinkGraph();
-
-}
-/*
- * Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
- */
-
-package com.huawei.it.scs;
-
-import com.huawei.it.scs.commons.util.StartupPropertiesUtil;
+import cn.com.helei.depin.core.netty.constants.NettyConstants;
+import cn.hutool.core.util.StrUtil;
+import io.netty.channel.*;
 
 import lombok.extern.slf4j.Slf4j;
 
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
-import org.apache.flink.api.common.time.Time;
-import org.apache.flink.api.java.utils.ParameterTool;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.table.api.EnvironmentSettings;
-import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
-import java.util.Properties;
-import java.util.concurrent.TimeUnit;
 
 /**
- * flink api 对接公共数据源
+ * WebSocket客户端处理器抽象类
+ * 能够处理请求响应类型的消息。
+ * 其它类型的消息要通过handleOtherMessage()抽象方法处理
  *
- * @author fwx960259
- * @since 2022-12-26
+ * @param <Resp>
  */
 @Slf4j
-public class ServiceOrderApp {
+@ChannelHandler.Sharable
+public abstract class AbstractWebSocketClientHandler<Req, Resp> extends BaseWebSocketClientHandler<Req, Resp> {
+
     /**
-     * main
-     *
-     * @param args args
+     * 存放请求响应的回调
      */
-    public static void main(String[] args) {
+    protected final ConcurrentMap<String, HandlerEntity<Resp>> requestIdMap = new ConcurrentHashMap<>();
 
-        // 测试错误日志上报功能
-        log.info("#########service order app###########");
-        ParameterTool paraTool = ParameterTool.fromArgs(args);
-        Properties properties = paraTool.getProperties();
 
-        StartupPropertiesUtil.getInstance().attachProps(properties);
+    @Override
+    protected void whenReceiveMessage(String text) {
+        Resp message = convertMessageToRespType(text);
 
-        if (System.getProperty("os.name").contains("Windows")) {
-            // 本地调试需要，环境不用 ：群组下的任意一个任务的id  详见readme.docx  2.2.2
-            StartupPropertiesUtil.getInstance().setProperty("flink.rtt.jobId", "4303295730");
-        }
-        EnvironmentSettings fsSettings = EnvironmentSettings.newInstance().useBlinkPlanner().inStreamingMode().build();
+        String responseId = getResponseId(message);
 
-        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        env.disableOperatorChaining();
-        env.setRestartStrategy(RestartStrategies.fixedDelayRestart(3, Time.of(5, TimeUnit.SECONDS)));
-
-        StreamTableEnvironment fsTableEnv = StreamTableEnvironment.create(env, fsSettings);
-        try {
-            // 建立流的执行图
-            ServiceOrderGraphDirector director = new ServiceOrderGraphDirector();
-            director.createServiceOrderGraph(new ServiceOrderGraphBuilder(fsTableEnv));
-        } catch (Exception exception) {
-            log.error("main execute exception", exception);
+        if (StrUtil.isNotBlank(responseId)) {
+            //有id，是发送请求的响应
+            //提交response
+            handleResponseMessage(responseId, message);
+        } else {
+            //没有id，按其它格式处理
+            handleOtherMessage(message);
         }
     }
 
+
+    /**
+     * 注册request
+     *
+     * @param request request
+     * @return 是否注册成功
+     */
+    public boolean registryRequest(Req request, Consumer<Resp> callback) {
+        AtomicBoolean res = new AtomicBoolean(false);
+        String requestId = getRequestId(request);
+
+        if (StrUtil.isBlank(requestId)) return false;
+
+        requestIdMap.compute(requestId, (k, v) -> {
+            if (v == null) {
+                res.set(true);
+                long expireTime = System.currentTimeMillis() + NettyConstants.REQUEST_WAITE_SECONDS * 1000;
+                v = new HandlerEntity<>(expireTime, callback);
+                log.debug("registry request id[{}] success, expire time [{}]", requestId, expireTime);
+            }
+            return v;
+        });
+
+        return res.get();
+    }
+
+    /**
+     * 处理请求响应的消息
+     *
+     * @param id       id
+     * @param response 响应消息体
+     */
+    protected void handleResponseMessage(String id, Resp response) {
+        HandlerEntity<Resp> handlerEntity = requestIdMap.get(id);
+
+        if (System.currentTimeMillis() > handlerEntity.getExpireTime()) {
+            log.warn("请求[{}]得到响应超时", id);
+        } else {
+            websocketClient.callbackInvoker.execute(() -> handlerEntity.getCallback().accept(response));
+        }
+    }
+
+    /**
+     * 处理其他类型消息
+     *
+     * @param message 消息
+     */
+    protected abstract void handleOtherMessage(Resp message);
+
+
+    /**
+     * 将websocket收到的文本消息转换为响应类型 Resp
+     *
+     * @param message websocket收到的原始消息
+     * @return typedMessage
+     */
+    public abstract Resp convertMessageToRespType(String message);
+
+
+    /**
+     * 获取请求id
+     *
+     * @param request request
+     * @return id
+     */
+    public abstract String getRequestId(Req request);
+
+    /**
+     * 获取响应id
+     *
+     * @param response 响应
+     * @return id
+     */
+    public abstract String getResponseId(Resp response);
 }
 
-package com.huawei.it.scs;
+package cn.com.helei.depin.core.netty.base;
 
-import static org.apache.flink.table.api.Expressions.$;
-import static org.apache.flink.table.api.Expressions.call;
+import cn.com.helei.depin.core.netty.constants.NettyConstants;
+import io.netty.channel.*;
+import io.netty.handler.codec.http.FullHttpResponse;
+import io.netty.handler.codec.http.websocketx.*;
+import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.util.CharsetUtil;
+import lombok.extern.slf4j.Slf4j;
 
-import com.huawei.it.scs.commons.event.DatasourceInfoResp;
-import com.huawei.it.scs.commons.util.unidata.UniDataSourceUtil;
-
-import org.apache.flink.table.api.Table;
-import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
-import org.apache.flink.table.functions.TableFunction;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
 
 /**
- * 功能描述
+ * WebSocket客户端处理器基础类
+ * 处理连接握手
  *
- * @author w30063450
- * @since 2024-10-17
+ * @param <P>
+ * @param <T>
  */
-final class ServiceOrderGraphBuilder implements GraphBuilder {
+@Slf4j
+@ChannelHandler.Sharable
+public abstract class BaseWebSocketClientHandler<P, T> extends SimpleChannelInboundHandler<Object> {
+    private WebSocketClientHandshaker handshaker;
 
-    private StreamTableEnvironment tableEnv;
+    private ChannelPromise handshakeFuture;
 
-    private ServiceOrderGraphBuilder() {
-    }
+    protected AbstractWebsocketClient<P, T> websocketClient;
 
-    ServiceOrderGraphBuilder(StreamTableEnvironment tableEnv) {
-        this.tableEnv = tableEnv;
-    }
+    /**
+     * 收到消息处理
+     *
+     * @param text 消息字符串
+     */
+    protected abstract void whenReceiveMessage(String text);
 
-    @Override
-    public GraphBuilder buildSourceGraph() {
-        return this.buildSubOrderSource()
-                   .buildUpdateSemaphoreSource();
-    }
 
-    @Override
-    public GraphBuilder buildTransformGraph() {
-        return this.unionUpdateSignal()
-                   .buildSubOrderInfo()
-                   .buildServiceOrderProcess().buildServiceOrderCombine();
+    public void init(WebSocketClientHandshaker handshaker) {
+        this.handshaker = handshaker;
     }
 
     @Override
-    public GraphBuilder buildSinkGraph() {
-        return this.buildServiceOrderSink();
+    public void handlerAdded(ChannelHandlerContext ctx) {
+        handshakeFuture = ctx.newPromise();
     }
 
-    private ServiceOrderGraphBuilder buildUpdateSemaphoreSource() {
-        List<String> dsIdList = new ArrayList<>();
-        dsIdList.add("@ipd_ops_kafka_test@Kafka"); // kafka
-        dsIdList.add("ioc3000@KWE022307216001"); // mysql
-        // 4.获取数据源 DatasourceInfoResp 可参考readme.docx  2.2.3
-        List<DatasourceInfoResp> uniDataSource = UniDataSourceUtil.getInstance()
-                                                                  .getUniDataSource(dsIdList);
-        DatasourceInfoResp kafkaInfoResp = uniDataSource.get(0);
-        DatasourceInfoResp pgsqlInfoResp = uniDataSource.get(1);
-
-        String kafkaGourpId = "'weigaoxi_test'";
-        tableEnv.executeSql("CREATE TABLE service_order_update (\n"
-                            + "  primary key (service_id) not enforced,\n"
-                            + "  `service_id` STRING\n"
-                            + ")"
-                            + "WITH\n"
-                            + "  (\n"
-                            + "    'connector' = 'kafka',\n"
-                            + "    'topic' = 'sdi_importal_service_request_full_sync',\n"
-                            + "    'properties.bootstrap.servers' = '"
-                            + kafkaInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "    'properties.group.id' = "
-                            + kafkaGourpId
-                            + ",\n"
-                            + "    'scan.startup.mode' = 'latest-offset',\n"
-                            + "    'format' = 'json'\n"
-                            + "  )");
-
-        tableEnv.executeSql("CREATE TABLE alm_defect_update (\n"
-                            + "  primary key (source_number) not enforced,\n"
-                            + "  `source_system` STRING,\n"
-                            + "  `source_number` STRING\n"
-                            + ")"
-                            + "WITH\n"
-                            + "  (\n"
-                            + "    'connector' = 'kafka',\n"
-                            + "    'topic' = 'sdi_alm_defect_real_time_full_sync',\n"
-                            + "    'properties.bootstrap.servers' = '"
-                            + kafkaInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "    'properties.group.id' = "
-                            + kafkaGourpId
-                            + ",\n"
-                            + "    'scan.startup.mode' = 'latest-offset',\n"
-                            + "    'format' = 'json'\n"
-                            + "  )");
-
-        tableEnv.executeSql("CREATE TABLE ticket_td_order_update (\n"
-                            + "  primary key (related_service_order) not enforced,\n"
-                            + "  `related_service_order` STRING\n"
-                            + ")"
-                            + "WITH\n"
-                            + "  (\n"
-                            + "    'connector' = 'kafka',\n"
-                            + "    'topic' = 'sdi_ticket_td_order_full_sync',\n"
-                            + "    'properties.bootstrap.servers' = '"
-                            + kafkaInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "    'properties.group.id' = "
-                            + kafkaGourpId
-                            + ",\n"
-                            + "    'scan.startup.mode' = 'latest-offset',\n"
-                            + "    'format' = 'json'\n"
-                            + "  )");
-
-        tableEnv.executeSql("CREATE TABLE importal_suggestion_order_update (\n"
-                            + "  primary key (suggestion_id) not enforced,\n"
-                            + "  `suggestion_id` STRING\n"
-                            + ")"
-                            + "WITH\n"
-                            + "  (\n"
-                            + "    'connector' = 'kafka',\n"
-                            + "    'topic' = 'sdi_importal_suggestion_order_full_sync',\n"
-                            + "    'properties.bootstrap.servers' = '"
-                            + kafkaInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "    'properties.group.id' = "
-                            + kafkaGourpId
-                            + ",\n"
-                            + "    'scan.startup.mode' = 'latest-offset',\n"
-                            + "    'format' = 'json'\n"
-                            + "  )");
-
-        tableEnv.executeSql("CREATE TABLE probsummarym_update (\n"
-                            + "  primary key (number) not enforced,\n"
-                            + "  `number` STRING\n"
-                            + ")"
-                            + "WITH\n"
-                            + "  (\n"
-                            + "    'connector' = 'kafka',\n"
-                            + "    'topic' = 'sdi_probsummarym_full_sync',\n"
-                            + "    'properties.bootstrap.servers' = '"
-                            + kafkaInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "    'properties.group.id' = "
-                            + kafkaGourpId
-                            + ",\n"
-                            + "    'scan.startup.mode' = 'latest-offset',\n"
-                            + "    'format' = 'json'\n"
-                            + "  )");
-
-        tableEnv.executeSql("CREATE TABLE alm_raw_requirement_update (\n"
-                            + "  primary key (integrated_system_id) not enforced,\n"
-                            + "  `source_system` STRING,\n"
-                            + "  `integrated_system_id` STRING\n"
-                            + ")"
-                            + "WITH\n"
-                            + "  (\n"
-                            + "    'connector' = 'kafka',\n"
-                            + "    'topic' = 'sdi_alm_raw_requirement_full_sync',\n"
-                            + "    'properties.bootstrap.servers' = '"
-                            + kafkaInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "    'properties.group.id' = "
-                            + kafkaGourpId
-                            + ",\n"
-                            + "    'scan.startup.mode' = 'latest-offset',\n"
-                            + "    'format' = 'json'\n"
-                            + "  )");
-
-        return this;
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) {
+        Channel channel = ctx.channel();
+        log.info("WebSocket Client [{}] connected!", websocketClient.getName());
+        channel.attr(NettyConstants.CLIENT_NAME).set(websocketClient.getName());
+        handshaker.handshake(channel);
     }
 
-    private ServiceOrderGraphBuilder buildSubOrderSource() {
-        List<String> dsIdList = new ArrayList<>();
-        dsIdList.add("@ipd_ops_kafka_test@Kafka"); // kafka
-        dsIdList.add("ioc3000@KWE022307216001"); // mysql
-        // 4.获取数据源 DatasourceInfoResp 可参考readme.docx  2.2.3
-        List<DatasourceInfoResp> uniDataSource = UniDataSourceUtil.getInstance()
-                                                                  .getUniDataSource(dsIdList);
-        DatasourceInfoResp pgsqlInfoResp = uniDataSource.get(1);
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+        log.warn("WebSocket Client [{}] disconnected!", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
 
-        String kafkaGourpId = "'weigaoxi_test'";
-
-        tableEnv.executeSql("CREATE TABLE importal_service_request (\n"
-                            + "  `service_id` STRING,\n"
-                            + "  `request_user_id` STRING,\n"
-                            + "  `create_user` STRING,\n"
-                            + "  `open_time` STRING,\n"
-                            + "  `estimated_break_time` STRING,\n"
-                            + "  `create_ticket_type` STRING,\n"
-                            + "  `source_name` STRING,\n"
-                            + "  `title` STRING,\n"
-                            + "  `request` STRING,\n"
-                            + "  `extend_url` STRING,\n"
-                            + "  `supporter` STRING,\n"
-                            + "  `alert_type` STRING,\n"
-                            + "  `resolve_by` STRING,\n"
-                            + "  `resolve_time` STRING,\n"
-                            + "  `close_time` STRING,\n"
-                            + "  `request_ci_id` STRING,\n"
-                            + "  `formal_flag` STRING,\n"
-                            + "  `process_type` STRING,\n"
-                            + "  `category` STRING,\n"
-                            + "  `reminder_count` STRING,\n"
-                            + "  `solution` STRING,\n"
-                            + "  `rr_demand_id` STRING,\n"
-                            + "  `suggestion_id` STRING,\n"
-                            + "  `ci_module_id` STRING,\n"
-                            + "  `status` STRING,\n"
-                            + "  `incident` STRING\n"
-                            + "  )  WITH (\n"
-                            + "'connector' = 'jdbc',\n"
-                            + "'password' = '"
-                            + pgsqlInfoResp.getPassword()
-                            + "',\n"
-                            + "'lookup.cache.max-rows' = '3000000',\n"
-                            + "'lookup.cache.ttl' = '3000',\n"
-                            + "'driver' = 'org.postgresql.Driver',\n"
-                            + "'table-name' = 'ioc3000.sdi_t_importal_service_request_hi',\n"
-                            + "'url' = '"
-                            + pgsqlInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "'username' = '"
-                            + pgsqlInfoResp.getDbAccount()
-                            + "'\n"
-                            + ")");
-
-        tableEnv.executeSql("CREATE TABLE importal_suggestion_order (\n"
-                            + "  `suggestion_id` STRING,\n"
-                            + "  `open_time` STRING,\n"
-                            + "  `suggestion_title` STRING,\n"
-                            + "  `opened_by` STRING,\n"
-                            + "  `supporter` STRING,\n"
-                            + "  `owner_name` STRING,\n"
-                            + "  `analysis_result` STRING,\n"
-                            + "  `update_status` STRING,\n"
-                            + "  `rr_demand_status` STRING\n"
-                            + "  )   WITH (\n"
-                            + "'connector' = 'jdbc',\n"
-                            + "'password' = '"
-                            + pgsqlInfoResp.getPassword()
-                            + "',\n"
-                            + "'lookup.cache.max-rows' = '3000000',\n"
-                            + "'lookup.cache.ttl' = '3000',\n"
-                            + "'driver' = 'org.postgresql.Driver',\n"
-                            + "'table-name' = 'ioc3000.sdi_v2_t_importal_suggestion_order_hi',\n"
-                            + "'url' = '"
-                            + pgsqlInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "'username' = '"
-                            + pgsqlInfoResp.getDbAccount()
-                            + "'\n"
-                            + ")");
-
-        tableEnv.executeSql("CREATE TABLE probsummarym (\n"
-                            + "  `number` STRING,\n"
-                            + "  `open_time` STRING,\n"
-                            + "  `brief_description` STRING,\n"
-                            + "  `problem_status` STRING,\n"
-                            + "  `contact_name` STRING,\n"
-                            + "  `opened_by` STRING,\n"
-                            + "  `assignee_name` STRING,\n"
-                            + "  `hw_resolved_by` STRING,\n"
-                            + "  `closed_by` STRING,\n"
-                            + "  `sla_expire` STRING,\n"
-                            + "  `sla_breach` STRING,\n"
-                            + "  `priority_code` STRING,\n"
-                            + "  `severity` STRING\n"
-                            + "  )   WITH (\n"
-                            + "'connector' = 'jdbc',\n"
-                            + "'password' = '"
-                            + pgsqlInfoResp.getPassword()
-                            + "',\n"
-                            + "'lookup.cache.max-rows' = '3000000',\n"
-                            + "'lookup.cache.ttl' = '3000',\n"
-                            + "'driver' = 'org.postgresql.Driver',\n"
-                            + "'table-name' = 'ioc3000.sdi_probsummarym1_full',\n"
-                            + "'url' = '"
-                            + pgsqlInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "'username' = '"
-                            + pgsqlInfoResp.getDbAccount()
-                            + "'\n"
-                            + ")");
-
-        tableEnv.executeSql("CREATE TABLE alm_raw_requirement (\n"
-                            + "  `integrated_system_id` STRING,\n"
-                            + "  `requirement_number` STRING,\n"
-                            + "  `created_date` STRING,\n"
-                            + "  `title` STRING,\n"
-                            + "  `status` STRING,\n"
-                            + "  `submitted_by` STRING,\n"
-                            + "  `created_by` STRING,\n"
-                            + "  `owner` STRING,\n"
-                            + "  `source_system` STRING\n"
-                            + "  )  WITH (\n"
-                            + "'connector' = 'jdbc',\n"
-                            + "'password' = '"
-                            + pgsqlInfoResp.getPassword()
-                            + "',\n"
-                            + "'lookup.cache.max-rows' = '3000000',\n"
-                            + "'lookup.cache.ttl' = '3000',\n"
-                            + "'driver' = 'org.postgresql.Driver',\n"
-                            + "'table-name' = 'ioc3000.sdi_alm_raw_requirement_real_time_full',\n"
-                            + "'url' = '"
-                            + pgsqlInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "'username' = '"
-                            + pgsqlInfoResp.getDbAccount()
-                            + "'\n"
-                            + ")");
-
-        tableEnv.executeSql("CREATE TABLE alm_defect (\n"
-                            + "  `source_number` STRING,\n"
-                            + "  `defect_number` STRING,\n"
-                            + "  `created_date` STRING,\n"
-                            + "  `title` STRING,\n"
-                            + "  `defect_status` STRING,\n"
-                            + "  `defect_created_by` STRING,\n"
-                            + "  `created_by` STRING,\n"
-                            + "  `current_handler` STRING,\n"
-                            + "  `turn_confirm_time` STRING,\n"
-                            + "  `severity` STRING,\n"
-                            + "  `source_system` STRING\n"
-                            + "  )  WITH (\n"
-                            + "'connector' = 'jdbc',\n"
-                            + "'password' = '"
-                            + pgsqlInfoResp.getPassword()
-                            + "',\n"
-                            + "'lookup.cache.max-rows' = '3000000',\n"
-                            + "'lookup.cache.ttl' = '3000',\n"
-                            + "'driver' = 'org.postgresql.Driver',\n"
-                            + "'table-name' = 'ioc3000.sdi_alm_defect_real_time_full',\n"
-                            + "'url' = '"
-                            + pgsqlInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "'username' = '"
-                            + pgsqlInfoResp.getDbAccount()
-                            + "'\n"
-                            + ")");
-
-        tableEnv.executeSql("CREATE TABLE ticket_td_order (\n"
-                            + "  `related_service_order` STRING,\n"
-                            + "  `td_order_id` STRING,\n"
-                            + "  `open_datetime` STRING,\n"
-                            + "  `title` STRING,\n"
-                            + "  `status` STRING,\n"
-                            + "  `td_type` STRING,\n"
-                            + "  `request_user_id` STRING,\n"
-                            + "  `opened_by` STRING,\n"
-                            + "  `curr_processor` STRING,\n"
-                            + "  `estimated_finish_time` STRING,\n"
-                            + "  `sla_status` STRING\n"
-                            + "  )  WITH (\n"
-                            + "'connector' = 'jdbc',\n"
-                            + "'password' = '"
-                            + pgsqlInfoResp.getPassword()
-                            + "',\n"
-                            + "'lookup.cache.max-rows' = '3000000',\n"
-                            + "'lookup.cache.ttl' = '3000',\n"
-                            + "'driver' = 'org.postgresql.Driver',\n"
-                            + "'table-name' = 'ioc3000.sdi_v2_t_ticket_td_order_hi',\n"
-                            + "'url' = '"
-                            + pgsqlInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "'username' = '"
-                            + pgsqlInfoResp.getDbAccount()
-                            + "'\n"
-                            + ")");
-
-        tableEnv.executeSql("CREATE TABLE dim_alm_user (\n"
-                            + "  `id` STRING,\n"
-                            + "  `username` STRING\n"
-                            + "  )  WITH (\n"
-                            + "'connector' = 'jdbc',\n"
-                            + "'password' = '"
-                            + pgsqlInfoResp.getPassword()
-                            + "',\n"
-                            + "'lookup.cache.max-rows' = '3000000',\n"
-                            + "'lookup.cache.ttl' = '3000',\n"
-                            + "'driver' = 'org.postgresql.Driver',\n"
-                            + "'table-name' = 'ioc3000.dim_alm_user_9250',\n"
-                            + "'url' = '"
-                            + pgsqlInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "'username' = '"
-                            + pgsqlInfoResp.getDbAccount()
-                            + "'\n"
-                            + ")");
-
-        tableEnv.executeSql("CREATE TABLE dim_pub_dimension_ipmt (\n"
-                            + "  `dimension_code` STRING\n"
-                            + "  )  WITH (\n"
-                            + "'connector' = 'jdbc',\n"
-                            + "'password' = '"
-                            + pgsqlInfoResp.getPassword()
-                            + "',\n"
-                            + "'lookup.cache.max-rows' = '3000000',\n"
-                            + "'lookup.cache.ttl' = '3000',\n"
-                            + "'driver' = 'org.postgresql.Driver',\n"
-                            + "'table-name' = 'ioc3000.dim_pub_dimension_ipmt',\n"
-                            + "'url' = '"
-                            + pgsqlInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "'username' = '"
-                            + pgsqlInfoResp.getDbAccount()
-                            + "'\n"
-                            + ")");
-
-        tableEnv.executeSql("CREATE TABLE incidentsm_hi (\n"
-                            + "  `incident_id` STRING,\n"
-                            + "  `open` STRING\n"
-                            + "  )  WITH (\n"
-                            + "'connector' = 'jdbc',\n"
-                            + "'password' = '"
-                            + pgsqlInfoResp.getPassword()
-                            + "',\n"
-                            + "'lookup.cache.max-rows' = '3000000',\n"
-                            + "'lookup.cache.ttl' = '3000',\n"
-                            + "'driver' = 'org.postgresql.Driver',\n"
-                            + "'table-name' = 'ioc3000.dwi_v2_incidentsm1_hi',\n"
-                            + "'url' = '"
-                            + pgsqlInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "'username' = '"
-                            + pgsqlInfoResp.getDbAccount()
-                            + "'\n"
-                            + ")");
-
-        tableEnv.executeSql("CREATE TABLE importal_service_history (\n"
-                            + "  `service_id` STRING,\n"
-                            + "  `create_time` STRING,\n"
-                            + "  `create_user` STRING,\n"
-                            + "  `update_msg` STRING"
-                            + "  )  WITH (\n"
-                            + "'connector' = 'jdbc',\n"
-                            + "'password' = '"
-                            + pgsqlInfoResp.getPassword()
-                            + "',\n"
-                            + "'lookup.cache.max-rows' = '3000000',\n"
-                            + "'lookup.cache.ttl' = '3000',\n"
-                            + "'driver' = 'org.postgresql.Driver',\n"
-                            + "'table-name' = 'ioc3000.dwi_v2_t_importal_service_history_hi',\n"
-                            + "'url' = '"
-                            + pgsqlInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "'username' = '"
-                            + pgsqlInfoResp.getDbAccount()
-                            + "'\n"
-                            + ")");
-
-        tableEnv.executeSql("CREATE TABLE dim_pub_rels_emp_dept (\n"
-                            + "  `employee_no` STRING,\n"
-                            + "  `sla_breach` STRING,\n"
-                            + "  `new_w3_account` STRING\n"
-                            + "  )  WITH (\n"
-                            + "'connector' = 'jdbc',\n"
-                            + "'password' = '"
-                            + pgsqlInfoResp.getPassword()
-                            + "',\n"
-                            + "'lookup.cache.max-rows' = '3000000',\n"
-                            + "'lookup.cache.ttl' = '3000',\n"
-                            + "'driver' = 'org.postgresql.Driver',\n"
-                            + "'table-name' = 'ioc3000.dim_pub_rels_emp_dept_t',\n"
-                            + "'url' = '"
-                            + pgsqlInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "'username' = '"
-                            + pgsqlInfoResp.getDbAccount()
-                            + "'\n"
-                            + ")");
-
-        tableEnv.executeSql("CREATE TABLE dim_pub_ops_consumer_dimension_dept (\n"
-                            + "  `dept_code` STRING,\n"
-                            + "  `dept_cn_name` STRING,\n"
-                            + "  `dept_level` STRING,\n"
-                            + "  `is_def` STRING\n"
-                            + "  )  WITH (\n"
-                            + "'connector' = 'jdbc',\n"
-                            + "'password' = '"
-                            + pgsqlInfoResp.getPassword()
-                            + "',\n"
-                            + "'lookup.cache.max-rows' = '3000000',\n"
-                            + "'lookup.cache.ttl' = '3000',\n"
-                            + "'driver' = 'org.postgresql.Driver',\n"
-                            + "'table-name' = 'ioc3000.dim_pub_ops_consumer_dimension_dept_t',\n"
-                            + "'url' = '"
-                            + pgsqlInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "'username' = '"
-                            + pgsqlInfoResp.getDbAccount()
-                            + "'\n"
-                            + ")");
-
-        return this;
+        websocketClient.close();
     }
 
-    private ServiceOrderGraphBuilder buildSubOrderInfo() {
-        Table dimServiceOrder = tableEnv.from("update_service_order")
-                                        .join(tableEnv.from("importal_service_request"), $("service_id"))
-                                        .where($(
-                                            "COALESCE(status,'') <> '4' and COALESCE(formal_flag,'') <> '-1' and service_id like 'SD%'"))
-                                        .select($("service_id"),
-                                                $("request_user_id"),
-                                                $("create_user"),
-                                                $("open_time"),
-                                                $("estimated_break_time"),
-                                                $("create_ticket_type"),
-                                                $("source_name"),
-                                                $("title"),
-                                                $("request"),
-                                                $("extend_url"),
-                                                $("supporter"),
-                                                $("alert_type"),
-                                                $("resolve_by"),
-                                                $("resolve_time"),
-                                                $("close_time"),
-                                                $("request_ci_id"),
-                                                $("formal_flag"),
-                                                $("process_type"),
-                                                $("category"),
-                                                $("reminder_count"),
-                                                $("solution"),
-                                                $("rr_demand_id"),
-                                                $("suggestion_id"),
-                                                $("ci_module_id"),
-                                                $("status"),
-                                                $("incident"),
-                                                $("create_time"),
-                                                $("update_msg"));
-        tableEnv.createTemporaryView("dim_service_order", dimServiceOrder);
+    @Override
+    public void channelUnregistered(ChannelHandlerContext ctx) throws Exception {
+        log.warn("WebSocket Client [{}] unregistered!, start reconnect", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
 
-        Table subOrderInfo = tableEnv.from("dim_service_order")
-                                     .select($("service_id"))
-                                     .join(
-                                         // 意见单
-                                         tableEnv.from("dim_service_order")
-                                                 .join(tableEnv.from("dim_pub_dimension_ipmt"),
-                                                       $("ci_module_id = dimension_code"))
-                                                 .where($("COALESCE(suggestion_id,'') <> ''"))
-                                                 .join(tableEnv.from("importal_suggestion_order"), $("suggestion_id"))
-                                                 .select($("service_id"),
-                                                         $("suggestion_id"),
-                                                         $("suggestion_title"),
-                                                         $("`user_id` as user_by"),
-                                                         $("opened_by"),
-                                                         $("COALESCE(t2.supporter,t2.owner_name) as curr_person"),
-                                                         $("regexp_extract(t2.analysis_result,'解决方案 \\\\(Solution\\\\)：(.*?)\\\\<\\\\/p\\\\>',1) as solution"),
-                                                         $("case when update_status = '0' then '意见关闭'\n"
-                                                           + "              when rr_demand_status = '待分析' then '意见处理中'\n"
-                                                           + "              when rr_demand_status = '处理中' then '需求处理中'\n"
-                                                           + "              when rr_demand_status = '纳入变革项目' then '需求处理中'\n"
-                                                           + "              when rr_demand_status = '纳入规划' then '需求纳入规划'\n"
-                                                           + "              when rr_demand_status = '未采纳' then '需求关闭-未采纳'\n"
-                                                           + "              when rr_demand_status = '需求实施' then '需求实施'\n"
-                                                           + "              when rr_demand_status = '已实现' then '需求关闭-已实现'\n"
-                                                           + "              when rr_demand_status = '已关闭' then '意见处理中'\n"
-                                                           + "              when update_status in ('1','2') and COALESCE(solution,'') = '' then '意见待处理'\n"
-                                                           + "                  else '意见处理中'\n"
-                                                           + "           end                          as status "),
-                                                         $("from_unixtime(unix_timestamp(open_time) + 28800,  'yyyy-MM-dd HH:mm:ss') as open_time"),
-                                                         $("round((current_timestamp() - open_time) / (60*60*24))) as resolve_duration"))
-                                                 .select($("service_id"),
-                                                         $("suggestion_id"),
-                                                         $("case when status not in ('意见关闭','Closed','已拒绝','关闭','无需实现','已关闭','已拒绝','已取消') \n"
-                                                           + "      then 1 else 0 end as is_open_OP")), $("service_id"))
-                                     .join(
-
-                                         // 事件单
-                                         tableEnv.from("dim_service_order")
-                                                 .join(tableEnv.from("dim_pub_dimension_ipmt"),
-                                                       $("ci_module_id = dimension_code"))
-                                                 .where($("COALESCE(incident,'') <> ''"))
-                                                 .join(tableEnv.from("probsummarym"), $("incident = number"))
-                                                 .select($("service_id"),
-                                                         $("incident"),
-                                                         $("brief_description"),
-                                                         $("problem_status"),
-                                                         $("substring(contact_name, position(' ' IN contact_name) - 1) as user_by"),
-                                                         $("opened_by"),
-                                                         $("coalesce(assignee_name, hw_resolved_by, closed_by) as curr_person"),
-                                                         $("case when problem_status not in ('Closed','Resolved','Pending Customer','Pending Vendor','Pending Change','Pending Bussiness') "
-                                                           + "and upper(sla_breach) != 'T' \n"
-                                                           + "then from_unixtime(unix_timestamp(sla_expire) + 28800,  'yyyy-MM-dd HH:mm:ss') else cast(null as string) \n"
-                                                           + "end as sla_time"),
-                                                         $("from_unixtime(unix_timestamp(open_time) + 28800,  'yyyy-MM-dd HH:mm:ss') as open_time"),
-                                                         $("round((current_timestamp() - open_time) / (60*60*24))) as resolve_duration"),
-                                                         $("case when priority_code = '3' and severity = '1' then '3A' else t1.priority_code end as im_level"),
-                                                         $("round((current_timestamp() - open_time) / (60*60*24))) as status_stay_duration"))
-                                                 .select($("service_id"),
-                                                         $("number as ticket_number"),
-                                                         $("case when problem_status not in ('意见关闭','Closed','已拒绝','关闭','无需实现','已关闭','已拒绝','已取消') \n"
-                                                           + "      then 1 else 0 end as is_open_IM")), $("service"))
-                                     // 需求单
-                                     // TODO
-
-                                     .join(
-                                         // 缺陷单
-                                         tableEnv.from("dim_service_order")
-                                                 .join(
-                                                     tableEnv.from("alm_defect")
-                                                             .where($(
-                                                                 "source_number like 'SD%' and source_system in ('UNT','cloudreq')")),
-                                                     $("service_id = source_number"))
-                                                 .select($("source_number"),
-                                                         $("defect_number"),
-                                                         $("created_date"),
-                                                         $("title"),
-                                                         $("case when defect_status = '初始'   then '提交' \n"
-                                                           + "       when defect_status = '开发'   then '修复'\n"
-                                                           + "       when defect_status = '待发布' then '确认'\n"
-                                                           + "       when defect_status = '完成'   then '关闭'\n"
-                                                           + "else t1.defect_status end  as status"),
-                                                         $("defect_created_by"),
-                                                         $("created_by"),
-                                                         $("current_handler"),
-                                                         $("round(\n"
-                                                           + "           (\n"
-                                                           + "            current_timestamp - unix_timestamp(created_date, 'yyyy-MM-dd HH:mm:ss')\n"
-                                                           + "           ) / (60 * 60 * 24), 2) as resolve_duration"),
-                                                         $("turn_confirm_time"),
-                                                         $("severity"),
-                                                         $("round(\n"
-                                                           + "           (\n"
-                                                           + "             unix_timestamp(turn_confirm_time, 'yyyy-MM-dd HH:mm:ss') - unix_timestamp(created_date, 'yyyy-MM-dd HH:mm:ss')\n"
-                                                           + "           ) / (60 * 60 * 24), 2) as resolve_duration"))
-                                                 .select($("service_id"),
-                                                         $("defect_number as dts_number"),
-                                                         $("case when status not in ('意见关闭','Closed','已拒绝','关闭','无需实现','已关闭','已拒绝','已取消') \n"
-                                                           + "      then 1 else 0 end as is_open_DTS")),
-                                         $("service_id"))
-                                     .join(
-                                         // td单
-                                         tableEnv.from("dim_service_order")
-                                                 .join(tableEnv.from("ticket_td_order")
-                                                               .where($("related_service_order like 'SD%'")),
-                                                       $("service_id"))
-                                                 .select($("related_service_order as service_id"),
-                                                         $("td_order_id"),
-                                                         $("from_unixtime(unix_timestamp(open_datetime) + 28800,  'yyyy-MM-dd HH:mm:ss') as open_time"),
-                                                         $("title"),
-                                                         $("case when status = '0'  then '起草中'\n"
-                                                           + "      when t1.status = '1'  then '待确认'\n"
-                                                           + "      when status = '2'  then '处理中'\n"
-                                                           + "      when status = '3'  then '待验证'\n"
-                                                           + "      when status = '4'  then '已关闭'\n"
-                                                           + "      when status = '11' then '分析中'\n"
-                                                           + "      when status = '12' then '拒绝待确认'\n"
-                                                           + "      when status = '20' then '已拒绝'\n"
-                                                           + "      when status = '30' then '已取消'\n"
-                                                           + "end as status"),
-                                                         $("td_type as question_type"),
-                                                         // $("case when t1.td_type = '1' then '工程能力类'\n" +
-                                                         //   "      when t1.td_type = '2' then '数据类'\n" +
-                                                         //   "      when t1.td_type = '3' then '流程类'\n" +
-                                                         //   "      when t1.td_type = '4' then '业务部门类'\n" + "end as question_type"),
-                                                         $("request_user_id"),
-                                                         $("opened_by"),
-                                                         $("curr_processor"),
-                                                         $("case when sla_status = '11'  then '分析中' end as response_sla_status"),
-                                                         $("case when sla_status = '2'   then '处理中' end as close_sla_status"),
-                                                         $("case when status not in ('待验证','已关闭','已拒绝','已取消') "
-                                                           + "       then from_unixtime(unix_timestamp(t1.estimated_finish_time) + 28800,  'yyyy-MM-dd HH:mm:ss') \n"
-                                                           + "       else cast(null as string)\n"
-                                                           + "end as sla_time"),
-                                                         $("round(\n"
-                                                           + "           (\n"
-                                                           + "             unix_timestamp(turn_confirm_time, 'yyyy-MM-dd HH:mm:ss') - unix_timestamp(created_date, 'yyyy-MM-dd HH:mm:ss')\n"
-                                                           + "           ) / (60 * 60 * 24), 2) as resolve_duration")
-
-                                                        )
-                                                 .select($("service_id"),
-                                                         $("defect_number as td_number"),
-                                                         $("case when question_type = '1'  then defect_number\n"
-                                                           + "      else cast(null as string)\n"
-                                                           + "end as td_capacity_number"),
-                                                         $("case when question_type = '2'  then defect_number\n"
-                                                           + "      else cast(null as string)\n"
-                                                           + "end as td_object_number"),
-                                                         $("case when question_type = '3'  then defect_number\n"
-                                                           + "      else cast(null as string)\n"
-                                                           + "end as td_process_number"),
-                                                         $("case when question_type = '4'  then defect_number\n"
-                                                           + "      else cast(null as string)\n"
-                                                           + "end as td_dept_number"),
-                                                         $("case when status not in ('意见关闭','Closed','已拒绝','关闭','无需实现','已关闭','已拒绝','已取消') \n"
-                                                           + "      then 1 else 0 end as is_open_TD"))
-                                                 .groupBy($("service_id"))
-                                                 .select($("service_id"),
-                                                         $("td_number").max()
-                                                                       .as("td_number"),
-                                                         $("td_capacity_number").max()
-                                                                                .as("td_capacity_number"),
-                                                         $("td_object_number").max()
-                                                                              .as("td_object_number"),
-                                                         $("td_process_number").max()
-                                                                               .as("td_process_number"),
-                                                         $("td_dept_number").max()
-                                                                            .as("td_dept_number"),
-                                                         $("is_open_TD").sum()
-                                                                        .as("is_open_TD")), $("service_id"))
-                                     .select($("service_id"),
-                                             $("suggestion_id"),
-                                             $("ticket_number"),
-                                             $("dts_number"),
-                                             // $("rr_number"),
-                                             $("td_number"),
-                                             $("td_capacity_number"),
-                                             $("td_object_number"),
-                                             $("td_process_number"),
-                                             $("td_dept_number"),
-                                             $("sum(is_open_OP, is_open_IM, is_open_DTS, is_open_TD) as is_open_sub"));
-
-        tableEnv.createTemporaryView("sub_order_info", subOrderInfo);
-
-        return this;
+        websocketClient.reconnect();
     }
 
-    private ServiceOrderGraphBuilder unionUpdateSignal() {
-
-        // flink table-api 方式
-        Table updateServiceOrder = tableEnv.from("service_order_update")
-                                           .select($("service_id"))
-                                           .union(tableEnv.from("alm_defect_update")
-                                                          .where($(
-                                                              "source_number like 'SD%' and source_system in ('UNT','cloudreq')"))
-                                                          .join(tableEnv.from("importal_service_request"),
-                                                                $("source_number = service_id"))
-                                                          .select($("service_id")))
-                                           .union(tableEnv.from("ticket_td_order_update")
-                                                          .where($("related_service_order like 'SD%'"))
-                                                          .join(tableEnv.from("service_request"),
-                                                                $("related_service_order = service_id"))
-                                                          .select($("service_id")))
-                                           .union(tableEnv.from("importal_suggestion_order_update")
-                                                          .join(tableEnv.from("service_request"), $("suggestion_id"))
-                                                          .select($("service_id")))
-                                           .union(tableEnv.from("probsummarym_update")
-                                                          .join(tableEnv.from("service_request"),
-                                                                $("number = incident"))
-                                                          .select($("service_id")))
-                                           .union(tableEnv.from("alm_raw_requirement_update")
-                                                          .where($("instr(integrated_system_id,'SD')  > 0"))
-                                                          .joinLateral(call(SplitStringFunction.class, $("service_id")))
-                                                          .where($(
-                                                              "source_system in ('UNT', 'cloudreq') and service_id like 'SD%'"))
-                                                          .join(tableEnv.from("service_request"), $("service_id"))
-                                                          .select($("service_id")));
-
-        tableEnv.createTemporaryView("update_service_order", updateServiceOrder);
-        return this;
-    }
-
-    private ServiceOrderGraphBuilder buildServiceOrderProcess() {
-
-        // 服务处理日志
-        Table validProcess = tableEnv.from("dim_service_order")
-                                     .join(tableEnv.from("dim_pub_dimension_ipmt"), $("ci_module_id = dimension_code"))
-                                     .where($("COALESCE(incident_status,'') <> '10'"))
-                                     .join(tableEnv.from("importal_service_history"), $("service_id"))
-                                     .select($("service_id"),
-                                             $("from_unixtime(unix_timestamp(create_time) + 28800,  'yyyy-MM-dd HH:mm:ss')  as create_time"),
-                                             $("create_user"),
-                                             $("update_msg"),
-                                             $("case when update_msg like '%Resolved -> Open%'         then 1 \n"
-                                               + "      when update_msg like '%Resolved -> Rejected%'     then 1 \n"
-                                               + "      when update_msg like '%驳回服务单%'               then 1\n"
-                                               + "      when update_msg like '%Reject the service order%' then 1\n"
-                                               + "      else 0 \n"
-                                               + "end as is_reject"),
-                                             $("case when update_msg like '%更新: CI名称%' then 1 else 0 end as is_ci_change"),
-                                             $("case when update_msg like '%更新: 支持人员%' then 1 else 0 end as is_supporter_change"));
-
-        tableEnv.createTemporaryView("valid_service_process", validProcess);
-
-        Table serviceOrderProcess = tableEnv.from("dim_service_order")
-                                            .join(tableEnv.from("dim_pub_dimension_ipmt"),
-                                                  $("ci_module_id = dimension_code"))
-                                            .where($("COALESCE(incident_status,'') <> '10'"))
-                                            .leftOuterJoin(
-                                                // 提交pending/Resolved态的最后责任人
-                                                tableEnv.from("valid_service_process")
-                                                        .where($("update_msg like '%-> Resolved%'\n"
-                                                                 + "       or update_msg like '%-> Pending%'\n"
-                                                                 + "       or update_msg like '%Creating Verification Service Order%'\n"
-                                                                 + "       or update_msg like '%创建验证服务单%'"))
-                                                        .select($("service_id"),
-                                                                $("create_user"),
-                                                                $("create_time"),
-                                                                $("row_number() over(partition by service_id order by create_time desc) as rn"))
-                                                        .where($("rn = 1"))
-                                                        .select($("service_id"),
-                                                                $("create_user as trace_person"),
-                                                                $("create_time as last_pending_time")), $("service_id"))
-                                            .leftOuterJoin(
-                                                // 提交Resolved的处理人(判断热线一线二线用途)
-                                                tableEnv.from("valid_service_process")
-                                                        .where($("update_msg like '%-> Resolved%'\n"
-                                                                 + "       or update_msg like '%Creating Verification Service Order%'\n"
-                                                                 + "       or update_msg like '%创建验证服务单%'"))
-                                                        .select($("service_id"),
-                                                                $("create_user"),
-                                                                $("row_number() over(partition by service_id order by create_time desc) as rn"))
-                                                        .where($("rn = 1"))
-                                                        .select($("service_id"),
-                                                                $("create_user as commit_resolved_person")),
-                                                $("service_id"))
-                                            .leftOuterJoin(
-                                                // 第一次pending时间
-                                                tableEnv.from("valid_service_process")
-                                                        .where($("update_msg like '%-> Pending%'"))
-                                                        .select($("service_id"),
-                                                                $("create_time"),
-                                                                $("row_number() over(partition by service_id order by create_time asc) as rn"))
-                                                        .where($("rn = 1"))
-                                                        .select($("service_id"),
-                                                                $("create_time as first_pending_time")),
-                                                $("service_id"))
-                                            .leftOuterJoin(
-                                                // 过程步骤最新处理人、驳回次数、转单次数
-                                                tableEnv.from("valid_service_process")
-                                                        .select($("service_id"),
-                                                                $("create_user"),
-                                                                $("is_reject"),
-                                                                $("is_ci_change"),
-                                                                $("is_supporter_change"),
-                                                                $("row_number() over(partition by service_id order by create_time desc) as rn"))
-                                                        .groupBy($("service_id"))
-                                                        .select(
-                                                            $("max(case when rn = 1 then create_user end) as curr_person"),
-                                                            $("sum(is_reject) as reject_cnt"),
-                                                            $("sum(is_ci_change) + sum(is_supporter_change) as transfer_order_cnt")),
-                                                $("service_id"))
-                                            .select($("service_id"),
-                                                    $("curr_person"),
-                                                    $("trace_person"),
-                                                    $("commit_resolved_person"),
-                                                    $("first_pending_time"),
-                                                    $("case when t3.first_pending_time is null then cast(null as string)\n"
-                                                      + "             else round(\n"
-                                                      + "           (\n"
-                                                      + "            current_timestamp() - unix_timestamp(first_pending_time, 'yyyy-MM-dd HH:mm:ss')\n"
-                                                      + "              ) / (60 * 60 * 24), 2)\n"
-                                                      + "end as pending_duration"),
-                                                    $("reject_cnt"),
-                                                    $("transfer_order_cnt"),
-                                                    $("last_pending_time"),
-                                                    $("case when t3.first_pending_time is null then cast(null as string)\n"
-                                                      + "             else round(\n"
-                                                      + "           (\n"
-                                                      + "            current_timestamp() - unix_timestamp(last_pending_time, 'yyyy-MM-dd HH:mm:ss')\n"
-                                                      + "              ) / (60 * 60 * 24), 2)\n"
-                                                      + "end as status_stay_duration"));
-        tableEnv.createTemporaryView("service_order_process", serviceOrderProcess);
-
-        return this;
-
-    }
-
-    private ServiceOrderGraphBuilder buildServiceOrderCombine() {
-        Table serviceOrderResult = tableEnv.from("dim_service_order")
-                                           .join(
-                                               tableEnv.from("incidentsm_hi")
-                                                       .where($("COALESCE(open,'') not in ('Closed','Open - Linked') ")),
-                                               $("service_id = incident_id"))
-                                           .leftOuterJoin(tableEnv.from("dim_pub_rels_emp_dept"),
-                                                          $("reques_user_id = employee_no"))
-                                           .leftOuterJoin(tableEnv.from("sub_order_info"), $("service_id"))
-                                           .leftOuterJoin(tableEnv.from("service_order_process"), $("service_id"))
-                                           .leftOuterJoin(tableEnv.from(""))
-                                           .select($("service_id as busi_no"),
-                                                   $("COALESCE(new_w3_account, request_user_id) as user_by"),
-                                                   $("from_unixtime(unix_timestamp(open_time) + 28800,  'yyyy-MM-dd HH:mm:ss')  as open_time"),
-                                                   $("round((current_timestamp() - open_time) / (60 * 60 * 24), 2) as resolve_duration"),
-                                                   $("from_unixtime(unix_timestamp(estimated_break_time) + 28800,  'yyyy-MM-dd HH:mm:ss') as tmp_sla_time"),
-                                                   $("case\n"
-                                                     + "            when create_ticket_type = '0' then '用户自助提单'\n"
-                                                     + "            when create_ticket_type = '1' then '研究所代用户提单'\n"
-                                                     + "            when create_ticket_type = '2' then '产品线装备部代用户提单'\n"
-                                                     + "            when create_ticket_type = '3' then '工具运营代表提单'\n"
-                                                     + "            when create_ticket_type = '4' then '人工客服提单'\n"
-                                                     + "            when create_ticket_type = '5' then '用户群组'\n"
-                                                     + "            when create_ticket_type = '6' then '其他'\n"
-                                                     + "            when create_ticket_type = 'IPDGPO' then 'IPD GPO办公室代用户提单'   \n"
-                                                     + "        end as create_ticket_type"),
-                                                   $("source_name as source"),
-                                                   $("title"),
-                                                   $("regexp_replace(t1.request, '<[^>]+>', '') as description"),
-                                                   $("concat_ws(',',\n"
-                                                     + "            t6.suggestion_id, \n"
-                                                     + "            t6.ticket_number,      \n"
-                                                     + "            t6.dts_number,\n"
-                                                     + "            t6.rr_number,    \n"
-                                                     + "            t6.td_number  \n"
-                                                     + "            ) as relate_number"),
-                                                   $("extend_url as url"),
-                                                   $("supporter"),
-                                                   $("case when t1.alert_type = '2' and t3.open in ('Open','Open - Idle','Rejected') then '1' \n"
-                                                     + "            when t1.alert_type = '3' and t3.open in ('Open','Open - Idle','Rejected') then '2'\n"
-                                                     + "            when t1.alert_type = '4' and t3.open in ('Open','Open - Idle','Rejected') then '3'\n"
-                                                     + "            else '0'\n"
-                                                     + "        end as tmp_sla_upgrade_cnt"),
-                                                   $("resolve_by"),
-                                                   $("from_unixtime(unix_timestamp(resolve_time) + 28800, 'yyyy-MM-dd HH:mm:ss') as resolve_time"),
-                                                   $("from_unixtime(unix_timestamp(t1.close_time) + 28800, 'yyyy-MM-dd HH:mm:ss')   as close_time"),
-                                                   $("ci_module_id"),
-                                                   $("request_ci_id"),
-                                                   $("formal_flag"),
-                                                   $("alert_type"),
-                                                   $("open as status"),
-                                                   $("process_type"),
-                                                   $("cast(null as string) as user_label "),
-                                                   $("category"),
-                                                   $("cast(null as string) as previous_handler "),
-                                                   $("cast(null as string) as hot_line"),
-                                                   $("reminder_count as reminder_cnt"),
-                                                   $("case when solution like '%://portal.edevops.huawei.com/%'     then 'Y'\n"
-                                                     + "             when solution like '%://w3.huawei.com/rdicloudrequire/%' then 'Y'\n"
-                                                     + "             when solution like '%://w3.huawei.com/itsmnext/%'        then 'Y'\n"
-                                                     + "             when RLIKE(t1.solution,'(RR|IR|US|DTS|TD)[0-9]') then 'Y'\n"
-                                                     + "             else 'N' \n"
-                                                     + "         end as is_valid_response"),
-                                                   $("case when lower(COALESCE(sla_breach,'f')) = 't' then 'Y'\n"
-                                                     + "            else 'N' \n"
-                                                     + "        end as tmp_break_flag"),
-                                                   $("case when nvl(incident,'') <> ''     then 'Y'\n"
-                                                     + "       when nvl(rr_demand_id,'') <> '' then 'Y'\n"
-                                                     + "            else 'N'\n"
-                                                     + "        end as tmp_has_rel_number_from_sd"),
-                                                   $("case when alert_type = '1' then '预警'\n"
-                                                     + "       when alert_type = '2' then '第一次升级' \n"
-                                                     + "       when alert_type = '3' then '第二次升级'\n"
-                                                     + "       when alert_type = '4' then '第三次升级'\n"
-                                                     + "       else '正常'\n"
-                                                     + "end as tmp_sla_status"),
-                                                   $("suggestion_id"),
-                                                   $("ticket_number"),
-                                                   $("dts_number"),
-                                                   $("rr_number"),
-                                                   $("cast(null as string)  as hwci_number"),
-                                                   $("td_number"),
-                                                   $("td_capacity_number"),
-                                                   $("td_object_number"),
-                                                   $("td_process_number"),
-                                                   $("td_dept_number"),
-                                                   $("td_capacity_number"),
-                                                   $("td_capacity_number"),
-                                                   $("td_capacity_number"),
-                                                   $("td_capacity_number"),
-                                                   $("is_open_sub"),
-                                                   $("reject_cnt"),
-                                                   $("transfer_order_cnt"),
-                                                   $("first_pending_time"),
-                                                   $("pending_duration"),
-                                                   $("last_pending_time"),
-                                                   $("status_stay_duration"));
-        tableEnv.createTemporaryView("service_order", serviceOrderResult);
-        return this;
-    }
-
-    private ServiceOrderGraphBuilder buildServiceOrderSink() {
-        List<String> dsIdList = new ArrayList<>();
-        dsIdList.add("@ipd_ops_kafka_test@Kafka"); // kafka
-        dsIdList.add("ioc3000@KWE022307216001"); // mysql
-        // 4.获取数据源 DatasourceInfoResp 可参考readme.docx  2.2.3
-        List<DatasourceInfoResp> uniDataSource = UniDataSourceUtil.getInstance()
-                                                                  .getUniDataSource(dsIdList);
-        DatasourceInfoResp pgsqlInfoResp = uniDataSource.get(1);
-
-        tableEnv.executeSql("CREATE TABLE dwr_pub_yygzt_v2_service_order_full(\n"
-                            + "    busi_no STRING,\n"
-                            + "    user_by STRING,\n"
-                            + "    user_label STRING,\n"
-                            + "    open_by STRING,\n"
-                            + "    open_time STRING,\n"
-                            + "    sla_time STRING,\n"
-                            + "    sla_status STRING,\n"
-                            + "    resolve_duration STRING,\n"
-                            + "    first_pending_time STRING,\n"
-                            + "    pending_duration STRING,\n"
-                            + "    busi_category STRING,\n"
-                            + "    category STRING,\n"
-                            + "    create_ticket_type STRING,\n"
-                            + "    source STRING,\n"
-                            + "    status STRING,\n"
-                            + "    title STRING,\n"
-                            + "    description STRING,\n"
-                            + "    relate_number STRING,\n"
-                            + "    url STRING,\n"
-                            + "    previous_handler STRING,\n"
-                            + "    supporter STRING,\n"
-                            + "    hot_line STRING,\n"
-                            + "    consultation_ticket_flag STRING,\n"
-                            + "    resolve_by STRING,\n"
-                            + "    resolve_time STRING,\n"
-                            + "    close_time STRING,\n"
-                            + "    product_code STRING,\n"
-                            + "    product_name STRING,\n"
-                            + "    product_level STRING,\n"
-                            + "    spdt_code STRING,\n"
-                            + "    spdt_name STRING,\n"
-                            + "    pdt_code STRING,\n"
-                            + "    pdt_name STRING,\n"
-                            + "    sub_product_code STRING,\n"
-                            + "    sub_product_name STRING,\n"
-                            + "    module_code STRING,\n"
-                            + "    module_cn_name STRING,\n"
-                            + "    app_id STRING,\n"
-                            + "    app_cn_name STRING,\n"
-                            + "    dept_code STRING,\n"
-                            + "    dept_cn_name STRING,\n"
-                            + "    dept_level STRING,\n"
-                            + "    l1_dept_code STRING,\n"
-                            + "    l1_dept_cn_name STRING,\n"
-                            + "    l2_dept_code STRING,\n"
-                            + "    l2_dept_cn_name STRING,\n"
-                            + "    l3_dept_code STRING,\n"
-                            + "    l3_dept_cn_name STRING,\n"
-                            + "    l4_dept_code STRING,\n"
-                            + "    l4_dept_cn_name STRING,\n"
-                            + "    l5_dept_code STRING,\n"
-                            + "    l5_dept_cn_name STRING,\n"
-                            + "    l6_dept_code STRING,\n"
-                            + "    l6_dept_cn_name STRING,\n"
-                            + "    prod_line_code STRING,\n"
-                            + "    prod_line_name STRING,\n"
-                            + "    prod_line_level STRING,\n"
-                            + "    city STRING,\n"
-                            + "    suggestion_id STRING,\n"
-                            + "    dts_number STRING,\n"
-                            + "    rr_number STRING,\n"
-                            + "    hwci_number STRING,\n"
-                            + "    td_number STRING,\n"
-                            + "    td_capacity_number STRING,\n"
-                            + "    td_object_number STRING,\n"
-                            + "    td_process_number STRING,\n"
-                            + "    td_dept_number STRING,\n"
-                            + "    sla_upgrade_cnt STRING,\n"
-                            + "    sla_break_flag STRING,\n"
-                            + "    sla_warn STRING,\n"
-                            + "    reminder_cnt STRING,\n"
-                            + "    handle_flag STRING,\n"
-                            + "    reject_cnt STRING,\n"
-                            + "    commit_verify STRING,\n"
-                            + "    transfer_order_cnt STRING,\n"
-                            + "    label_priority_01 STRING,\n"
-                            + "    to_do_person STRING,\n"
-                            + "    to_do_applicant STRING,\n"
-                            + "    trace_person STRING,\n"
-                            + "    trace_upgrade STRING,\n"
-                            + "    ops_create_date STRING,\n"
-                            + "    ops_update_date STRING,\n"
-                            + "    ops_period_id STRING,\n"
-                            + "    last_pending_time STRING,\n"
-                            + "    status_stay_duration STRING,\n"
-                            + "    is_first_mile STRING,\n"
-                            + "    emergency_level STRING\n"
-                            + ")  WITH (\n"
-                            + "'connector' = 'jdbc',\n"
-                            + "'password' = '"
-                            + pgsqlInfoResp.getPassword()
-                            + "',\n"
-                            + "'driver' = 'org.postgresql.Driver',\n"
-                            + "'sink.buffer-flush.interval' = '5s',\n"
-                            + "'sink.buffer-flush.max-rows' = '3000',\n"
-                            + "'table-name' = 'dev_unidata.dwr_ipd_ops_data_agg_test',\n"
-                            + "'url' = '"
-                            + pgsqlInfoResp.getConnectUrl()
-                            + "',\n"
-                            + "'username' = '"
-                            + pgsqlInfoResp.getDbAccount()
-                            + "'\n"
-                            + ")");
-
-        tableEnv.from("service_order")
-                .executeInsert("dwr_pub_yygzt_v2_service_order_full");
-        return this;
-    }
-
-    public static class SplitStringFunction extends TableFunction<String> {
-        public void eval(String originStr, String separator) {
-            if (Objects.isNull(originStr) || Objects.isNull(separator)) {
+    @Override
+    public void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
+        Channel ch = ctx.channel();
+        // 如果握手未完成，处理 FullHttpResponse
+        if (!handshaker.isHandshakeComplete()) {
+            if (msg instanceof FullHttpResponse response) {
+                try {
+                    handshaker.finishHandshake(ch, response);
+                    log.info("WebSocket client [{}] Handshake complete!", ch.attr(NettyConstants.CLIENT_NAME).get());
+                    handshakeFuture.setSuccess();
+                } catch (WebSocketHandshakeException e) {
+                    log.info("WebSocket client [{}] Handshake failed!", ch.attr(NettyConstants.CLIENT_NAME).get());
+                    handshakeFuture.setFailure(e);
+                }
                 return;
             }
-            for (String str : originStr.split(separator)) {
-                collect(str);
+        }
+
+        if (msg instanceof FullHttpResponse response) {
+            if (response.status().code() / 100 > 3) {
+                throw new IllegalStateException(
+                        "Unexpected FullHttpResponse (getStatus=" + response.status() +
+                                ", content=" + response.content().toString(CharsetUtil.UTF_8) + ')');
+            }
+        } else if (msg instanceof WebSocketFrame frame) {
+            switch (frame) {
+                case TextWebSocketFrame textFrame -> {
+                    log.debug("websocket client [{}] 接收到的消息：{}", ch.attr(NettyConstants.CLIENT_NAME).get(), textFrame.text());
+                    whenReceiveMessage(textFrame.text());
+                }
+                case PongWebSocketFrame pongWebSocketFrame -> handlerPong(ch, pongWebSocketFrame);
+                case PingWebSocketFrame pingWebSocketFrame -> handlerPing(ch, pingWebSocketFrame);
+                case CloseWebSocketFrame closeWebSocketFrame -> handlerClose(ch, closeWebSocketFrame);
+                default -> {
+                    log.warn("channel[{}]收到位置类型的消息[{}]", ch.attr(NettyConstants.CLIENT_NAME).get(), frame.getClass().getName());
+                }
             }
         }
     }
-}
 
-package com.huawei.it.scs;
 
-/**
- * 功能描述
- *
- * @author w30063450
- * @since 2024-10-17
- */
-class ServiceOrderGraphDirector {
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        if (!handshakeFuture.isDone()) {
+            handshakeFuture.setFailure(cause);
+        }
+        ctx.close();
+        log.error("业务处理错误，websocket client关闭", cause);
+    }
 
-    public void createServiceOrderGraph(ServiceOrderGraphBuilder builder) {
-        builder.buildSourceGraph().buildTransformGraph().buildSinkGraph();
+    @Override
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+        // IdleStateHandler 所产生的 IdleStateEvent 的处理逻辑.
+        if (evt instanceof IdleStateEvent e) {
+            switch (e.state()) {
+                case READER_IDLE:
+                    handleReaderIdle(ctx);
+                    break;
+                case WRITER_IDLE:
+                    handleWriterIdle(ctx);
+                    break;
+                case ALL_IDLE:
+                    handleAllIdle(ctx);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+
+    /**
+     * 处理close消息
+     *
+     * @param ch                  Channel ch
+     * @param closeWebSocketFrame closeWebSocketFrame
+     */
+    protected void handlerClose(Channel ch, CloseWebSocketFrame closeWebSocketFrame) {
+        log.warn("websocket client关闭");
+        ch.close();
+    }
+
+
+    /**
+     * 处理pong消息
+     *
+     * @param ch                 Channel ch
+     * @param pongWebSocketFrame pongWebSocketFrame
+     */
+    protected void handlerPong(Channel ch, PongWebSocketFrame pongWebSocketFrame) {
+        log.debug("WebSocket Client [{}] received pong", ch.attr(NettyConstants.CLIENT_NAME).get());
+
+    }
+
+
+    /**
+     * 处理ping消息
+     *
+     * @param ch                 ch
+     * @param pingWebSocketFrame pingWebSocketFrame
+     */
+    protected void handlerPing(Channel ch, PingWebSocketFrame pingWebSocketFrame) {
+        log.debug("WebSocket Client [{}] received ping", ch.attr(NettyConstants.CLIENT_NAME).get());
+        websocketClient.sendPong();
+    }
+
+    /**
+     * 超过限定时间channel没有读时触发
+     *
+     * @param ctx ctx
+     */
+    protected void handleReaderIdle(ChannelHandlerContext ctx) {
+    }
+
+    /**
+     * 超过限定时间channel没有写时触发
+     *
+     * @param ctx ctx
+     */
+    protected void handleWriterIdle(ChannelHandlerContext ctx) {
+    }
+
+    /**
+     * 超过限定时间channel没有读写时触发
+     *
+     * @param ctx ctx
+     */
+    protected void handleAllIdle(ChannelHandlerContext ctx) {
+        websocketClient.sendPing();
+    }
+
+    public ChannelFuture handshakeFuture() {
+        return handshakeFuture;
     }
 }
 
+package cn.com.helei.depin.core.netty.base;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+
+import java.util.function.Consumer;
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@EqualsAndHashCode
+public class HandlerEntity<T> {
+    private long expireTime;
+
+    private Consumer<T> callback;
+}
+package cn.com.helei.depin.core.netty.base;
+
+
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandlerContext;
+
+/**
+ * netty事件处理器
+ */
+public interface NettyClientEventHandler {
+
+    /**
+     * 激活事件
+     * @param ctx ctx
+     */
+    default void activeHandler(ChannelHandlerContext ctx){}
+
+    /**
+     * 关闭事件
+     * @param channel channel
+     */
+    default void closeHandler(Channel channel){}
+
+    /**
+     * 异常事件
+     * @param ctx ctx
+     * @param cause cause
+     */
+    void exceptionHandler(ChannelHandlerContext ctx, Throwable cause);
+}
+
+package cn.com.helei.depin.core.netty.constants;
+
+import io.netty.util.AttributeKey;
+
+public class NettyConstants {
+
+    /**
+     * 一朕的最大长度
+     */
+    public final static int MAX_FRAME_LENGTH = 1024;
+
+
+    /**
+     * 放在netty channel 里的 client_name 的 key
+     */
+    public static final AttributeKey<String> CLIENT_NAME = AttributeKey.valueOf("client_name");
+
+    /**
+     * 请求等待时间
+     */
+    public static final long REQUEST_WAITE_SECONDS = 60;
+
+    /**
+     * netty客户端断线重连时间
+     */
+    public static final int RECONNECT_DELAY_SECONDS = 5;
+
+
+    /**
+     * netty客户端断线重连次数
+     */
+    public static final int RECONNECT_LIMIT = 3;
+}
+
+
+package cn.com.helei.depin.core.netty.constants;
+
+
+/**
+ * WS客户端状态
+ */
+public enum WebsocketClientStatus {
+
+    /**
+     * 新建
+     */
+    NEW,
+
+    /**
+     * 正在启动
+     */
+    STARTING,
+
+    /**
+     * 正在运行
+     */
+    RUNNING,
+
+    /**
+     * 已暂停
+     */
+    STOP,
+
+    /**
+     * 已禁止使用
+     */
+    SHUTDOWN
+}
+
+package cn.com.helei.depin.core.netty.handler;
+
+import cn.com.helei.depin.core.netty.constants.NettyConstants;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.NoArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+
+
+@Slf4j
+public class RequestResponseHandler<T> {
+
+    private final ConcurrentMap<String, HandlerEntity<T>> requestIdMap = new ConcurrentHashMap<>();
+
+
+    /**
+     * 注册request
+     *
+     * @param id request的id
+     * @return 是否注册成功
+     */
+    public boolean registryRequest(String id, Consumer<T> callback) {
+        AtomicBoolean res = new AtomicBoolean(false);
+        requestIdMap.compute(id, (k, v) -> {
+            if (v == null) {
+                res.set(true);
+                long expireTime = System.currentTimeMillis() + NettyConstants.REQUEST_WAITE_SECONDS * 1000;
+                v = new HandlerEntity<>(expireTime, callback);
+                log.debug("registry request id[{}] success, expire time [{}]", id, expireTime);
+            }
+            return v;
+        });
+
+        return res.get();
+    }
+
+    /**
+     * 提交resoonse
+     *
+     * @param id       id
+     * @param response response
+     */
+    public boolean submitResponse(String id, T response) {
+        HandlerEntity<T> entity = requestIdMap.get(id);
+        if (entity == null) {
+            log.warn("request id[{}} didn't exist", id);
+            return false;
+        } else {
+            long currentTimeMillis = System.currentTimeMillis();
+            if (entity.expireTime < currentTimeMillis) {
+                log.warn("request id[{}] expired, expire time[{}], currentTime[{}] cancel invoke callback",
+                        id, entity.expireTime, currentTimeMillis);
+                return false;
+            } else {
+                entity.callback.accept(response);
+                log.debug("invoke request id[{}] callback success", id);
+                return true;
+            }
+        }
+    }
+
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    @EqualsAndHashCode
+    static class HandlerEntity<T> {
+        private long expireTime;
+
+        private Consumer<T> callback;
+    }
+}
+
+package cn.com.helei.depin.core.netty.handler;
+
+public interface WSCloseHandler {
+
+
+    void onClosed();
+}
+
+
+package cn.com.helei.depin.core.netty.util;
+
+import io.protostuff.LinkedBuffer;
+import io.protostuff.ProtobufIOUtil;
+import io.protostuff.Schema;
+import io.protostuff.runtime.RuntimeSchema;
+
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+
+public class ProtostuffUtils {
+    /**
+     * 避免每次序列化都重新申请Buffer空间
+     * 这句话在实际生产上没有意义，耗时减少的极小，但高并发下，如果还用这个buffer，会报异常说buffer还没清空，就又被使用了
+     */
+//    private static LinkedBuffer buffer = LinkedBuffer.allocate(LinkedBuffer.DEFAULT_BUFFER_SIZE);
+    /**
+     * 缓存Schema
+     */
+    private static Map<Class<?>, Schema<?>> schemaCache = new ConcurrentHashMap<>();
+
+    /**
+     * 序列化方法，把指定对象序列化成字节数组
+     *
+     * @param obj
+     * @param <T>
+     * @return
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> byte[] serialize(T obj) {
+        Class<T> clazz = (Class<T>) obj.getClass();
+        Schema<T> schema = getSchema(clazz);
+        LinkedBuffer buffer = LinkedBuffer.allocate(LinkedBuffer.DEFAULT_BUFFER_SIZE);
+        byte[] data;
+        try {
+            data = ProtobufIOUtil.toByteArray(obj, schema, buffer);
+//            data = ProtostuffIOUtil.toByteArray(obj, schema, buffer);
+        } finally {
+            buffer.clear();
+        }
+
+        return data;
+    }
+
+    /**
+     * 反序列化方法，将字节数组反序列化成指定Class类型
+     *
+     * @param data
+     * @param clazz
+     * @param <T>
+     * @return
+     */
+    public static <T> T deserialize(byte[] data, Class<T> clazz) {
+        Schema<T> schema = getSchema(clazz);
+        T obj = schema.newMessage();
+        ProtobufIOUtil.mergeFrom(data, obj, schema);
+//        ProtostuffIOUtil.mergeFrom(data, obj, schema);
+        return obj;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> Schema<T> getSchema(Class<T> clazz) {
+        Schema<T> schema = (Schema<T>) schemaCache.get(clazz);
+        if (Objects.isNull(schema)) {
+            //这个schema通过RuntimeSchema进行懒创建并缓存
+            //所以可以一直调用RuntimeSchema.getSchema(),这个方法是线程安全的
+            schema = RuntimeSchema.getSchema(clazz);
+            if (Objects.nonNull(schema)) {
+                schemaCache.put(clazz, schema);
+            }
+        }
+
+        return schema;
+    }
+}
+
+package cn.com.helei.depin.core.network;
+
+import lombok.Data;
+
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+
+@Data
+public class NetworkProxy {
+    private Integer id;
+
+    private String host;
+
+    private int port;
+
+    private String username;
+
+    private String password;
+
+    public SocketAddress getAddress() {
+        return new InetSocketAddress(host, port);
+    }
+}
+
+package cn.com.helei.depin.core.network;
+
+import com.jakewharton.fliptables.FlipTable;
+import lombok.Getter;
+import lombok.Setter;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+public class NetworkProxyPool {
+
+    private static final String[] PROXY_LIST_PRINT_TABLE_HEADER = new String[]{"ID", "Host", "Port", "Username", "Password"};
+
+    private static final Map<String, NetworkProxyPool> LOADED_POOL_MAP = new ConcurrentHashMap<>();
+
+    @Getter
+    private String configClassPath;
+
+    @Setter
+    private HashSet<NetworkProxy> pool;
+
+    private final ConcurrentMap<Integer, NetworkProxy> idMapProxy = new ConcurrentHashMap<>();
+
+    /**
+     * 使用次数
+     */
+    private final Map<Integer, Integer> useCount = new HashMap<>();
+
+
+    public static NetworkProxyPool loadYamlNetworkPool(String classpath) {
+        return LOADED_POOL_MAP.compute(classpath, (k, pool) -> {
+            if (pool == null) {
+                Yaml yaml = new Yaml();
+                try (InputStream inputStream = NetworkProxyPool.class.getClassLoader().getResourceAsStream(classpath)) {
+                    Map<String, Object> yamlData = yaml.load(inputStream);
+                    Map<String, Object> depin = (Map<String, Object>) yamlData.get("depin");
+                    Map<String, Object> network = (Map<String, Object>) depin.get("network");
+                    Map<String, Object> proxy = (Map<String, Object>) network.get("proxy");
+
+                    NetworkProxyPool networkProxyPool = yaml.loadAs(yaml.dump(proxy), NetworkProxyPool.class);
+
+                    networkProxyPool.pool.forEach(networkProxy -> {
+                        networkProxyPool.idMapProxy.put(networkProxy.getId(), networkProxy);
+                        networkProxyPool.useCount.put(networkProxy.getId(), 0);
+                    });
+
+                    networkProxyPool.configClassPath = classpath;
+
+                    pool = networkProxyPool;
+                } catch (IOException e) {
+                    throw new RuntimeException(String.format("价值配置网络代理池文件[%s]发生错误", classpath));
+                }
+            }
+            return pool;
+        });
+    }
+
+
+    /**
+     * 获取最少使用的代理
+     *
+     * @param count 数量
+     * @return List<NetworkProxy>
+     */
+    public synchronized List<NetworkProxy> getLessUsedProxy(int count) {
+         int batchSize = Math.min(count, useCount.size());
+
+        List<NetworkProxy> res = new ArrayList<>(count);
+
+        int needCount = count;
+         while (needCount > 0) {
+             int currentSize = Math.min(needCount, batchSize);
+
+             List<NetworkProxy> batch = useCount.entrySet().stream()
+                     .sorted((e1, e2) -> e1.getValue().compareTo(e2.getValue()))
+                     .limit(currentSize)
+                     .map(e -> {
+                         useCount.compute(e.getKey(), (k, v) -> v == null ? 0 : v + 1);
+                         return idMapProxy.get(e.getKey());
+                     }).toList();
+             res.addAll(batch);
+
+             needCount -= batch.size();
+         }
+
+         return res;
+    }
+
+    /**
+     * 获取代理
+     *
+     * @param id id
+     * @return NetworkProxy
+     */
+    public synchronized NetworkProxy getProxy(Integer id) {
+        return idMapProxy.compute(id, (k, v) -> {
+            if (v == null) return null;
+
+            useCount.compute(id, (k1, v1) -> {
+                if (v1 == null) v1 = 0;
+
+                return v1 + 1;
+            });
+
+            return v;
+        });
+    }
+
+
+    /**
+     * 打印池
+     *
+     * @return String
+     */
+    public String printPool() {
+        String[][] table = new String[pool.size()][PROXY_LIST_PRINT_TABLE_HEADER.length];
+
+        List<NetworkProxy> list = pool.stream().toList();
+        for (int i = 0; i < list.size(); i++) {
+            NetworkProxy proxy = list.get(i);
+            table[i] = new String[]{String.valueOf(proxy.getId()), proxy.getHost(), String.valueOf(proxy.getPort()), proxy.getUsername(), proxy.getPassword()};
+        }
+
+        return FlipTable.of(PROXY_LIST_PRINT_TABLE_HEADER, table);
+    }
+}
+
+
+
+package cn.com.helei.depin.core.supporter;
+
+import cn.com.helei.depin.core.BaseDepinBotConfig;
+import cn.com.helei.depin.core.dto.AccountContext;
+import cn.com.helei.depin.core.dto.DepinClientAccount;
+import cn.com.helei.depin.core.env.BrowserEnvPool;
+import cn.com.helei.depin.core.network.NetworkProxy;
+import cn.com.helei.depin.core.network.NetworkProxyPool;
+import com.jakewharton.fliptables.FlipTable;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@Slf4j
+public class AccountContextManager {
+
+    private final String[] ACCOUNT_PRINT_TABLE_HEADER = {"row", "name", "proxy", "browser env","usable", "start time", "update time", "heartbeat", "status"};
+
+    /**
+     * 代理池
+     */
+    private final NetworkProxyPool proxyPool;
+
+    /**
+     * 浏览器环境池
+     */
+    private final BrowserEnvPool browserEnvPool;
+
+    /**
+     * 配置
+     */
+    private final BaseDepinBotConfig baseDepinBotConfig;
+
+    /**
+     * 账号列表
+     */
+    @Getter
+    private final List<AccountContext> accounts = new ArrayList<>();
+
+    public AccountContextManager(NetworkProxyPool proxyPool, BrowserEnvPool browserEnvPool, BaseDepinBotConfig baseDepinBotConfig) {
+        this.proxyPool = proxyPool;
+        this.browserEnvPool = browserEnvPool;
+        this.baseDepinBotConfig = baseDepinBotConfig;
+    }
+
+
+    public void initAccount() {
+        //Step 1 初始化账号
+        List<AccountContext> notUsableAccounts = new ArrayList<>();
+        baseDepinBotConfig
+                .getAccountList()
+                .forEach(depinClientAccount -> {
+                    AccountContext.AccountContextBuilder builder = AccountContext.builder().clientAccount(depinClientAccount);
+
+                    //账号没有配置代理，则将其设置为不可用
+                    if (depinClientAccount.getProxyId() == null) {
+                        builder.usable(false);
+                    } else {
+                        builder.browserEnv(browserEnvPool.getBrowserEnv(depinClientAccount.getBrowserEnvId()))
+                                .usable(true)
+                                .proxy(proxyPool.getProxy(depinClientAccount.getProxyId())).build();
+                    }
+
+                    AccountContext build = builder.build();
+                    if (!build.isUsable()) notUsableAccounts.add(build);
+
+                    accounts.add(build);
+                });
+
+        //Step 2 账号没代理的尝试给他设置代理
+        if (!notUsableAccounts.isEmpty()) {
+            log.warn("以下账号没有配置代理，将随机选择一个代理进行使用");
+            List<NetworkProxy> lessUsedProxy = proxyPool.getLessUsedProxy(notUsableAccounts.size());
+            for (int i = 0; i < notUsableAccounts.size(); i++) {
+                notUsableAccounts.get(i).setProxy(lessUsedProxy.get(i));
+                notUsableAccounts.get(i).setUsable(true);
+                log.error("账号:{},将使用代理:{}", notUsableAccounts.get(i).getClientAccount().getName(), lessUsedProxy.get(i));
+            }
+        }
+    }
+
+
+    /**
+     * 打印账号列表
+     *
+     * @return String
+     */
+    public String printAccountList() {
+        StringBuilder sb = new StringBuilder();
+
+
+        String[][] table = new String[accounts.size()][ACCOUNT_PRINT_TABLE_HEADER.length];
+
+        for (int i = 0; i < accounts.size(); i++) {
+            AccountContext accountContext = accounts.get(i);
+            DepinClientAccount clientAccount = accountContext.getClientAccount();
+            table[i] = new String[]{
+                    String.valueOf(i),
+                    clientAccount.getName(),
+                    accountContext.getProxy().getHost() + ":" + accountContext.getProxy().getPort(),
+                    String.valueOf(clientAccount.getBrowserEnvId()),
+                    String.valueOf(accountContext.isUsable()),
+                    String.valueOf(accountContext.getConnectStatusInfo().getStartDateTime()),
+                    String.valueOf(accountContext.getConnectStatusInfo().getUpdateDateTime()),
+                    String.valueOf(accountContext.getConnectStatusInfo().getHeartBeatCount()),
+                    String.valueOf(accountContext.getConnectStatusInfo().getConnectStatus())
+            };
+        }
+
+        sb.append("账号列表:\n").append(FlipTable.of(ACCOUNT_PRINT_TABLE_HEADER, table)).append("\n");
+
+        return sb.toString();
+    }
+}
+
+package cn.com.helei.depin.core.util;
+
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class NamedThreadFactory implements ThreadFactory {
+
+    private final String namePrefix;
+    private final AtomicInteger threadNumber = new AtomicInteger(1);
+
+    public NamedThreadFactory(String namePrefix) {
+        this.namePrefix = namePrefix;
+    }
+
+    @Override
+    public Thread newThread(Runnable r) {
+        // 使用指定的名称前缀和自动编号来创建线程名称
+        Thread thread = new Thread(r, namePrefix + "-" + threadNumber.getAndIncrement());
+        // 设置为守护线程（可选）
+        thread.setDaemon(false);
+        return thread;
+    }
+}
+package cn.com.helei.depin.core.util;
+
+import cn.com.helei.depin.core.network.NetworkProxy;
+import com.alibaba.fastjson.JSONObject;
+import lombok.extern.slf4j.Slf4j;
+import okhttp3.*;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+import java.io.IOException;
+import java.net.Proxy;
+import java.net.SocketTimeoutException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+
+@Slf4j
+public class RestApiClient {
+
+    private static final int RETRY_TIMES = 3;
+
+    private final OkHttpClient okHttpClient;
+
+    private final ExecutorService executorService;
+
+    public RestApiClient(
+            NetworkProxy proxy,
+            ExecutorService executorService
+    ) {
+        this.executorService = executorService;
+        OkHttpClient.Builder builder = new OkHttpClient.Builder();
+        if (proxy != null) {
+            builder.proxy(new Proxy(Proxy.Type.HTTP, proxy.getAddress()))
+                    .authenticator(new Authenticator() {
+                        @NotNull
+                        @Override
+                        public Request authenticate(@Nullable Route route, @NotNull Response response) throws IOException {
+                            String credential = Credentials.basic(proxy.getUsername(), proxy.getPassword());
+                            return response.request().newBuilder()
+                                    .header("Authorization", credential)
+                                    .build();
+                        }
+                    });
+        }
+        this.okHttpClient = builder.build();
+    }
+
+
+    /**
+     * 发送请求，如果有asKey参数不为null，则会鉴权
+     *
+     * @param method method
+     * @param params params
+     * @param body   body
+     * @return CompletableFuture<JSONObject>
+     */
+    public CompletableFuture<String> request(
+            String url,
+            String method,
+            JSONObject params,
+            JSONObject body
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            // 创建表单数据
+            StringBuilder queryString = new StringBuilder();
+
+
+            if (params != null) {
+                params.keySet().forEach(key -> {
+                    queryString.append(key).append("=").append(params.get(key)).append("&");
+                });
+
+                if (!queryString.isEmpty()) {
+                    queryString.deleteCharAt(queryString.length() - 1);
+                }
+            }
+
+            String requestUrl = url + "?" + queryString;
+            FormBody.Builder bodyBuilder = new FormBody.Builder();
+
+            if (body != null) {
+                body.forEach((k, v) -> bodyBuilder.add(k, String.valueOf(v)));
+            }
+
+            Request.Builder builder = new Request.Builder();
+            builder.header("Content-Type", "application/json");
+
+            // 创建 POST 请求
+            builder.url(requestUrl);
+            String upperCase = method.toUpperCase();
+            if (upperCase.equals("GET")) {
+                builder.get();
+            } else {
+                builder.method(upperCase, bodyBuilder.build());
+            }
+
+            Request request = builder.build();
+
+            log.info("创建请求 url[{}], method[{}]成功，开始请求服务器", url, method);
+
+            for (int i = 0; i < RETRY_TIMES; i++) {
+                // 发送请求并获取响应
+                try (Response response = okHttpClient.newCall(request).execute()) {
+                    if (response.isSuccessful()) {
+                        return response.body() == null ? "{}" : response.body().string();
+                    } else {
+                        log.error("请求url [{}] 失败， code [{}]， {}", url, response.code(), response.body());
+                        break;
+                    }
+                } catch (SocketTimeoutException e) {
+                    log.warn("请求[{}]超时，尝试重新请求 [{}/{}]", url, i, RETRY_TIMES);
+                } catch (IOException e) {
+                    log.error("请求url [{}] 失败", url, e);
+                    throw new RuntimeException(e);
+                }
+            }
+
+            return null;
+        }, executorService);
+    }
+}
+
+package cn.com.helei.depin.core;
+
+import cn.com.helei.depin.core.dto.AccountContext;
+import cn.com.helei.depin.core.dto.ConnectStatus;
+import cn.com.helei.depin.core.dto.DepinClientAccount;
+import cn.com.helei.depin.core.netty.base.AbstractWebsocketClient;
+import cn.com.helei.depin.core.netty.constants.WebsocketClientStatus;
+import cn.com.helei.depin.core.netty.handler.WSCloseHandler;
+import cn.com.helei.depin.core.util.RestApiClient;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.CompletableFuture;
+
+
+@Slf4j
+@Getter
+public class AbstractDepinClient<Req, Resp> extends AbstractWebsocketClient<Req, Resp> {
+
+    /**
+     * 网络请求客户端
+     */
+    private final RestApiClient restApiClient;
+
+    /**
+     * client对应的账号
+     */
+    private final AccountContext accountContext;
+
+    public AbstractDepinClient(
+            AccountContext accountContext,
+            AbstractDepinWSClientHandler<Req, Resp> handler
+    ) {
+        super(accountContext.getClientAccount().getConnectUrl(), handler);
+        super.setName(accountContext.getClientAccount().getName());
+        super.setHeaders(accountContext.getClientAccount().getHeaders());
+
+        super.setProxy(accountContext.getProxy());
+
+        super.setClientStatusChangeHandler(this::whenClientStatusChange);
+
+        this.accountContext = accountContext;
+        this.restApiClient = new RestApiClient(accountContext.getProxy(), super.getCallbackInvoker());
+    }
+
+
+    @Override
+    public CompletableFuture<Boolean> connect(WSCloseHandler wsCloseHandler) {
+
+
+        return super.connect(wsCloseHandler);
+    }
+
+
+    /**
+     * ws客户端状态改变，同步更新账户状态
+     *
+     * @param newClientStatus 最新的客户端状态
+     */
+    public void whenClientStatusChange(WebsocketClientStatus newClientStatus) {
+        accountContext.getConnectStatusInfo().setConnectStatus(
+                switch (newClientStatus) {
+                    case NEW -> ConnectStatus.NEW;
+                    case STARTING -> ConnectStatus.STARTING;
+                    case RUNNING -> ConnectStatus.RUNNING;
+                    case STOP -> ConnectStatus.STOP;
+                    case SHUTDOWN -> ConnectStatus.STOP;
+                }
+        );
+    }
+}
+package cn.com.helei.depin.core;
+
+import cn.com.helei.depin.core.netty.base.AbstractWebSocketClientHandler;
+import io.netty.channel.ChannelHandlerContext;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+public abstract class AbstractDepinWSClientHandler<Req, Resp> extends AbstractWebSocketClientHandler<Req, Resp> {
+
+
+    /**
+     * channel 空闲，向其发送心跳
+     * @param ctx ctx
+     */
+    @Override
+    protected void handleAllIdle(ChannelHandlerContext ctx) {
+        websocketClient
+                .sendMessage(heartBeatMessage())
+                .exceptionallyAsync(throwable -> {
+                    // 心跳发送异常，打印日志
+                    log.error("client[{}] 发送心跳异常", websocketClient.getName(), throwable);
+                    return null;
+                }, websocketClient.getCallbackInvoker());
+    }
+
+    @Override
+    public String getRequestId(Req request) {
+        return "";
+    }
+
+    @Override
+    public String getResponseId(Resp response) {
+        return "";
+    }
+
+    protected abstract Req heartBeatMessage();
+}
+package cn.com.helei.depin.core;
+
+
+import cn.com.helei.depin.core.dto.DepinClientAccount;
+import lombok.Data;
+
+import java.util.List;
+
+@Data
+public abstract class BaseDepinBotConfig {
+
+
+    /**
+     * 并发数量
+     */
+    private int concurrentCount = 20;
+
+
+    /**
+     * 网络代理池配置文件名
+     */
+    private String networkPoolConfig = "network-proxy.yaml";
+
+    /**
+     * 浏览器环境池配置文件名
+     */
+    private String browserEnvPoolConfig = "browser-env.yaml";
+
+    /**
+     * 连接url
+     */
+    private String wsBaseUrl;
+
+
+    public abstract List<DepinClientAccount> getAccountList();
+}
