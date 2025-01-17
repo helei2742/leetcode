@@ -1,92 +1,350 @@
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.serialization.StringSerializer;
+package cn.com.helei.depin.core;
 
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
-import java.sql.Statement;
-import java.util.Properties;
-import java.util.Random;
+import cn.com.helei.depin.core.command.CommandMenuNode;
+import cn.com.helei.depin.core.env.BrowserEnvPool;
+import cn.com.helei.depin.core.network.NetworkProxyPool;
+import cn.com.helei.depin.core.supporter.AccountContextManager;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import org.jline.reader.LineReader;
+import org.jline.reader.LineReaderBuilder;
+import org.jline.reader.impl.DefaultParser;
+import org.jline.terminal.Terminal;
+import org.jline.terminal.TerminalBuilder;
 
-public class PgDataGeneratorToKafka {
-    private static final String KAFKA_TOPIC = "your_topic";
-    private static final String KAFKA_BOOTSTRAP_SERVERS = "localhost:9092";
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Stack;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 
-    private static final String POSTGRES_URL = "jdbc:postgresql://localhost:5432/your_database";
-    private static final String POSTGRES_USER = "your_user";
-    private static final String POSTGRES_PASSWORD = "your_password";
-    private static final String TARGET_TABLE = "your_table";
 
-    public static void main(String[] args) {
-        Properties kafkaProps = new Properties();
-        kafkaProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA_BOOTSTRAP_SERVERS);
-        kafkaProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
-        kafkaProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+/**
+ * 命令行交互的depin机器人
+ */
+@Slf4j
+@Getter
+public abstract class CommandLineDepinBot {
 
-        try (KafkaProducer<String, String> producer = new KafkaProducer<>(kafkaProps);
-             Connection conn = DriverManager.getConnection(POSTGRES_URL, POSTGRES_USER, POSTGRES_PASSWORD);
-             Statement stmt = conn.createStatement()) {
+    /**
+     * 代理池
+     */
+    private final NetworkProxyPool proxyPool;
 
-            // 获取表的列信息
-            String query = "SELECT * FROM " + TARGET_TABLE + " LIMIT 1"; // 只查询一行数据以获取元数据
-            ResultSet rs = stmt.executeQuery(query);
-            ResultSetMetaData metaData = rs.getMetaData();
+    /**
+     * 浏览器环境池
+     */
+    private final BrowserEnvPool browserEnvPool;
 
-            // 随机数据生成器
-            Random random = new Random();
+    /**
+     * 配置
+     */
+    private final BaseDepinBotConfig baseDepinBotConfig;
 
-            // 根据列信息生成随机数据
-            for (int recordNum = 0; recordNum < 10; recordNum++) { // 生成 10 条模拟数据
-                StringBuilder record = new StringBuilder("{");
 
-                for (int i = 1; i <= metaData.getColumnCount(); i++) {
-                    String columnName = metaData.getColumnName(i);
-                    String columnType = metaData.getColumnTypeName(i);
+    private final AccountContextManager accountContextManager;
 
-                    record.append("\"").append(columnName).append("\": ");
-                    record.append(generateRandomData(columnType, random));
+    public CommandLineDepinBot(BaseDepinBotConfig baseDepinBotConfig) {
+        this.baseDepinBotConfig = baseDepinBotConfig;
 
-                    if (i < metaData.getColumnCount()) {
-                        record.append(", ");
-                    }
-                }
-                record.append("}");
+        this.proxyPool = NetworkProxyPool.loadYamlNetworkPool(baseDepinBotConfig.getNetworkPoolConfig());
+        this.browserEnvPool = BrowserEnvPool.loadYamlBrowserEnvPool(baseDepinBotConfig.getBrowserEnvPoolConfig());
 
-                // 发送到 Kafka
-                ProducerRecord<String, String> kafkaRecord = new ProducerRecord<>(KAFKA_TOPIC, record.toString());
-                producer.send(kafkaRecord);
-                System.out.println("Sent record to Kafka: " + record);
+        this.accountContextManager = new AccountContextManager(proxyPool, browserEnvPool, baseDepinBotConfig);
+        init();
+    }
+
+    public void init() {
+        //Step 1 初始化账号
+        accountContextManager.initAccount();
+
+    }
+
+
+    /**
+     * 启动bot
+     *
+     * @throws InterruptedException InterruptedException
+     */
+    public void start() throws InterruptedException {
+        log.info("正在启动Depin Bot");
+
+        CountDownLatch startLatch = new CountDownLatch(1);
+        //启动命令行交互的线程
+        asyncExecute(startLatch);
+
+        log.info("Depin Bot启动完毕");
+
+        startLatch.await();
+    }
+
+    /**
+     * 异步启动
+     */
+    private void asyncExecute(CountDownLatch startLatch) {
+        Thread commandInputThread = new Thread(() -> {
+            try {
+                doExecute();
+            } catch (IOException e) {
+                log.error("控制台输入发生错误", e);
+            } finally {
+                startLatch.countDown();
             }
+        }, "command-input");
+        commandInputThread.setDaemon(true);
+        commandInputThread.start();
+    }
 
-        } catch (Exception e) {
-            e.printStackTrace();
+    /**
+     * 运行机器人
+     *
+     * @throws IOException IOException
+     */
+    private void doExecute() throws IOException {
+        //Step 1 获取输入
+        CommandMenuNode mainMenuNode = getMenuNode();
+        Terminal terminal = TerminalBuilder.builder().system(true).build();
+        LineReader reader = LineReaderBuilder.builder().terminal(terminal).parser(new DefaultParser()).build();
+
+        Stack<CommandMenuNode> menuNodeStack = new Stack<>();
+        CommandMenuNode currentMenuNode = mainMenuNode;
+
+        //Step 2 不断监听控制台输入
+        while (true) {
+            //Step 2.1 获取输入
+            String choice = reader.readLine("\n<\n" + getMenuNodePrintStr(currentMenuNode) + "请选择>");
+            try {
+                //Step 2.2 退出
+                if ("exit".equals(choice)) {
+                    exitHandler();
+                    break;
+                }
+
+                //Step 2.3 选择操作
+                int option = Integer.parseInt(choice.trim());
+                if (option == 0) {
+                    //返回上一级菜单
+                    if (!menuNodeStack.isEmpty()) {
+                        currentMenuNode = menuNodeStack.pop();
+                    }
+                } else if (option > 0 && option <= currentMenuNode.getSubNodeList().size()) {
+                    //进入选择的菜单
+                    menuNodeStack.push(currentMenuNode);
+                    currentMenuNode = currentMenuNode.getSubNodeList().get(option - 1);
+                } else {
+                    System.out.println("输入无效，请重新输入");
+                }
+            } catch (Exception e) {
+                System.out.println("输入无效，请重新输入");
+            }
         }
     }
 
-    private static String generateRandomData(String columnType, Random random) {
-        switch (columnType) {
-            case "INT4":  // PostgreSQL INTEGER 类型
-                return String.valueOf(random.nextInt(100));
-            case "FLOAT4":  // PostgreSQL FLOAT 类型
-                return String.valueOf(random.nextFloat() * 100);
-            case "VARCHAR":  // PostgreSQL VARCHAR 类型
-                return "\"" + getRandomString(5, random) + "\"";
-            case "TIMESTAMP":  // PostgreSQL TIMESTAMP 类型
-                return "\"" + System.currentTimeMillis() + "\"";  // 使用当前时间戳
-            default:
-                return "\"unknown\"";
-        }
+
+    /**
+     * 获取菜单， 会放入额外的固定菜单
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode getMenuNode() {
+        CommandMenuNode menuNode = buildMenuNode();
+
+        //获取到子类菜单后，给子类菜单添加新的菜单选项
+        menuNode.addSubMenu(buildProxyListMenuNode());
+        menuNode.addSubMenu(buildBrowserListMenuNode());
+        menuNode.addSubMenu(buildAccountListMenuNode());
+
+        return menuNode;
     }
 
-    private static String getRandomString(int length, Random random) {
-        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-        StringBuilder sb = new StringBuilder(length);
-        for (int i = 0; i < length; i++) {
-            sb.append(chars.charAt(random.nextInt(chars.length())));
+    /**
+     * 构建command菜单
+     *
+     * @return 主菜单节点
+     */
+    protected abstract CommandMenuNode buildMenuNode();
+
+
+    /**
+     * 构建查看代理列表的菜单节点
+     *
+     * @return 查看代理列表菜单节点
+     */
+    private CommandMenuNode buildProxyListMenuNode() {
+        return new CommandMenuNode(
+                "查看代理列表",
+                "当前代理列表文件:" + proxyPool.getConfigClassPath(),
+                proxyPool::printPool
+        );
+    }
+
+    /**
+     * 构建查看代理列表的菜单节点
+     *
+     * @return 查看代理列表菜单节点
+     */
+    private CommandMenuNode buildBrowserListMenuNode() {
+        return new CommandMenuNode(
+                "查看浏览器环境列表",
+                "当前代理列表文件:" + browserEnvPool.getConfigClassPath(),
+                browserEnvPool::printPool
+        );
+    }
+
+    /**
+     * 账户列表菜单节点
+     *
+     * @return 账户列表
+     */
+    private CommandMenuNode buildAccountListMenuNode() {
+        return new CommandMenuNode(
+                "查看账号",
+                "当前账户详情:" + browserEnvPool.getConfigClassPath(),
+                accountContextManager::printAccountList
+        );
+    }
+
+    private CommandMenuNode buildStartAccountClimMenuNode() {
+        return new CommandMenuNode(
+                "启动账号",
+                "账号启动完毕，列表：",
+                () -> {
+                    try {
+                        startAccountDepinClient().get();
+                    } catch (InterruptedException | ExecutionException e) {
+                        throw new RuntimeException(e);
+                    }
+                    return "";
+                }
+        );
+    }
+
+    public CompletableFuture<Void> startAccountDepinClient() {
+        return CompletableFuture.runAsync(()->{
+
+        });
+    }
+
+    /**
+     * 退出回调
+     */
+    public void exitHandler() {
+    }
+
+    /**
+     * 获取当前菜单打印的字符串
+     *
+     * @param currentMenuNode currentMenuNode
+     * @return String
+     */
+    public String getMenuNodePrintStr(CommandMenuNode currentMenuNode) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(currentMenuNode.getDescribe()).append("\n");
+
+        if (currentMenuNode.getAction() != null) {
+            sb.append(currentMenuNode.getAction().get()).append("\n");
         }
+
+        sb.append("选项:\n");
+        List<CommandMenuNode> menuNodeList = currentMenuNode.getSubNodeList();
+        for (int i = 0; i < menuNodeList.size(); i++) {
+            sb.append(i + 1).append(". ").append(menuNodeList.get(i).getTittle()).append("\n");
+        }
+
+        sb.append("0. 返回上一级菜单\n");
+
         return sb.toString();
+    }
+}
+
+depin:
+  openledger:
+    browserEnvPoolConfig: browser-env.yaml
+    networkPoolConfig: network-proxy.yaml
+
+    wsBaseUrl: wss://apitn.openledger.xyz/ws/v1/orch
+    origin: chrome-extension://ekbbplmjjgoobhdlffmgeokalelnmjjc
+    openLedgerAccounts:
+      - name: 914577981@qq.com
+        token: 123
+        proxyId: 1
+        browserEnvId: 1
+
+
+depin:
+  browser:
+    envs:
+      - id: 1
+        headers:
+          User-Agent:
+          Cache-Control:  no-cache
+          Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
+
+
+depin:
+  network:
+    proxy:
+      pool:
+        - id: 1
+          host: 172.0.0.1
+          port: 12135
+          username: 12321
+          password: 412312
+        - id: 2
+          host: 172.0.0.2
+          port: 12135
+          username: 12321
+          password: 412312
+        - id: 3
+          host: 172.0.0.3
+          port: 12135
+          username: 12321
+          password: 412312
+        - id: 4
+          host: 172.0.0.3
+          port: 12135
+          username: 12321
+          password: 412312
+
+
+package cn.com.helei.depin.depin;
+
+import cn.com.helei.depin.app.openLedger.OpenLedgerConfig;
+import cn.com.helei.depin.core.CommandLineDepinBot;
+import cn.com.helei.depin.core.command.CommandMenuNode;
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+
+
+class CommandLineDepinBotTest {
+
+
+    @Test
+    public void testMenu() throws IOException, InterruptedException {
+        CommandLineDepinBot commandLineDepinBot = new CommandLineDepinBot(OpenLedgerConfig.loadYamlConfig("app/openledger.yaml")) {
+
+            @Override
+            protected CommandMenuNode buildMenuNode() {
+                CommandMenuNode menuNode = new CommandMenuNode("主菜单", "这是主菜单，请选择", null);
+                CommandMenuNode menuNodeA = new CommandMenuNode("子菜单A", "这是子菜单A，请选择", null);
+                CommandMenuNode menuNodeB = new CommandMenuNode("子菜单B", "这是子菜单B，请选择", null);
+
+                menuNodeA.addSubMenu(new CommandMenuNode("子菜单A-1", "这是子菜单A-1，请选择", ()->"haha进入了A-1"));
+                menuNodeA.addSubMenu(new CommandMenuNode("子菜单A-2", "这是子菜单A-2，请选择", ()->"haha进入了A-2"));
+
+                menuNodeB.addSubMenu(new CommandMenuNode("子菜单B-1", "这是子菜单B-1，请选择", null));
+                menuNodeB.addSubMenu(new CommandMenuNode("子菜单B-2", "这是子菜单B-2，请选择", null));
+
+                menuNode.addSubMenu(menuNodeA);
+                menuNode.addSubMenu(menuNodeB);
+
+                return menuNode;
+            }
+        };
+
+        commandLineDepinBot.start();
     }
 }
