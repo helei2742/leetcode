@@ -1,158 +1,443 @@
-package com.helei.ads.api;
+package cn.com.helei.DepinBot.core.dto;
 
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
-import com.helei.ads.dto.AdsBrowserAddress;
-import com.helei.ads.dto.AdsResponse;
-import com.helei.ads.dto.query.AdsBaseQuery;
-import com.helei.ads.dto.query.AdsBrowserStartQuery;
-import com.helei.util.RestApiClient;
-import lombok.extern.slf4j.Slf4j;
 
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
+import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.HttpHeaders;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
-/**
- * adsPower 浏览器相关api
- */
-@Slf4j
-public class AdsBrowserApi {
+
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+public class DepinClientAccount {
 
     /**
-     * ads power api url
+     * 账户名
      */
-    private final String localUrl;
+    private String name;
+
+    /**
+     * 邮箱
+     */
+    private String email;
+
+    /**
+     * 密码
+     */
+    private String password;
+
+    /**
+     * 代理id
+     */
+    private Integer proxyId;
+
+
+    /**
+     * 浏览器环境id
+     */
+    private Integer browserEnvId;
+
+
+    public HttpHeaders getWSHeaders() {
+        return new DefaultHttpHeaders();
+    }
+
+    public HttpHeaders getRestHeaders() {
+        return new DefaultHttpHeaders();
+    }
+
+    public String getConnectUrl() {
+        return "";
+    }
+}
+
+
+package cn.com.helei.DepinBot.core.network;
+
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.net.InetSocketAddress;
+import java.net.Proxy;
+import java.net.SocketAddress;
+
+@NoArgsConstructor
+@Data
+public class NetworkProxy {
+
+    private Integer id;
+
+    private ProxyType proxyType;
+
+    private String host;
+
+    private int port;
+
+    private String username;
+
+    private String password;
+
+    public NetworkProxy(String proxyUrl) {
+        String[] split = proxyUrl.split("://");
+        String protocol = split[0];
+
+        proxyType = switch (protocol) {
+            case "http" -> ProxyType.HTTP;
+            case "sockt5" -> ProxyType.SOCKT5;
+            default -> throw new IllegalStateException("Unexpected value: " + protocol);
+        };
+        String[] upAndAddress = split[1].split("@");
+
+        String[] up = upAndAddress[0].split(":");
+        this.username = up[0];
+        this.password = up[1];
+
+        String[] address = upAndAddress[1].split(":");
+        this.host = address[0];
+        this.port = Integer.parseInt(address[1]);
+
+    }
+
+    public SocketAddress getAddress() {
+        return new InetSocketAddress(host, port);
+    }
+}
+
+
+package cn.com.helei.DepinBot.core.network;
+
+import cn.com.helei.DepinBot.core.util.table.CommandLineTablePrintHelper;
+import lombok.Getter;
+import lombok.Setter;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class NetworkProxyPool {
+
+    private static final Map<String, NetworkProxyPool> LOADED_POOL_MAP = new ConcurrentHashMap<>();
+
+    @Getter
+    private String configClassPath;
+
+    @Setter
+    @Getter
+    private List<NetworkProxy> pool;
+
+    private final ConcurrentMap<Integer, NetworkProxy> idMapProxy = new ConcurrentHashMap<>();
+
+    /**
+     * 使用次数
+     */
+    private final Map<Integer, Integer> useCount = new HashMap<>();
+
+
+    public static void main(String[] args) {
+        System.out.println(loadYamlNetworkPool("network-proxy.yaml"));
+    }
+
+    public static NetworkProxyPool loadYamlNetworkPool(String classpath) {
+        return LOADED_POOL_MAP.compute(classpath, (k, pool) -> {
+            if (pool == null) {
+                Yaml yaml = new Yaml();
+                try (InputStream inputStream = NetworkProxyPool.class.getClassLoader().getResourceAsStream(classpath)) {
+                    Map<String, Object> yamlData = yaml.load(inputStream);
+                    Map<String, Object> depin = (Map<String, Object>) yamlData.get("depin");
+                    Map<String, Object> network = (Map<String, Object>) depin.get("network");
+                    Map<String, Object> proxy = (Map<String, Object>) network.get("proxy");
+
+                    NetworkProxyPool networkProxyPool = yaml.loadAs(yaml.dump(proxy), NetworkProxyPool.class);
+
+                    AtomicInteger id = new AtomicInteger();
+                    networkProxyPool.pool.forEach(networkProxy -> {
+                        networkProxy.setId(id.get());
+                        networkProxyPool.idMapProxy.put(id.getAndIncrement(), networkProxy);
+                        networkProxyPool.useCount.put(id.get(), 0);
+                    });
+
+                    networkProxyPool.configClassPath = classpath;
+
+                    pool = networkProxyPool;
+                } catch (IOException e) {
+                    throw new RuntimeException(String.format("价值配置网络代理池文件[%s]发生错误", classpath));
+                }
+            }
+            return pool;
+        });
+    }
+
+
+    /**
+     * 获取最少使用的代理
+     *
+     * @param count 数量
+     * @return List<NetworkProxy>
+     */
+    public synchronized List<NetworkProxy> getLessUsedProxy(int count) {
+        int batchSize = Math.min(count, useCount.size());
+
+        List<NetworkProxy> res = new ArrayList<>(count);
+
+        int needCount = count;
+        while (needCount > 0) {
+            int currentSize = Math.min(needCount, batchSize);
+
+            List<NetworkProxy> batch = useCount.entrySet().stream()
+                    .sorted((e1, e2) -> e1.getValue().compareTo(e2.getValue()))
+                    .limit(currentSize)
+                    .map(e -> {
+                        useCount.compute(e.getKey(), (k, v) -> v == null ? 0 : v + 1);
+                        return idMapProxy.get(e.getKey());
+                    }).toList();
+            res.addAll(batch);
+
+            needCount -= batch.size();
+        }
+
+        return res;
+    }
+
+    /**
+     * 获取代理
+     *
+     * @param id id
+     * @return NetworkProxy
+     */
+    public synchronized NetworkProxy getProxy(Integer id) {
+        return idMapProxy.compute(id, (k, v) -> {
+            if (v == null) return null;
+
+            useCount.compute(id, (k1, v1) -> {
+                if (v1 == null) v1 = 0;
+
+                return v1 + 1;
+            });
+
+            return v;
+        });
+    }
+
+
+    /**
+     * 打印池
+     *
+     * @return String
+     */
+    public String printPool() {
+        return CommandLineTablePrintHelper.generateTableString(pool.stream().toList(), NetworkProxy.class);
+    }
+}
+
+
+package cn.com.helei.DepinBot.core.network;
+
+public enum ProxyType {
+
+    HTTP,
+    SOCKT5
+}
+
+
+package cn.com.helei.DepinBot.core.network;
+
+import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.*;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+
+public class TxtProxyConvert2YamlConfig {
+
+    public static void main(String[] args) throws RuntimeException {
+
+        String fileName = "/Users/helei/develop/ideaworkspace/depinbot/DepinBot/src/main/resources/proxy.txt";
+        String fileName1 = "/Users/helei/develop/ideaworkspace/depinbot/DepinBot/src/main/resources/build-proxy.yaml";
+
+        try (BufferedReader fr = new BufferedReader(new FileReader(fileName))){
+
+            List<NetworkProxy> set = new ArrayList<>();
+            String line;
+            int id = 1;
+            while ((line = fr.readLine()) != null) {
+                String[] split = line.split(":");
+
+                NetworkProxy networkProxy = new NetworkProxy();
+                networkProxy.setHost(split[0]);
+                networkProxy.setPort(Integer.parseInt(split[1]));
+                networkProxy.setUsername(split[2]);
+                networkProxy.setPassword(split[3]);
+                set.add(networkProxy);
+            }
+
+            // 配置 YAML 输出选项
+            DumperOptions options = new DumperOptions();
+            options.setIndent(2);  // 设置缩进级别为 2
+            options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK); // 使用块风格
+
+            Yaml yaml = new Yaml(options);
+
+            // 写入 YAML 文件
+            try (FileWriter writer = new FileWriter(fileName1)) {
+                NetworkProxyPool data = new NetworkProxyPool();
+                data.setPool(set);
+                yaml.dump(data, writer);  // 将对象写入 YAML 文件
+                System.out.println("YAML 文件写入成功！");
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+}
+
+
+package cn.com.helei.DepinBot.core;
+
+import cn.com.helei.DepinBot.core.dto.AccountContext;
+import com.alibaba.fastjson.JSONObject;
+
+public class SimpleDepinWSClient extends AbstractDepinWSClient<JSONObject, JSONObject> {
+
+    public SimpleDepinWSClient(AccountContext accountContext) {
+        super(accountContext, new SimpleDepinWSClientHandler());
+    }
+
+
+
+
+    public static class SimpleDepinWSClientHandler extends AbstractDepinWSClientHandler<JSONObject, JSONObject> {
+
+        @Override
+        protected JSONObject heartBeatMessage() {
+            return null;
+        }
+
+        @Override
+        protected void handleOtherMessage(JSONObject message) {
+
+        }
+
+        @Override
+        public JSONObject convertMessageToRespType(String message) {
+            return null;
+        }
+    }
+}
+
+
+package cn.com.helei.DepinBot.oasis;
+
+import cn.com.helei.DepinBot.core.network.NetworkProxy;
+import cn.com.helei.DepinBot.core.util.RestApiClient;
+import com.alibaba.fastjson.JSONObject;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+
+@Slf4j
+public class OasisApi {
+
+    private static final Map<NetworkProxy, RestApiClient> proxyRestApiClientMap = new ConcurrentHashMap<>();
 
     private final ExecutorService executorService;
 
-    public AdsBrowserApi(String localUrl, ExecutorService executorService) {
-        this.localUrl = localUrl;
+    public OasisApi(ExecutorService executorService) {
         this.executorService = executorService;
     }
 
 
     /**
-     * 启动ads浏览器
+     * 注册用户
      *
-     * @param startQuery 启动参数
-     * @return adsResponse
+     * @param email      邮箱
+     * @param password   密码
+     * @param inviteCode 邀请码
+     * @return 结果
      */
-    public CompletableFuture<AdsBrowserAddress> startAdsBrowser(AdsBrowserStartQuery startQuery) {
-        return RestApiClient.DEFAULT.request(localUrl + "/api/v1/browser/start", "GET", JSONObject.parseObject(JSONObject.toJSONString(startQuery)), null)
-                .thenApplyAsync(responseStr -> {
-                    AdsResponse adsResponse = JSONObject.parseObject(responseStr, AdsResponse.class);
+    public CompletableFuture<Boolean> registerUser(NetworkProxy networkProxy, String email, String password, String inviteCode) {
+        JSONObject payload = new JSONObject();
 
-                    if (adsResponse.getCode() == 0) {
-                        JSONObject data = adsResponse.getData();
-                        JSONObject ws = data.getJSONObject("ws");
-                        return AdsBrowserAddress
-                                .builder()
-                                .userId(startQuery.getUser_id())
-                                .puppeteerWSUrl(ws.getString("puppeteer"))
-                                .seleniumUrl(ws.getString("selenium"))
-                                .debugPort(data.getString("debug_port"))
-                                .webdriver(data.getString("webdriver"))
-                                .build();
-                    }
-                    else {
-                        throw new RuntimeException(String.format("启动ads浏览器失败, %s, apiUrl[%s], params[%s]",
-                                localUrl, startQuery, adsResponse.getMsg()));
-                    }
-                }, executorService);
-    }
-
-
-    /**
-     * 关闭ads浏览器
-     *
-     * @param stopQuery 关闭参数
-     * @return adsResponse
-     */
-    public CompletableFuture<Boolean> stopAdsBrowser(AdsBaseQuery stopQuery) {
-        return RestApiClient.DEFAULT.request(localUrl + "/api/v1/browser/stop", "GET", JSONObject.parseObject(JSONObject.toJSONString(stopQuery)), null)
-                .thenApplyAsync(responseStr -> {
-                    AdsResponse adsResponse = JSONObject.parseObject(responseStr, AdsResponse.class);
-
-                    if (adsResponse.getCode() == 0) return true;
-                    else {
-                        log.error("关闭ads浏览器失败, {}, apiUrl[{}], params[{}]", adsResponse.getMsg(), localUrl, stopQuery);
+        JSONObject account = new JSONObject();
+        account.put("email", email);
+        account.put("password", password);
+        account.put("referralCode", inviteCode);
+        payload.put("0", account);
+        return getRestApiClient(networkProxy)
+                .request("https://api.oasis.ai/internal/authSignup?batch=1", "post", null, null, payload)
+                .thenApplyAsync((res) -> {
+                    try {
+                        JSONObject result = JSONObject.parseObject(res);
+                        return result.getJSONArray("data").getJSONObject(0).getBoolean("result");
+                    } catch (Exception e) {
+                        log.error("注册邮箱[{}]发生异常！", email);
                         return false;
                     }
-                }, executorService);
-    }
-
-
-    /**
-     * 检查ads浏览器状态
-     *
-     * @param query 参数
-     * @return adsResponse
-     */
-    public CompletableFuture<AdsBrowserAddress> checkAdsBrowserActive(AdsBaseQuery query) {
-        return RestApiClient.DEFAULT.request(localUrl + "/api/v1/browser/active", "GET", JSONObject.parseObject(JSONObject.toJSONString(query)), null)
-                .thenApplyAsync(responseStr -> {
-                    AdsResponse adsResponse = JSONObject.parseObject(responseStr, AdsResponse.class);
-
-                    if (adsResponse.getCode() == 0) {
-                        JSONObject data = adsResponse.getData();
-                        JSONObject ws = data.getJSONObject("ws");
-                        return AdsBrowserAddress
-                                .builder()
-                                .userId(query.getUser_id())
-                                .puppeteerWSUrl(ws.getString("puppeteer"))
-                                .seleniumUrl(ws.getString("selenium"))
-                                .build();
-                    }
-                    else {
-                        throw new RuntimeException(String.format("检查ads浏览器状态失败, %s, apiUrl[%s], params[%s]", adsResponse.getMsg()
-                                , localUrl, query));
-                    }
-                }, executorService);
+                });
     }
 
     /**
-     * 获取已启动的浏览器列表
+     * 登录用户,返回token
      *
-     * @return adsResponse
+     * @param email    邮箱
+     * @param password 密码
+     * @return 结果
      */
-    public CompletableFuture<List<AdsBrowserAddress>> queryActiveBrowserList() {
-        return RestApiClient.DEFAULT.request(localUrl + "/api/v1/browser/local-active", "GET", null, null)
-                .thenApplyAsync(responseStr -> {
-                    AdsResponse adsResponse = JSONObject.parseObject(responseStr, AdsResponse.class);
+    public CompletableFuture<String> loginUser(NetworkProxy networkProxy, String email, String password) {
+        JSONObject payload = new JSONObject();
 
-                    if (adsResponse.getCode() == 0) {
-                        JSONArray list = adsResponse.getData().getJSONArray("list");
+        JSONObject account = new JSONObject();
+        account.put("email", email);
+        account.put("password", password);
+        account.put("rememberSession", true);
+        payload.put("0", account);
 
-                        return list.stream().map(item->{
-                            JSONObject jb = (JSONObject) item;
-                            JSONObject ws = jb.getJSONObject("ws");
-
-                            return AdsBrowserAddress
-                                    .builder()
-                                    .userId(jb.getString("user_id"))
-                                    .puppeteerWSUrl(ws.getString("puppeteer"))
-                                    .seleniumUrl(ws.getString("selenium"))
-                                    .debugPort(jb.getString("debug_port"))
-                                    .webdriver(jb.getString("webdriver"))
-                                    .build();
-
-                        }).toList();
-                    } else {
-                        throw new RuntimeException(String.format("获取已启动的浏览器失败, %s, apiUrl[%s]",
-                                adsResponse.getMsg(), localUrl));
+        return getRestApiClient(networkProxy)
+                .request("https://api.oasis.ai/internal/authLogin?batch=1", "post", null, null, payload)
+                .thenApplyAsync((res) -> {
+                    try {
+                        JSONObject result = JSONObject.parseObject(res);
+                        return result.getJSONArray("data").getJSONObject(0).getString("token");
+                    } catch (Exception e) {
+                        throw new RuntimeException(String.format("登录邮箱[%s]发生异常！", email));
                     }
-                }, executorService);
+                });
+    }
+
+
+    private RestApiClient getRestApiClient(NetworkProxy networkProxy) {
+        return proxyRestApiClientMap.compute(networkProxy, (k, v) -> {
+            if (v == null) {
+                v = new RestApiClient(networkProxy, executorService);
+            }
+            return v;
+        });
     }
 
 }
-package com.helei.ads.config;
 
-import cn.hutool.core.io.resource.ClassPathResource;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
+
+package cn.com.helei.DepinBot.oasis;
+
+import cn.com.helei.DepinBot.core.BaseDepinBotConfig;
+import cn.com.helei.DepinBot.core.dto.DepinClientAccount;
 import lombok.Data;
-import lombok.NoArgsConstructor;
+import lombok.EqualsAndHashCode;
+import lombok.extern.slf4j.Slf4j;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
@@ -160,687 +445,151 @@ import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
 
+@EqualsAndHashCode(callSuper = true)
+@Slf4j
 @Data
-@Builder
-@AllArgsConstructor
-@NoArgsConstructor
-public class AdsPowerConfig {
-    private static final String CONFIG_FILE = "adsPowerConfig.yaml";
+public class OasisBotConfig extends BaseDepinBotConfig {
 
-    public static final AdsPowerConfig INSTANCE;
+    private String inviteCode;
 
-    static {
+    private List<DepinClientAccount> accountList;
+
+    public static void main(String[] args) {
+        System.out.println(loadYamlConfig("app/oasis.yaml"));
+    }
+
+    public static OasisBotConfig loadYamlConfig(String classpath) {
         Yaml yaml = new Yaml();
-        try (InputStream inputStream = new ClassPathResource(CONFIG_FILE).getStream()) {
+        log.info("开始加载 OasisBot配置信息-file classpath:[{}}", classpath);
+        try (InputStream inputStream = OasisBotConfig.class.getClassLoader().getResourceAsStream(classpath)) {
             Map<String, Object> yamlData = yaml.load(inputStream);
-            Map<String, Object> adsPower = (Map<String, Object>) yamlData.get("adsPower");
+            Map<String, Object> depin = (Map<String, Object>) yamlData.get("depin");
+            Map<String, Object> app = (Map<String, Object>) depin.get("app");
+            Map<String, Object> oasis = (Map<String, Object>) app.get("oasis");
 
-            INSTANCE = yaml.loadAs(yaml.dump(adsPower), AdsPowerConfig.class);
+            //Step 1 基础配置文件
+            OasisBotConfig oasisBotConfig = yaml.loadAs(yaml.dump(oasis), OasisBotConfig.class);
+
+            log.info("OasisBot配置信息加载完毕: 共{}个账号", oasisBotConfig.accountList.size());
+
+            return oasisBotConfig;
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException(String.format("加载配置文件[%s]发生错误", classpath));
         }
     }
 
-    /**
-     * ads power 本地url
-     */
-    private String localUrl;
-
-    /**
-     * ads power 环境的userId列表
-     */
-    private List<String> userIds;
-
 }
-package com.helei.ads.dto.query;
-
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-public class AdsBaseQuery {
-    /**
-     * 通过环境id启动，创建环境成功后生成的唯一id
-     */
-    private String user_id;
-
-    /**
-     * 通过环境编号启动，如果已传递环境id则有效环境id
-     */
-    private String serial_number;
-
-}
-package com.helei.ads.dto.query;
 
 
-import lombok.*;
-
-@EqualsAndHashCode(callSuper = true)
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-@Builder
-public class AdsBrowserStartQuery extends AdsBaseQuery {
 
 
-    /**
-     * 是否打开平台和历史页面， 0 打开默认， 1 不打开
-     */
-    private String open_tabs = "0";
 
-    /**
-     * 是否打开ip检测页面，0 不打开， 1 打开
-     */
-    private String ip_tab = "1";
+package cn.com.helei.DepinBot.oasis;
 
-    /**
-     * 是否使用新版ip检测，1：新版，0：旧版
-     */
-    private String new_first_tab = "0";
-
-
-    private String launch_arg = "";
-
-    /**
-     * 是否启动headless浏览器 0 否 1 是
-     */
-    private String headless = "0";
-
-    /**
-     * 是否启动账户密码默认填充功能 0 否 1 是
-     */
-    private String disable_password_filling = "0";
-
-    /**
-     * 关闭浏览器后是否清除缓存 0 否 1 是
-     */
-    private String clear_cache_after_closing = "0";
-
-    /**
-     * 是否允许保存密码 0 否 1 是
-     */
-    private String enable_password_saving = "0";
-
-
-    /**
-     * 是否屏蔽cbd检测  1 是  0 否
-     */
-    private String cdp_mask = "1";
-}
-package com.helei.ads.dto;
-
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-@Data
-@Builder
-@AllArgsConstructor
-@NoArgsConstructor
-public class AdsBrowserAddress {
-
-    private String userId;
-
-    private String seleniumUrl;
-
-    private String puppeteerWSUrl;
-
-    private String debugPort;
-
-    private String webdriver;
-}
-package com.helei.ads.dto;
-
+import cn.com.helei.DepinBot.core.AbstractDepinWSClient;
+import cn.com.helei.DepinBot.core.CommandLineDepinBot;
+import cn.com.helei.DepinBot.core.commandMenu.CommandMenuNode;
+import cn.com.helei.DepinBot.core.dto.AccountContext;
 import com.alibaba.fastjson.JSONObject;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-public class AdsResponse {
-
-    private int code;
-
-    private String msg;
-
-    private JSONObject data;
-}
-package com.helei.ads;
-
-
-import com.alibaba.fastjson.JSONObject;
-import com.helei.ads.api.AdsBrowserApi;
-import com.helei.ads.config.AdsPowerConfig;
-import com.helei.ads.dto.AdsResponse;
-import com.helei.util.ExecutorManager;
-import com.helei.util.RestApiClient;
-import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.chrome.ChromeDriver;
-import org.openqa.selenium.chrome.ChromeOptions;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-
-/**
- * AdsPower 客户端
- */
-@Slf4j
-public class AdsPowerClient {
-
-    /**
-     * adsPower 设置
-     */
-    private final AdsPowerConfig adsPowerConfig;
-
-    /**
-     * 异步任务执行线程池
-     */
-    private final ExecutorService executorService;
-
-    /**
-     * 浏览器相关api
-     */
-    @Getter
-    private final AdsBrowserApi browserApi;
-
-
-
-    public AdsPowerClient(AdsPowerConfig adsPowerConfig) {
-        this.adsPowerConfig = adsPowerConfig;
-        this.executorService = ExecutorManager.adsPowerClientExecutor;
-
-        this.browserApi = new AdsBrowserApi(adsPowerConfig.getLocalUrl(), executorService);
-    }
-
-
-    /**
-     * 检查api接口状态
-     *
-     * @return 正常返回true，否则false
-     */
-    public CompletableFuture<Boolean> checkApiStatus() {
-        return RestApiClient.DEFAULT.request(adsPowerConfig.getLocalUrl() + "/status",
-                        "GET", null, null)
-                .thenApplyAsync(responseStr -> {
-                    AdsResponse adsResponse = JSONObject.parseObject(responseStr, AdsResponse.class);
-                    return adsResponse.getCode() == 0;
-                }, executorService);
-    }
-
-    /**
-     * 获取WebDriver
-     *
-     * @param chromeDriverPath chromeDriver的路径
-     * @param seleniumHttpUrl  ads调试地址
-     * @return CompletableFuture<WebDriver>
-     */
-    public CompletableFuture<WebDriver> getWebDriver(String chromeDriverPath, String seleniumHttpUrl) {
-        return CompletableFuture.supplyAsync(() -> {
-            System.setProperty("webdriver.chrome.driver", chromeDriverPath);
-
-            ChromeOptions chromeOptions = new ChromeOptions();
-            chromeOptions.setExperimentalOption("debuggerAddress", seleniumHttpUrl);
-
-            return new ChromeDriver(chromeOptions);
-        }, executorService);
-    }
-}
-
-package com.helei.dto.account;
-
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import java.util.Set;
-
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-public class Account {
-
-    /**
-     * 谷歌账号
-     */
-    private GoogleAccount google;
-
-    /**
-     * 推特账号
-     */
-    private TwitterAccount twitter;
-
-    /**
-     * discard账号
-     */
-    private DiscardAccount discard;
-
-    /**
-     * 钱包
-     */
-    private Set<Wallet> wallets;
-
-    @Data
-    public static class TwitterAccount {
-        private String email;
-        private String password;
-    }
-
-    @Data
-    public static class GoogleAccount {
-        private String email;
-        private String password;
-    }
-
-    @Data
-    public static class DiscardAccount {
-        private String email;
-        private String password;
-    }
-}
-package com.helei.dto.account;
-
-import lombok.Data;
-
-
-
-/**
- * sol 钱包
- */
-@Data
-public class Wallet {
-
-    /**
-     * 钱包类型
-     */
-    private WalletType walletType;
-
-    /**
-     * 公匙地址
-     */
-    private String pubKey;
-
-    /**
-     * 助记词
-     */
-    private String mnemonicWord;
-
-
-    /**
-     * 钱包类型
-     */
-    public enum WalletType {
-        ETH,
-        SOL,
-        BSC,
-        TON
-    }
-}
-package com.helei.util;
-
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
-public class ExecutorManager {
-
-    /**
-     * adsPower client 使用的线程池
-     */
-    public static final ExecutorService adsPowerClientExecutor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("ads-power-client"));
-}
-package com.helei.util;
-
-import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class NamedThreadFactory implements ThreadFactory {
+@Slf4j
+public class OasisDepinBot extends CommandLineDepinBot<JSONObject, JSONObject> {
 
-    private final String namePrefix;
-    private final AtomicInteger threadNumber = new AtomicInteger(1);
+    private final OasisApi oasisApi;
 
-    public NamedThreadFactory(String namePrefix) {
-        this.namePrefix = namePrefix;
+    public OasisDepinBot(OasisBotConfig oasisBotConfig) {
+        super(oasisBotConfig);
+        this.oasisApi = new OasisApi(getExecutorService());
     }
 
     @Override
-    public Thread newThread(Runnable r) {
-        // 使用指定的名称前缀和自动编号来创建线程名称
-        Thread thread = new Thread(r, namePrefix + "-" + threadNumber.getAndIncrement());
-        // 设置为守护线程（可选）
-        thread.setDaemon(false);
-        return thread;
+    protected CommandMenuNode buildMenuNode() {
+        CommandMenuNode main = new CommandMenuNode("主菜单", "欢迎使用机器人", null);
+
+        CommandMenuNode commandMenuNode = new CommandMenuNode(true, "账户注册", "开始批量注册账号", this::registerAccount);
+
+
+        return main.addSubMenu(commandMenuNode);
     }
-}
-package com.helei.util;
 
-import com.alibaba.fastjson.JSONObject;
-import lombok.extern.slf4j.Slf4j;
-import okhttp3.FormBody;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
+    @Override
+    public AbstractDepinWSClient<JSONObject, JSONObject> buildAccountWSClient(AccountContext accountContext) {
+        return null;
+    }
 
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.Proxy;
-import java.net.SocketTimeoutException;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
-@Slf4j
-public class RestApiClient {
-
-    private static final int RETRY_TIMES = 3;
-
-    public static final RestApiClient DEFAULT = new RestApiClient(null, Executors.newThreadPerTaskExecutor(new NamedThreadFactory("rest-request-client")));
-
-    private final OkHttpClient okHttpClient;
-
-    private final ExecutorService executorService;
-
-    public RestApiClient(
-            InetSocketAddress proxy,
-            ExecutorService executorService
-    ) {
-        this.executorService = executorService;
-        OkHttpClient.Builder builder = new OkHttpClient.Builder();
-        if (proxy != null) {
-            builder.proxy(new Proxy(Proxy.Type.HTTP, proxy));
-        }
-        this.okHttpClient = builder.build();
+    @Override
+    public void whenAccountConnected(AccountContext accountContext, Boolean success) {
+        
     }
 
 
-    /**
-     * 发送请求，如果有asKey参数不为null，则会鉴权
-     *
-     * @param method method
-     * @param params params
-     * @param body   body
-     * @return CompletableFuture<JSONObject>
-     */
-    public CompletableFuture<String> request(
-            String url,
-            String method,
-            JSONObject params,
-            JSONObject body
-    ) {
-        return CompletableFuture.supplyAsync(() -> {
-            // 创建表单数据
-            StringBuilder queryString = new StringBuilder();
+    private String registerAccount() {
+        OasisBotConfig oasisBotConfig = (OasisBotConfig) getBaseDepinBotConfig();
+        String inviteCode = oasisBotConfig.getInviteCode();
 
+        log.info("开始注册账户");
+        AtomicInteger successCount = new AtomicInteger(0);
+        List<CompletableFuture<Void>> futureList = getAccountContextManager().getAccounts().stream().map(accountContext -> {
+            String email = accountContext.getClientAccount().getEmail();
 
-            if (params != null) {
-                params.keySet().forEach(key -> {
-                    queryString.append(key).append("=").append(params.get(key)).append("&");
-                });
-
-                if (!queryString.isEmpty()) {
-                    queryString.deleteCharAt(queryString.length() - 1);
-                }
-            }
-
-            String requestUrl = url + "?" + queryString;
-            FormBody.Builder bodyBuilder = new FormBody.Builder();
-
-            if (body != null) {
-                body.forEach((k, v) -> bodyBuilder.add(k, String.valueOf(v)));
-            }
-
-            Request.Builder builder = new Request.Builder();
-            builder.header("Content-Type", "application/json");
-
-            // 创建 POST 请求
-            builder.url(requestUrl);
-            String upperCase = method.toUpperCase();
-            if (upperCase.equals("GET")) {
-                builder.get();
-            } else {
-                builder.method(upperCase, bodyBuilder.build());
-            }
-
-            Request request = builder.build();
-
-            log.info("创建请求 url[{}], method[{}]成功，开始请求服务器", url, method);
-
-            for (int i = 0; i < RETRY_TIMES; i++) {
-                // 发送请求并获取响应
-                try (Response response = okHttpClient.newCall(request).execute()) {
-                    if (response.isSuccessful()) {
-                        return response.body() == null ? "{}" : response.body().string();
-                    } else {
-                        log.error("请求url [{}] 失败， code [{}]， {}", url, response.code(), response.body());
-                        break;
-                    }
-                } catch (SocketTimeoutException e) {
-                    log.warn("请求[{}]超时，尝试重新请求 [{}/{}]", url, i, RETRY_TIMES);
-                } catch (IOException e) {
-                    log.error("请求url [{}] 失败", url, e);
-                    throw new RuntimeException(e);
-                }
-            }
-
-            return null;
-        }, executorService);
-    }
-}
-package com.helei;
-
-
-import com.helei.ads.config.AdsPowerConfig;
-import com.helei.dto.account.Account;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.HashSet;
-import java.util.Set;
-
-@Slf4j
-public abstract class AdsAutoSyncApplication {
-
-    /**
-     * 账户列表
-     */
-    private final Set<Account> accounts = new HashSet<>();
-
-    /**
-     * AdsPower 设置
-     */
-    private final AdsPowerConfig adsPowerConfig = AdsPowerConfig.INSTANCE;
-
-
-    /**
-     * 设置账户信息
-     * @param accounts accounts
-     */
-    protected abstract void initAccountInfo(Set<Account> accounts);
-
-
-
-}
-adsPower:
-  localUrl:  test
-  userIds:
-    - test1
-    - test2
-    - test3
-    - test4
-package com.helei.ads;
-
-import com.helei.ads.config.AdsPowerConfig;
-import com.helei.ads.dto.query.AdsBaseQuery;
-import com.helei.ads.dto.query.AdsBrowserStartQuery;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Order;
-import org.junit.jupiter.api.Test;
-
-import java.util.concurrent.ExecutionException;
-
-
-class AdsPowerClientTest {
-
-    private static AdsPowerClient adsPowerClient =
-            new AdsPowerClient(AdsPowerConfig.INSTANCE);
-
-    @BeforeEach
-    void setUp() {
-    }
-
-    @Test
-    @Order(1)
-    void checkApiStatus() {
-        adsPowerClient.checkApiStatus().thenAccept(System.out::println).join();
-    }
-
-    @Test
-    @Order(2)
-    void testStartBrowser() throws ExecutionException, InterruptedException {
-        String first = adsPowerClient.getAdsPowerConfig().getUserIds().getFirst();
-
-        AdsBrowserStartQuery startQuery = new AdsBrowserStartQuery();
-        startQuery.setUser_id(first);
-
-        adsPowerClient.getBrowserApi().startAdsBrowser(startQuery).thenAccept(System.out::println).get();
-    }
-
-
-    @Test
-    @Order(4)
-    void testStopBrowser() throws ExecutionException, InterruptedException {
-        String first = adsPowerClient.getAdsPowerConfig().getUserIds().getFirst();
-        adsPowerClient.getBrowserApi().stopAdsBrowser(new AdsBaseQuery(first, null)).thenAccept(System.out::println).get();
-    }
-
-
-    @Test
-    @Order(3)
-    void testCheckAdsBrowserActive() throws ExecutionException, InterruptedException {
-        String first = adsPowerClient.getAdsPowerConfig().getUserIds().getFirst();
-        adsPowerClient.getBrowserApi().checkAdsBrowserActive(new AdsBaseQuery(first, null)).thenAccept(System.out::println).get();
-    }
-
-    @Test
-    @Order(5)
-    void queryActiveBrowserListTest() throws ExecutionException, InterruptedException {
-        adsPowerClient.getBrowserApi().queryActiveBrowserList().thenAccept(System.out::println).get();
-    }
-
-
-    @Test
-    @Order(6)
-    void getWebDriver() throws ExecutionException, InterruptedException {
-        String first = adsPowerClient.getAdsPowerConfig().getUserIds().getFirst();
-
-        AdsBrowserStartQuery startQuery = new AdsBrowserStartQuery();
-        startQuery.setUser_id(first);
-
-        String testUrl = "www.baidu.com";
-
-        adsPowerClient.getBrowserApi().startAdsBrowser(startQuery).thenAccept(adsBrowserAddress -> {
-            adsPowerClient
-                    .getWebDriver(adsBrowserAddress.getWebdriver(), adsBrowserAddress.getSeleniumUrl())
-                    .thenAccept(webDriver -> {
-                        webDriver.get(testUrl);
+            log.info("注册[{}]..使用邀请码[{}]..代理[{}]", email, inviteCode, accountContext.getProxy().getId());
+            return oasisApi.registerUser(accountContext.getProxy(), email, accountContext.getClientAccount().getPassword(), inviteCode)
+                    .thenAcceptAsync(success -> {
+                        if (success) {
+                            accountContext.setUsable(true);
+                            log.info("注册[{}]成功", email);
+                            successCount.getAndIncrement();
+                        } else {
+                            accountContext.setUsable(false);
+                            log.error("注册[{}]失败", email);
+                        }
                     });
-        });
+        }).toList();
+
+
+        try {
+            CompletableFuture.allOf(futureList.toArray(new CompletableFuture[0])).get();
+        } catch (InterruptedException | ExecutionException e) {
+            log.error("等待账户注册完成失败",e);
+            return "等待账户注册完成失败";
+        }
+        return "注册完成,成功注册" + successCount.get() + "个账户" + "共:" + getAccountContextManager().getAccounts().size() + "个账户";
     }
 }
 
 
-<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
-
-    <groupId>com.helei</groupId>
-    <artifactId>adsautosyncapp</artifactId>
-    <version>1.0-SNAPSHOT</version>
-
-    <properties>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+depin:
+  app:
+    oasis:
+      accounts:
+        - email: 914577981@qq.com
+          password: 123123123
+        - email: 12321312@qq.com
+          password: 123123123
 
 
-        <gsonn.version>2.9.1</gsonn.version>
-        <guava.version>19.0</guava.version>
-        <lombok.version>1.18.30</lombok.version>
-        <hutool.version>5.8.21</hutool.version>
-        <mapstruct.version>1.6.0</mapstruct.version>
-        <slf4j.version>2.0.4</slf4j.version>
-        <snakeyaml.version>2.2</snakeyaml.version>
-        <mapstruct.version>1.6.0</mapstruct.version>
-        <junit.version>5.9.1</junit.version>
-        <okhttp.version>4.11.0</okhttp.version>
-        <logback.version>1.3.7</logback.version>
-        <fastjson.version>1.2.83</fastjson.version>
-    </properties>
+depin:
+  network:
+    proxy:
+      pool:
+        - http://12321:12321@172.0.0.1:12135
+        - http://123:12321@172.0.0.1:12135
+        - http://213:12321@172.0.0.1:12135
+        - http://123:12321@172.0.0.1:12135
+
+depin:
+  browser:
+    envs:
+      - id: 1
+        headers:
+          User-Agent:
+          Cache-Control:  no-cache
+          Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
 
 
-    <dependencies>
-        <dependency>
-            <groupId>org.seleniumhq.selenium</groupId>
-            <artifactId>selenium-java</artifactId>
-            <version>4.12.0</version>
-        </dependency>
-
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <version>${lombok.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>com.alibaba</groupId>
-            <artifactId>fastjson</artifactId>
-            <version>${fastjson.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-all</artifactId>
-            <version>${hutool.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>org.yaml</groupId>
-            <artifactId>snakeyaml</artifactId>
-            <version>${snakeyaml.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>org.mapstruct</groupId>
-            <artifactId>mapstruct</artifactId>
-            <version>${mapstruct.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <version>5.9.1</version>
-            <scope>${junit.version}</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>com.squareup.okhttp3</groupId>
-            <artifactId>okhttp</artifactId>
-            <version>${okhttp.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-classic</artifactId>
-            <version>${logback.version}</version>
-        </dependency>
-
-    </dependencies>
-
-</project>
