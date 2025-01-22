@@ -1,341 +1,1956 @@
-package com.helei.browserautosyncapp;
+package cn.com.helei.DepinBot.core.bot;
+
+import cn.com.helei.DepinBot.core.BaseDepinBotConfig;
+import cn.com.helei.DepinBot.core.BaseDepinWSClient;
+import cn.com.helei.DepinBot.core.constants.DepinBotStatus;
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import cn.com.helei.DepinBot.core.pool.account.AccountPool;
+import cn.com.helei.DepinBot.core.pool.env.BrowserEnvPool;
+import cn.com.helei.DepinBot.core.exception.DepinBotInitException;
+import cn.com.helei.DepinBot.core.exception.DepinBotStartException;
+import cn.com.helei.DepinBot.core.exception.DepinBotStatusException;
+import cn.com.helei.DepinBot.core.pool.network.NetworkProxyPool;
+import cn.com.helei.DepinBot.core.util.NamedThreadFactory;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
+import java.util.concurrent.*;
 
+@Slf4j
+@Getter
+public abstract class AbstractDepinBot<Req, Resp> {
+    /**
+     * 执行异步任务的线程池
+     */
+    private final ExecutorService executorService;
+
+    /**
+     * 执行定时任务的线程池
+     */
+    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+
+    /**
+     * 代理池
+     */
+    private final NetworkProxyPool proxyPool;
+
+    /**
+     * 浏览器环境池
+     */
+    private final BrowserEnvPool browserEnvPool;
+
+    /**
+     * 账户池
+     */
+    private final AccountPool accountPool;
+
+    /**
+     * 配置
+     */
+    private final BaseDepinBotConfig baseDepinBotConfig;
+
+    /**
+     * 状态
+     */
+    private DepinBotStatus status = DepinBotStatus.NEW;
+
+    public AbstractDepinBot(BaseDepinBotConfig baseDepinBotConfig) {
+        this.baseDepinBotConfig = baseDepinBotConfig;
+        this.executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory(baseDepinBotConfig.getName() + "-executor"));
+
+        this.proxyPool = NetworkProxyPool.loadYamlPool(
+                baseDepinBotConfig.getNetworkPoolConfig(),
+                "bot.network.proxy",
+                NetworkProxyPool.class
+        );
+        this.browserEnvPool = BrowserEnvPool.loadYamlPool(
+                baseDepinBotConfig.getBrowserEnvPoolConfig(),
+                "bot.browser.env",
+                BrowserEnvPool.class
+        );
+        this.accountPool = AccountPool.loadYamlPool(
+                baseDepinBotConfig.getAccountPoolConfig(),
+                "bot.account",
+                AccountPool.class
+        );
+
+    }
+
+    public void init() {
+        updateState(DepinBotStatus.INIT);
+        try {
+            doInit();
+
+            //更新状态
+            updateState(DepinBotStatus.INIT_FINISH);
+        } catch (Exception e) {
+            log.error("初始化DepinBot[{}}发生错误", getBaseDepinBotConfig().getName(), e);
+            updateState(DepinBotStatus.INIT_ERROR);
+        }
+    }
+
+    /**
+     * 初始化方法
+     */
+    protected abstract void doInit() throws DepinBotInitException;
+
+
+    protected abstract void doExecute() throws IOException;
+
+    /**
+     * 使用accountContext构建AbstractDepinWSClient
+     *
+     * @param accountContext accountContext
+     * @return AbstractDepinWSClient
+     */
+    public abstract BaseDepinWSClient<Req, Resp> buildAccountWSClient(AccountContext accountContext);
+
+
+    /**
+     * 当账户链接时调用
+     *
+     * @param depinWSClient depinWSClient
+     * @param success       是否成功
+     */
+    public abstract void whenAccountConnected(BaseDepinWSClient<Req, Resp> depinWSClient, Boolean success);
+
+    /**
+     * 当ws连接收到响应
+     *
+     * @param depinWSClient depinWSClient
+     * @param id            id
+     * @param response      response
+     */
+    public abstract void whenAccountReceiveResponse(BaseDepinWSClient<Req, Resp> depinWSClient, String id, Resp response);
+
+    /**
+     * 当ws连接收到消息
+     *
+     * @param depinWSClient depinWSClient
+     * @param message       message
+     */
+    public abstract void whenAccountReceiveMessage(BaseDepinWSClient<Req, Resp> depinWSClient, Resp message);
+
+    /**
+     * 获取心跳消息
+     *
+     * @param depinWSClient depinWSClient
+     * @return 消息体
+     */
+    public abstract Req getHeartbeatMessage(BaseDepinWSClient<Req, Resp> depinWSClient);
+
+
+    /**
+     * 启动bot
+     *
+     * @throws DepinBotStartException DepinBotStartException
+     */
+    public void start() throws DepinBotStartException {
+        updateState(DepinBotStatus.STARTING);
+        log.info("正在启动Depin Bot");
+        try {
+            CountDownLatch startLatch = new CountDownLatch(1);
+            //启动命令行交互的线程
+            asyncExecute(startLatch);
+
+            log.info("Depin Bot启动完毕");
+
+            updateState(DepinBotStatus.RUNNING);
+            startLatch.await();
+
+        } catch (Exception e) {
+            updateState(DepinBotStatus.SHUTDOWN);
+            throw new DepinBotStartException("启动CommandLineDepinBot发生错误", e);
+        }
+    }
+
+
+    /**
+     * 添加定时任务
+     *
+     * @param runnable runnable
+     * @param delay    delay
+     * @param timeUnit timeUnit
+     */
+    public void addTimer(Runnable runnable, long delay, TimeUnit timeUnit) {
+        scheduler.scheduleAtFixedRate(runnable, 0, delay, timeUnit);
+    }
+
+    /**
+     * 异步启动
+     */
+    private void asyncExecute(CountDownLatch startLatch) {
+        Thread commandInputThread = new Thread(() -> {
+            try {
+                doExecute();
+            } catch (IOException e) {
+                log.error("启动bot发生错误", e);
+            } finally {
+                startLatch.countDown();
+            }
+        }, "depin-bot-main");
+        commandInputThread.setDaemon(true);
+        commandInputThread.start();
+    }
+
+
+
+    /**
+     * 更新DepinBotStatus
+     *
+     * @param newStatus 新状态
+     */
+    private synchronized void updateState(DepinBotStatus newStatus) throws DepinBotStatusException {
+        boolean b = true;
+        if (newStatus.equals(DepinBotStatus.SHUTDOWN)) {
+            status = DepinBotStatus.SHUTDOWN;
+            b = false;
+        } else {
+            b = switch (status) {
+                //当前为NEW，新状态才能为NEW,SHUTDOWN
+                case NEW -> DepinBotStatus.INIT.equals(newStatus);
+                //当前为INIT，新状态只能为INIT_FINISH、INIT_ERROR,SHUTDOWN
+                case INIT -> newStatus.equals(DepinBotStatus.INIT_FINISH)
+                        || newStatus.equals(DepinBotStatus.INIT_ERROR);
+                //当前为INIT_ERROR,新状态只能为ACCOUNT_LOADING, SHUTDOWN
+                case INIT_ERROR -> newStatus.equals(DepinBotStatus.INIT);
+                //当前状态为INIT_FINISH，新状态只能为ACCOUNT_LIST_CONNECT, SHUTDOWN
+                case INIT_FINISH -> newStatus.equals(DepinBotStatus.STARTING);
+                //当前状态为STARING，新状态只能为RUNNING,SHUTDOWN
+                case STARTING -> newStatus.equals(DepinBotStatus.RUNNING);
+                //RUNNING，新状态只能为 SHUTDOWN
+                case RUNNING -> false;
+                case SHUTDOWN -> false;
+            };
+        }
+
+
+        if (b) {
+            log.info("CommandLineDepinBot Status change [{}] => [{}]", status, newStatus);
+            this.status = newStatus;
+        } else {
+            throw new DepinBotStatusException(String.format("Depin Bot Status不能从[%s]->[%s]", status, newStatus));
+        }
+    }
+}
+package cn.com.helei.DepinBot.core.bot;
+
+import cn.com.helei.DepinBot.core.BaseDepinBotConfig;
+import cn.com.helei.DepinBot.core.BaseDepinWSClient;
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import cn.com.helei.DepinBot.core.dto.account.AccountPrintDto;
+import cn.com.helei.DepinBot.core.dto.RewordInfo;
+import cn.com.helei.DepinBot.core.pool.env.BrowserEnv;
+import cn.com.helei.DepinBot.core.exception.DepinBotInitException;
+import cn.com.helei.DepinBot.core.exception.DepinBotStatusException;
+import cn.com.helei.DepinBot.core.netty.constants.WebsocketClientStatus;
+import cn.com.helei.DepinBot.core.pool.network.NetworkProxy;
+import cn.com.helei.DepinBot.core.supporter.persistence.AccountPersistenceManager;
+import cn.com.helei.DepinBot.core.util.NamedThreadFactory;
+import cn.com.helei.DepinBot.core.util.table.CommandLineTablePrintHelper;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+@Slf4j
+public abstract class AccountAutoManageDepinBot<Req, Resp> extends AbstractDepinBot<Req, Resp> {
+    /**
+     * 异步操作线程池
+     */
+    private final ExecutorService executorService;
+
+    /**
+     * 是否开始过链接所有账号
+     */
+    private final AtomicBoolean isStartAccountConnected = new AtomicBoolean(false);
+
+    /**
+     * 账户客户端
+     */
+    private final ConcurrentMap<AccountContext, BaseDepinWSClient<Req, Resp>> accountWSClientMap = new ConcurrentHashMap<>();
+
+
+    private final AccountPersistenceManager persistenceManager = new AccountPersistenceManager();
+
+    /**
+     * 账号列表
+     */
+    @Getter
+    private final List<AccountContext> accounts = new ArrayList<>();
+
+
+    public AccountAutoManageDepinBot(BaseDepinBotConfig baseDepinBotConfig) {
+        super(baseDepinBotConfig);
+
+
+        this.executorService = Executors
+                .newThreadPerTaskExecutor(new NamedThreadFactory(baseDepinBotConfig.getName() + "-account"));
+    }
+
+    @Override
+    protected void doInit() throws DepinBotInitException {
+        initAccounts();
+    }
+
+
+    /**
+     * 初始化账号方法
+     */
+    public void initAccounts() throws DepinBotInitException {
+        try {
+            // Step 1 获取持久化的
+            Map<Integer, AccountContext> accountContextMap = persistenceManager.loadAccountContexts();
+
+            // Step 2 没有保存的数据，加载新的
+            List<AccountContext> accountContexts;
+            if (accountContextMap == null || accountContextMap.isEmpty()) {
+                log.info("bot[{}]加载新账户数据", getBaseDepinBotConfig().getName());
+                // Step 2.1 加载新的
+                accountContexts = loadNewAccountContexts();
+
+                // Step 2.2 持久化
+                persistenceManager.persistenceAccountContexts(accountContexts);
+            } else {
+                log.info("bot[{}]使用历史账户数据", getBaseDepinBotConfig().getName());
+                accountContexts = new ArrayList<>(accountContextMap.values());
+            }
+
+            // Step 3 加载到bot
+            registerAccountsInBot(accountContexts);
+        } catch (Exception e) {
+            throw new DepinBotInitException("初始化账户发生错误", e);
+        }
+    }
+
+    /**
+     * 将账户加载到bot， 会注册监听，当属性发生改变时自动刷入磁盘
+     *
+     * @param accountContexts accountContexts
+     */
+    private void registerAccountsInBot(List<AccountContext> accountContexts) {
+        persistenceManager.registerPersistenceListener(accountContexts);
+    }
+
+
+    /**
+     * 加载新的账户上下文列表，从配置文件中
+     *
+     * @return List<AccountContext>
+     */
+    private List<AccountContext> loadNewAccountContexts() {
+        // Step 1 初始化账号
+
+        List<AccountContext> newAccountContexts = new ArrayList<>();
+
+        List<AccountContext> noProxyIds = new ArrayList<>();
+        List<AccountContext> noBrowserEnvIds = new ArrayList<>();
+
+        getAccountPool()
+                .getAllItem()
+                .forEach(depinClientAccount -> {
+                    AccountContext accountContext = AccountContext.builder()
+                            .clientAccount(depinClientAccount).build();
+
+                    Integer id = depinClientAccount.getId();
+
+                    // 账号没有配置代
+                    if (depinClientAccount.getProxyId() == null) {
+                        noProxyIds.add(accountContext);
+                    } else {
+                        accountContext.setProxy(getProxyPool().getItem(depinClientAccount.getProxyId()));
+                    }
+
+                    // 账号没有配置浏览器环境
+                    if (depinClientAccount.getBrowserEnvId() == null) {
+                        noBrowserEnvIds.add(accountContext);
+                    } else {
+                        accountContext.setBrowserEnv(getBrowserEnvPool().getItem(depinClientAccount.getBrowserEnvId()));
+                    }
+
+                    newAccountContexts.add(accountContext);
+                });
+
+        // Step 2 账号没代理的尝试给他设置代理
+        if (!noProxyIds.isEmpty()) {
+            log.warn("以下账号没有配置代理，将随机选择一个代理进行使用");
+            List<NetworkProxy> lessUsedProxy = getProxyPool().getLessUsedItem(noProxyIds.size());
+            for (int i = 0; i < noProxyIds.size(); i++) {
+                AccountContext accountContext = noProxyIds.get(i);
+
+                NetworkProxy proxy = lessUsedProxy.get(i);
+                accountContext.setProxy(proxy);
+
+                log.warn("账号:{},将使用代理:{}", accountContext.getName(), proxy);
+            }
+        }
+
+        // Step 3 账号没浏览器环境的尝试给他设置浏览器环境
+        if (!noBrowserEnvIds.isEmpty()) {
+            log.warn("以下账号没有配置浏览器环境，将随机选择一个浏览器环境使用");
+            List<BrowserEnv> lessUsedBrowserEnv = getBrowserEnvPool().getLessUsedItem(noBrowserEnvIds.size());
+            for (int i = 0; i < noBrowserEnvIds.size(); i++) {
+                AccountContext accountContext = noBrowserEnvIds.get(i);
+
+                BrowserEnv browserEnv = lessUsedBrowserEnv.get(i);
+                accountContext.setBrowserEnv(browserEnv);
+
+                log.warn("账号:{},将使用浏览器环境:{}", accountContext.getName(), browserEnv);
+            }
+        }
+
+        return newAccountContexts;
+    }
+
+    /**
+     * 开始所有账户的连接
+     *
+     * @return String 打印的消息
+     */
+    public String startAccountDepinClient() {
+        if (isStartAccountConnected.compareAndSet(false, true)) {
+            allAccountConnectExecute()
+                    .exceptionally(throwable -> {
+                        log.error("开始所有账户连接时发生异常", throwable);
+                        return null;
+                    });
+            return "已开始账号链接任务";
+        }
+
+        return "已提交过建立连接任务";
+    }
+
+    /**
+     * 所有账户建立连接
+     *
+     * @return CompletableFuture<Void>
+     */
+    public CompletableFuture<Void> allAccountConnectExecute() {
+        return CompletableFuture.runAsync(() -> {
+            //Step 1 遍历账户
+            List<CompletableFuture<Void>> connectFutures = accounts.stream()
+                    .map(accountContext -> {
+                        // Step 2 根据账户获取ws client
+                        BaseDepinWSClient<Req, Resp> depinWSClient = accountWSClientMap.compute(accountContext, (k, v) -> {
+                            // 没有创建过，或被关闭，创建新的
+                            if (v == null || v.getClientStatus().equals(WebsocketClientStatus.SHUTDOWN)) {
+                                v = buildAccountWSClient(accountContext);
+                            }
+
+                            return v;
+                        });
+
+
+                        String accountName = accountContext.getClientAccount().getName();
+
+                        //Step 3 建立连接
+                        WebsocketClientStatus clientStatus = depinWSClient.getClientStatus();
+                        return switch (clientStatus) {
+                            case NEW, STOP:  // 新创建，停止状态，需要建立连接
+                                yield depinWSClient
+                                        .connect()
+                                        .thenAcceptAsync(success -> {
+                                            try {
+                                                whenAccountConnected(depinWSClient, success);
+                                            } catch (Exception e) {
+                                                log.error("账户[{}]-连接完成后执行回调发生错误", accountName, e);
+                                            }
+                                        }, executorService)
+                                        .exceptionallyAsync(throwable -> {
+                                            log.error("账户[{}]连接失败, ", accountName,
+                                                    throwable);
+                                            return null;
+                                        }, executorService);
+                            case STARTING, RUNNING: // 正在建立连接，直接返回
+                                CompletableFuture.completedFuture(null);
+                            case SHUTDOWN: // 被禁止使用，抛出异常
+                                throw new DepinBotStatusException("cannot start ws client when it shutdown, " + accountName);
+                        };
+                    })
+                    .toList();
+
+            //Step 4 等所有账户连接建立完成
+            try {
+                CompletableFuture
+                        .allOf(connectFutures.toArray(new CompletableFuture[0]))
+                        .get();
+            } catch (InterruptedException | ExecutionException e) {
+                log.error("账户建立连接发生异常", e);
+            }
+        }, executorService);
+    }
+
+
+    /**
+     * 打印账号列表
+     *
+     * @return String
+     */
+    public String printAccountList() {
+        List<AccountPrintDto> list = accounts.stream().map(accountContext -> {
+            NetworkProxy proxy = accountContext.getProxy();
+            BrowserEnv browserEnv = accountContext.getBrowserEnv();
+            return AccountPrintDto
+                    .builder()
+                    .name(accountContext.getClientAccount().getName())
+                    .proxyInfo(proxy.getId() + "-" + proxy.getAddress())
+                    .browserEnvInfo(String.valueOf(browserEnv == null ? "NO_ENV" : browserEnv.getId()))
+                    .usable(accountContext.isUsable())
+                    .startDateTime(accountContext.getConnectStatusInfo().getStartDateTime())
+                    .updateDateTime(accountContext.getConnectStatusInfo().getUpdateDateTime())
+                    .heartBeatCount(accountContext.getConnectStatusInfo().getHeartBeatCount().get())
+                    .connectStatus(accountContext.getConnectStatusInfo().getConnectStatus())
+                    .build();
+        }).toList();
+
+        return "账号列表:\n" +
+                CommandLineTablePrintHelper.generateTableString(list, AccountPrintDto.class) +
+                "\n";
+    }
+
+    /**
+     * 打印账号收益
+     *
+     * @return String
+     */
+    public String printAccountReward() {
+        StringBuilder sb = new StringBuilder();
+
+        List<RewordInfo> list = accounts.stream().map(AccountContext::getRewordInfo).toList();
+
+        sb.append("收益列表:\n")
+                .append(CommandLineTablePrintHelper.generateTableString(list, RewordInfo.class))
+                .append("\n");
+
+        return sb.toString();
+    }
+
+}
+package cn.com.helei.DepinBot.core.dto.account;
+
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenClass;
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenField;
+import cn.com.helei.DepinBot.core.pool.account.DepinClientAccount;
+import cn.com.helei.DepinBot.core.pool.env.BrowserEnv;
+import cn.com.helei.DepinBot.core.pool.network.NetworkProxy;
+import cn.com.helei.DepinBot.core.dto.RewordInfo;
+import io.netty.handler.codec.http.HttpHeaders;
+import lombok.*;
+
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
+
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+@PropertyChangeListenClass(isDeep = true)
+public class AccountContext {
+
+    /**
+     * 账户是否可用
+     */
+    @PropertyChangeListenField
+    private boolean usable = true;
+
+    /**
+     * client 账户
+     */
+    @PropertyChangeListenField
+    private DepinClientAccount clientAccount;
+
+    /**
+     * 代理
+     */
+    @PropertyChangeListenField
+    private NetworkProxy proxy;
+
+    /**
+     * 浏览器环境
+     */
+    @PropertyChangeListenField
+    private BrowserEnv browserEnv;
+
+    private LocalDateTime saveDatetime;
+
+
+    /**
+     * 连接状态
+     */
+    private final ConnectStatusInfo connectStatusInfo = new ConnectStatusInfo();
+
+    /**
+     * 分数信息
+     */
+    @PropertyChangeListenField
+    private final RewordInfo rewordInfo = new RewordInfo();
+
+    @PropertyChangeListenField
+    private final Map<String, String> params = new HashMap<>();
+
+    public String getParam(String key) {
+        return params.get(key);
+    }
+
+    public void setParam(String key, String value) {
+        params.put(key, value);
+    }
+
+    public HttpHeaders getWSHeaders() {
+        return clientAccount.getWSHeaders();
+    }
+
+    public HttpHeaders getRestHeaders() {
+        return clientAccount.getRestHeaders();
+    }
+
+    public String getName() {
+        return clientAccount.getName() == null ? clientAccount.getEmail() : clientAccount.getName();
+    }
+}
+package cn.com.helei.DepinBot.core.dto;
+
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenClass;
+import lombok.Data;
+
+import java.time.LocalDateTime;
+
+@Data
+@PropertyChangeListenClass
+public class RewordInfo {
+
+    /**
+     * 所有分数
+     */
+    private Double totalPoints = 0.0;
+
+    private String sessionId;
+
+    private Double sessionPoints = 0.0;
+
+    /**
+     * 今天的分数
+     */
+    private Double todayPoints = 0.0;
+
+    private LocalDateTime updateTime;
+
+    public void addTotalPoints(Double points) {
+        if (points == null) return;
+        this.totalPoints += points;
+    }
+
+    public void addSessionPoints(Double points) {
+        if (points == null) return;
+        this.sessionPoints += points;
+    }
+
+    public void addTodayPoints(Double points) {
+        if (points == null) return;
+        this.todayPoints += points;
+    }
+}
+package cn.com.helei.DepinBot.core.pool.account;
+
+import cn.com.helei.DepinBot.core.pool.AbstractYamlLinePool;
+
+import java.util.List;
+
+public class AccountPool extends AbstractYamlLinePool<DepinClientAccount> {
+
+    public AccountPool() {
+        super(DepinClientAccount.class);
+    }
+
+
+    public static AccountPool getDefault() {
+        return loadYamlPool(
+                "bot/account.yaml",
+                "bot.account",
+                AccountPool.class
+        );
+    }
+
+    public static void main(String[] args) {
+        AccountPool aDefault = getDefault();
+        System.out.println(aDefault.printPool());
+    }
+}
+package cn.com.helei.DepinBot.core.pool.account;
+
+
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenClass;
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenField;
+import cn.com.helei.DepinBot.core.pool.AbstractYamlLineItem;
+import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.HttpHeaders;
+import lombok.*;
+
+
+@Getter
+@Setter
+@AllArgsConstructor
+@NoArgsConstructor
+@PropertyChangeListenClass
+public class DepinClientAccount extends AbstractYamlLineItem {
+
+    /**
+     * 账户名
+     */
+    @PropertyChangeListenField
+    private String name;
+
+    /**
+     * 邮箱
+     */
+    @PropertyChangeListenField
+    private String email;
+
+    /**
+     * 密码
+     */
+    @PropertyChangeListenField
+    private String password;
+
+
+    /**
+     * 代理id
+     */
+    @PropertyChangeListenField
+    private Integer proxyId;
+
+
+    /**
+     * 浏览器环境id
+     */
+    @PropertyChangeListenField
+    private Integer browserEnvId;
+
+
+    public DepinClientAccount(Object originLine) {
+        String emailAndPassword = (String) originLine;
+
+        String[] split = emailAndPassword.split(", ");
+        email = split[0];
+
+        String[] emailSplit = email.split("@");
+        if (emailSplit.length != 2) {
+            throw new IllegalArgumentException("邮箱格式错误");
+        }
+        this.name = emailSplit[0];
+
+
+        password = split[1];
+
+        if (split.length == 3) {
+            this.proxyId = Integer.valueOf(split[2]);
+        }
+        if (split.length == 4) {
+            this.browserEnvId = Integer.valueOf(split[2]);
+        }
+    }
+
+    public HttpHeaders getWSHeaders() {
+        return new DefaultHttpHeaders();
+    }
+
+    public HttpHeaders getRestHeaders() {
+        return new DefaultHttpHeaders();
+    }
+
+    public String getConnectUrl() {
+        return "";
+    }
+}
+package cn.com.helei.DepinBot.core.pool.env;
+
+import cn.com.helei.DepinBot.core.pool.AbstractYamlLineItem;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Setter;
+
+import java.util.Map;
+
+@Getter
+@Setter
+public class BrowserEnv extends AbstractYamlLineItem {
+
+    private Map<String, String> headers;
+
+    public BrowserEnv(Object originLine) {
+        headers = (Map<String, String>) originLine;
+    }
+}
+package cn.com.helei.DepinBot.core.pool.env;
+
+
+import cn.com.helei.DepinBot.core.pool.AbstractYamlLinePool;
+import cn.com.helei.DepinBot.core.pool.network.NetworkProxyPool;
+
+public class BrowserEnvPool extends AbstractYamlLinePool<BrowserEnv> {
+
+    public BrowserEnvPool() {
+        super(BrowserEnv.class);
+    }
+
+    public static BrowserEnvPool getDefault() {
+        return loadYamlPool(
+                "bot/browser-env.yaml",
+                "bot.browser.env",
+                BrowserEnvPool.class
+        );
+    }
+
+
+    public static void main(String[] args) {
+        System.out.println(NetworkProxyPool.getDefault());
+    }
+}
+package cn.com.helei.DepinBot.core.pool.network;
+
+import cn.com.helei.DepinBot.core.pool.AbstractYamlLineItem;
+import lombok.*;
+
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+
+@Getter
+@Setter
+@NoArgsConstructor
+public class NetworkProxy extends AbstractYamlLineItem {
+
+    private ProxyType proxyType;
+
+    private String host;
+
+    private int port;
+
+    private String username;
+
+    private String password;
+
+    public NetworkProxy(Object originLine) {
+        String proxyUrl = (String) originLine;
+
+        String[] split = proxyUrl.split("://");
+        String protocol = split[0];
+
+        proxyType = switch (protocol) {
+            case "http" -> ProxyType.HTTP;
+            case "sockt5" -> ProxyType.SOCKT5;
+            default -> throw new IllegalStateException("Unexpected value: " + protocol);
+        };
+        String[] upAndAddress = split[1].split("@");
+
+        String[] up = upAndAddress[0].split(":");
+        this.username = up[0];
+        this.password = up[1];
+
+        String[] address = upAndAddress[1].split(":");
+        this.host = address[0];
+        this.port = Integer.parseInt(address[1]);
+
+    }
+
+    public SocketAddress getAddress() {
+        return new InetSocketAddress(host, port);
+    }
+}
+package cn.com.helei.DepinBot.core.pool.network;
+
+import cn.com.helei.DepinBot.core.pool.AbstractYamlLineItem;
+import cn.com.helei.DepinBot.core.pool.AbstractYamlLinePool;
+import cn.com.helei.DepinBot.core.util.table.CommandLineTablePrintHelper;
+
+import java.util.ArrayList;
+import java.util.Collection;
+
+
+public class NetworkProxyPool extends AbstractYamlLinePool<NetworkProxy> {
+
+    public NetworkProxyPool() {
+        super(NetworkProxy.class);
+    }
+
+
+    public static NetworkProxyPool getDefault() {
+        return loadYamlPool(
+                "bot/network-proxy.yaml",
+                "bot.network.proxy",
+                NetworkProxyPool.class
+        );
+    }
+
+    public static void main(String[] args) {
+        System.out.println(getDefault().printPool());
+    }
+}
+package cn.com.helei.DepinBot.core.pool.network;
+
+import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.*;
+        import java.util.ArrayList;
+import java.util.List;
+
+public class TxtProxyConvert2YamlConfig {
+
+    public static void main(String[] args) throws RuntimeException {
+
+        String fileName = "/Users/helei/develop/ideaworkspace/depinbot/DepinBot/src/main/resources/proxy.txt";
+        String fileName1 = "/Users/helei/develop/ideaworkspace/depinbot/DepinBot/src/main/resources/build-proxy.yaml";
+
+        try (BufferedReader fr = new BufferedReader(new FileReader(fileName))){
+
+            List<NetworkProxy> set = new ArrayList<>();
+            String line;
+            int id = 1;
+            while ((line = fr.readLine()) != null) {
+                String[] split = line.split(":");
+
+                NetworkProxy networkProxy = new NetworkProxy();
+                networkProxy.setHost(split[0]);
+                networkProxy.setPort(Integer.parseInt(split[1]));
+                networkProxy.setUsername(split[2]);
+                networkProxy.setPassword(split[3]);
+                set.add(networkProxy);
+            }
+
+            // 配置 YAML 输出选项
+            DumperOptions options = new DumperOptions();
+            options.setIndent(2);  // 设置缩进级别为 2
+            options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK); // 使用块风格
+
+            Yaml yaml = new Yaml(options);
+
+            // 写入 YAML 文件
+            try (FileWriter writer = new FileWriter(fileName1)) {
+                NetworkProxyPool data = new NetworkProxyPool();
+                data.getList().addAll(set);
+                yaml.dump(data, writer);  // 将对象写入 YAML 文件
+                System.out.println("YAML 文件写入成功！");
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+}
+package cn.com.helei.DepinBot.core.pool.network;
+
+import org.yaml.snakeyaml.DumperOptions;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.*;
+        import java.util.ArrayList;
+import java.util.List;
+
+public class TxtProxyConvert2YamlConfig {
+
+    public static void main(String[] args) throws RuntimeException {
+
+        String fileName = "/Users/helei/develop/ideaworkspace/depinbot/DepinBot/src/main/resources/proxy.txt";
+        String fileName1 = "/Users/helei/develop/ideaworkspace/depinbot/DepinBot/src/main/resources/build-proxy.yaml";
+
+        try (BufferedReader fr = new BufferedReader(new FileReader(fileName))){
+
+            List<NetworkProxy> set = new ArrayList<>();
+            String line;
+            int id = 1;
+            while ((line = fr.readLine()) != null) {
+                String[] split = line.split(":");
+
+                NetworkProxy networkProxy = new NetworkProxy();
+                networkProxy.setHost(split[0]);
+                networkProxy.setPort(Integer.parseInt(split[1]));
+                networkProxy.setUsername(split[2]);
+                networkProxy.setPassword(split[3]);
+                set.add(networkProxy);
+            }
+
+            // 配置 YAML 输出选项
+            DumperOptions options = new DumperOptions();
+            options.setIndent(2);  // 设置缩进级别为 2
+            options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK); // 使用块风格
+
+            Yaml yaml = new Yaml(options);
+
+            // 写入 YAML 文件
+            try (FileWriter writer = new FileWriter(fileName1)) {
+                NetworkProxyPool data = new NetworkProxyPool();
+                data.getList().addAll(set);
+                yaml.dump(data, writer);  // 将对象写入 YAML 文件
+                System.out.println("YAML 文件写入成功！");
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+}
+package cn.com.helei.DepinBot.core.pool;
+
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenField;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+
+@NoArgsConstructor
+@Data
+public abstract class AbstractYamlLineItem {
+
+    @PropertyChangeListenField
+    private Integer id;
+
+    private Object originLine;
+
+    public AbstractYamlLineItem(Object originLine){
+        this.originLine = originLine;
+    }
+}
+package cn.com.helei.DepinBot.core.pool;
+
+
+import cn.com.helei.DepinBot.core.util.YamlConfigLoadUtil;
+import cn.com.helei.DepinBot.core.util.table.CommandLineTablePrintHelper;
+import lombok.Getter;
+import lombok.Setter;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicInteger;
+
+@Getter
+public class AbstractYamlLinePool<T extends AbstractYamlLineItem> {
+
+    private final Class<T> tClass;
+
+    @Getter
+    @Setter
+    private List<Object> list;
+
+    @Setter
+    private String configClassPath;
+
+
+    private final ConcurrentMap<Integer, AbstractYamlLineItem> idMapItem = new ConcurrentHashMap<>();
+
+    /**
+     * 使用次数
+     */
+    private final Map<Integer, Integer> useCountMap = new HashMap<>();
+
+    public AbstractYamlLinePool(Class<T> tClass) {
+        this.tClass = tClass;
+    }
+
+    public static <C extends AbstractYamlLinePool<?>> C loadYamlPool(
+            String classpath, String path, Class<C> cClass) {
+
+        C pool = YamlConfigLoadUtil.load(classpath, Arrays.stream(path.split("\\.")).toList(), cClass);
+
+        AtomicInteger id = new AtomicInteger();
+        List<Object> list1 = pool.getList();
+        for (Object rawLine : list1) {
+            AbstractYamlLineItem item;
+
+            try {
+                item = pool.buildTInstanceFromLineStr(rawLine);
+            } catch (NoSuchMethodException | InvocationTargetException | InstantiationException |
+                     IllegalAccessException e) {
+                throw new RuntimeException(e);
+            }
+
+            item.setId(id.getAndIncrement());
+            pool.getIdMapItem().put(id.get(), item);
+            pool.getUseCountMap().put(id.get(), 0);
+        }
+
+        pool.setConfigClassPath(classpath);
+
+        return pool;
+    }
+
+
+    /**
+     * 获取代理
+     *
+     * @param id id
+     * @return NetworkProxy
+     */
+    public synchronized T getItem(Integer id) {
+        AbstractYamlLineItem compute = idMapItem.compute(id, (k, v) -> {
+            if (v == null) return null;
+
+            useCountMap.compute(id, (k1, v1) -> {
+                if (v1 == null) v1 = 0;
+
+                return v1 + 1;
+            });
+
+            return v;
+        });
+        return (T) compute;
+    }
+
+
+    /**
+     * 获取最少使用的
+     *
+     * @param count 数量
+     * @return List<T>
+     */
+    public synchronized List<T> getLessUsedItem(int count) {
+        int batchSize = Math.min(count, getUseCountMap().size());
+
+        List<T> res = new ArrayList<>(count);
+
+        int needCount = count;
+        while (needCount > 0) {
+            int currentSize = Math.min(needCount, batchSize);
+
+            List<T> batch = getUseCountMap().entrySet().stream()
+                    .sorted((e1, e2) -> e1.getValue().compareTo(e2.getValue()))
+                    .limit(currentSize)
+                    .map(e -> {
+                        getUseCountMap().compute(e.getKey(), (k, v) -> v == null ? 0 : v + 1);
+                        return (T) getIdMapItem().get(e.getKey());
+                    }).toList();
+            res.addAll(batch);
+
+            needCount -= batch.size();
+        }
+
+        return res;
+    }
+
+    /**
+     * 获取全部
+     *
+     * @return List<T>
+     */
+    public List<T> getAllItem() {
+        return getIdMapItem().values().stream().map(e -> (T) e).toList();
+    }
+
+
+    /**
+     * 打印池
+     *
+     * @return String
+     */
+    public String printPool() {
+        return CommandLineTablePrintHelper.generateTableString(new ArrayList<>(idMapItem.values()), tClass);
+    }
+
+
+    public T buildTInstanceFromLineStr(Object originLine)
+            throws NoSuchMethodException, InvocationTargetException, InstantiationException, IllegalAccessException {
+        Constructor<T> constructor = getTClass().getConstructor(Object.class);
+        return constructor.newInstance(originLine);
+    }
+
+}
+package cn.com.helei.DepinBot.core.supporter.persistence;
+
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenClass;
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenField;
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeProxy;
+import cn.com.helei.DepinBot.core.util.NamedThreadFactory;
 import com.alibaba.fastjson.JSONObject;
-import okhttp3.*;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.*;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.Stream;
+
+
+@Slf4j
+public class AccountPersistenceManager {
+
+    private static final String PERSISTENCE_PATH = "persistence/accounts";
+
+    private static final String PERSISTENCE_ACCOUNT_PATTERN = "account-%d.json";
+
+    private final ExecutorService executorService;
+
+    private final ConcurrentMap<Object, Object> listenedObjRootMap = new ConcurrentHashMap<>();
+
+    private final ConcurrentMap<Object, Long> rootTimestampMap = new ConcurrentHashMap<>();
+
+    public AccountPersistenceManager() {
+        this.executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("persistence-"));
+    }
+
+    /**
+     * 持久化保存accountContexts
+     *
+     * @param accountContexts accountContexts
+     */
+    public synchronized void persistenceAccountContexts(List<AccountContext> accountContexts) throws IOException {
+        Path path = Paths.get(getPersistencePath(PERSISTENCE_PATH));
+        if (!Files.exists(path)) Files.createDirectories(path);
+
+        for (AccountContext accountContext : accountContexts) {
+            String fileName = String.format(PERSISTENCE_ACCOUNT_PATTERN, accountContext.getClientAccount().getId());
+
+            saveAccountContext(accountContext, path, fileName);
+        }
+    }
+
+
+    /**
+     * 加载账户上下文
+     *
+     * @return PersistenceDto
+     */
+    public synchronized Map<Integer, AccountContext> loadAccountContexts() {
+        Path path = Paths.get(getPersistencePath(PERSISTENCE_PATH));
+
+        if (!Files.exists(path)) return null;
+
+        Map<Integer, AccountContext> map = new HashMap<>();
+
+        try (Stream<Path> walk = Files.walk(path);) {
+
+            for (Path filePath : walk.filter(Files::isRegularFile)
+                    .filter(p -> p.toString().contains("account-")).toList()) {
+
+                Integer idx = Integer.valueOf(filePath.toString()
+                        .split("account-")[1].split(".json")[0]);
+
+                try (BufferedReader reader = new BufferedReader(new FileReader(filePath.toFile()));) {
+                    String line = null;
+                    StringBuilder sb = new StringBuilder();
+                    while ((line = reader.readLine()) != null) {
+                        sb.append(line);
+                    }
+
+                    map.put(idx, JSONObject.parseObject(sb.toString(), AccountContext.class));
+                }
+            }
+
+            return map;
+        } catch (Exception e) {
+            throw new RuntimeException("读取账户文件失败", e);
+        }
+    }
+
+
+    /**
+     * 注册持久化监听
+     *
+     * @param targetList targetList
+     * @param <T>        targetType
+     */
+    public <T> void registerPersistenceListener(List<T> targetList) {
+        targetList.replaceAll(this::bindPersistenceAnnoListener);
+    }
+
+    /**
+     * 对象属性添加变化监听
+     *
+     * @param target target 目标对象
+     * @param <T>    T
+     * @return 添加监听后被动态代理的对象
+     */
+    public <T> T bindPersistenceAnnoListener(T target) {
+        return doBindPersistenceAnnoListener(target, target);
+    }
+
+    /**
+     * 对象属性添加变化监听
+     *
+     * @param target target 目标对象
+     * @param <T>    T
+     * @return 添加监听后被动态代理的对象
+     */
+    private <T> T doBindPersistenceAnnoListener(T target, Object rootObj) {
+        if (target == null) return null;
+
+        Class<?> targetClass = target.getClass();
+
+        PropertyChangeListenClass propertyChangeListenClass = targetClass.getAnnotation(PropertyChangeListenClass.class);
+
+        // 类上带有PersistenceClass注解，表示可以的类
+        if (propertyChangeListenClass == null) {
+            return target;
+        }
+
+        T proxy = PropertyChangeProxy.createProxy(target, (propertyName, oldValue, newValue, timestamp) -> {
+            propertyChangeHandler(target, propertyName, oldValue, newValue, timestamp);
+        });
+
+        // 深度监听，还要给监听的字段对象内的属性监听
+        if (propertyChangeListenClass.isDeep()) {
+
+            for (Field field : targetClass.getDeclaredFields()) {
+                field.setAccessible(true);
+                // 字段上带有PersistenceField注解，表示可以的字段， 字段类型上带有PersistenceClass，还要监听字段对象的属性
+                if (field.isAnnotationPresent(PropertyChangeListenField.class)
+                        && field.getType().isAnnotationPresent(PropertyChangeListenClass.class)) {
+                    try {
+                        Object fieldValue = field.get(target);
+                        Object filedProxy = doBindPersistenceAnnoListener(fieldValue, rootObj);
+
+                        field.set(target, filedProxy);
+                    } catch (IllegalAccessException e) {
+                        throw new RuntimeException("访问字段失败", e);
+                    }
+                }
+            }
+        }
+
+        listenedObjRootMap.put(target, rootObj);
+
+        return proxy;
+    }
+
+    /**
+     * 属性改变后触发
+     *
+     * @param target       target
+     * @param propertyName propertyName
+     * @param oldValue     oldValue
+     * @param newValue     newValue
+     * @param timestamp    timestamp
+     */
+    private void propertyChangeHandler(Object target, String propertyName, Object oldValue, Object newValue, long timestamp) {
+        executorService.execute(() -> {
+            Object root = listenedObjRootMap.get(target);
+
+            Long newTimestamp = rootTimestampMap.compute(root, (k, v) -> {
+                log.info("目标[{}] 属性改变了:{},{}->{} [{}]", root.hashCode(), propertyName, oldValue, newValue, timestamp);
+
+                // 如果当前没有保存时间戳，或者新的时间戳小于当前保存时间戳，则更新保存时间戳.写入文件
+                if (v == null || v < timestamp) {
+                    log.info("最新值为[{}]", newValue);
+                    return timestamp;
+                }
+                return v;
+            });
+
+
+        });
+    }
+
+    /**
+     * 保存账户
+     *
+     * @param accountContext accountContext
+     * @param path           accountContext
+     * @param fileName       fileName
+     */
+    private static void saveAccountContext(AccountContext accountContext, Path path, String fileName) {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(Path.of(path.toString(), fileName).toFile()))) {
+
+            accountContext.setSaveDatetime(LocalDateTime.now());
+            writer.write(JSONObject.toJSONString(accountContext));
+
+            writer.flush();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+
+    /**
+     * 获取持久化路径， 项目根目录开始
+     *
+     * @param subPath subPath
+     * @return String
+     */
+    private static String getPersistencePath(String subPath) {
+        return System.getProperty("user.dir") + File.separator + subPath;
+    }
+}
+package cn.com.helei.DepinBot.core.supporter.propertylisten;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Target(ElementType.TYPE)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface PropertyChangeListenClass {
+    boolean isDeep() default false;
+}
+package cn.com.helei.DepinBot.core.supporter.propertylisten;
+
+public interface PropertyChangeListener {
+
+    void onPropertyChanged(String propertyName, Object oldValue, Object newValue, long updateTimestamp);
+
+}
+package cn.com.helei.DepinBot.core.supporter.propertylisten;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Target(ElementType.FIELD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface PropertyChangeListenField {
+
+    String name() default "";
+}
+package cn.com.helei.DepinBot.core.supporter.propertylisten;
+
+import net.sf.cglib.proxy.Enhancer;
+import net.sf.cglib.proxy.MethodInterceptor;
+import net.sf.cglib.proxy.MethodProxy;
+import org.jetbrains.annotations.NotNull;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+public class PropertyChangeProxy implements MethodInterceptor {
+
+    private final Object target;
+
+    private final PropertyChangeListener listener;
+
+    private final Map<String, Object> fieldValues = new HashMap<>();
+
+    public PropertyChangeProxy(Object target, PropertyChangeListener listener) {
+        this.target = target;
+        this.listener = listener;
+        Class<?> targetClass = target.getClass();
+
+        if (targetClass.isAnnotationPresent(PropertyChangeListenClass.class) || target instanceof Map<?, ?>) {
+            List<Field> fields = new ArrayList<>();
+            fields.addAll(List.of(targetClass.getDeclaredFields()));
+            fields.addAll(List.of(targetClass.getSuperclass().getDeclaredFields()));
+
+            for (Field field : fields) {
+                field.setAccessible(true);
+                if (field.isAnnotationPresent(PropertyChangeListenField.class)) {
+                    String name = getFieldName(field);
+                    try {
+                        Object fieldValue = field.get(target);
+
+                        if (fieldValue instanceof Map<?, ?>) {
+                            fieldValue = createMapProxy((Map<?, ?>) fieldValue, name);
+                            field.set(target, fieldValue);
+                        }
+
+                        fieldValues.put(name, fieldValue);
+                    } catch (IllegalAccessException e) {
+                        throw new RuntimeException("无法访问字段值", e);
+                    }
+                }
+            }
+        }
+    }
+
+    public static <T> T createProxy(T target, PropertyChangeListener listener) {
+        Enhancer enhancer = new Enhancer();
+        enhancer.setSuperclass(target.getClass());
+        enhancer.setCallback(new PropertyChangeProxy(target, listener));
+
+        return (T) enhancer.create();
+    }
+
+
+    @Override
+    public Object intercept(Object obj, Method method, Object[] args, MethodProxy methodProxy) throws Throwable {
+        if (isSetter(method)) {
+            String fieldName = getFieldNameFromMethod(method);
+
+            if (fieldValues.containsKey(fieldName)) {
+                Object oldValue = fieldValues.get(fieldName);
+                Object newValue = args[0];
+
+                if (newValue instanceof Map<?, ?>) {
+                    newValue = createMapProxy((Map<?, ?>) newValue, fieldName);
+                }
+
+                //属性值发生变化
+                if ((oldValue == null && newValue != null) || (oldValue != null && !oldValue.equals(newValue))) {
+                    fieldValues.put(fieldName, newValue);
+                    listener.onPropertyChanged(fieldName, oldValue, newValue, System.currentTimeMillis());
+                }
+            }
+        }
+
+        return methodProxy.invoke(target, args);
+    }
+
+
+    private Map<?, ?> createMapProxy(Map<?, ?> originalMap, String fieldName) {
+        Object o = Enhancer.create(Map.class, (MethodInterceptor) (obj, method, args, methodProxy) -> {
+
+            if (method.getName().equals("put")) {
+                Object key = args[0];
+                Object value = args[1];
+                listener.onPropertyChanged(fieldName + "[" + key + "]", originalMap.get(key), value, System.currentTimeMillis());
+            }
+
+            if (method.getName().equals("remove")) {
+                Object key = args[0];
+                listener.onPropertyChanged(fieldName + "[" + key + "]", originalMap.get(key), null, System.currentTimeMillis());
+            }
+
+            return  method.invoke(originalMap, args);
+        });
+
+        return (Map<?, ?>) o;
+    }
+
+    private String getFieldNameFromMethod(Method method) {
+        String name = method.getName().substring(3);
+
+        return Character.toLowerCase(name.charAt(0)) + name.substring(1);
+    }
+
+
+    private boolean isSetter(Method method) {
+        return method.getName().startsWith("set") && method.getParameters().length == 1;
+    }
+
+    private static @NotNull String getFieldName(Field field) {
+        PropertyChangeListenField persistenceField = field.getAnnotation(PropertyChangeListenField.class);
+        String name = persistenceField.name();
+        if (name.isEmpty()) {
+            name = field.getName();
+        }
+        return name;
+    }
+
+}
+package cn.com.helei.DepinBot.core.util.table;
+
+import cn.hutool.core.util.StrUtil;
+import com.jakewharton.fliptables.FlipTable;
+
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.List;
+
+public class CommandLineTablePrintHelper {
+
+    /**
+     * 生成表格字符串
+     *
+     * @param list   list
+     * @param tClass tClass
+     * @return 表格字符串
+     */
+    public static  String generateTableString(List<?> list, Class<?> tClass) {
+        List<String> tableHeader = new ArrayList<>();
+        List<Field> tableFields = new ArrayList<>();
+
+        for (Field field : tClass.getDeclaredFields()) {
+            field.setAccessible(true);
+            if (field.isAnnotationPresent(CommandTableField.class)) {
+                String name = field.getAnnotation(CommandTableField.class).name();
+                if (StrUtil.isBlank(name)) {
+                    name = field.getName();
+                }
+
+                tableHeader.add(name);
+                tableFields.add(field);
+            }
+        }
+
+        if (tableHeader.isEmpty()) {
+            List<Field> fieldList = List.of(tClass.getDeclaredFields());
+            tableFields.addAll(fieldList);
+            tableHeader.addAll(fieldList.stream().map(Field::getName).toList());
+        }
+
+        tableHeader.addFirst("row");
+        String[][] table = new String[list.size()][tableHeader.size()];
+
+        for (int i = 0; i < list.size(); i++) {
+            Object obj =  list.get(i);
+
+            table[i][0] = String.valueOf(i);
+            for (int i1 = 1; i1 <= tableFields.size(); i1++) {
+                Field field = tableFields.get(i1 - 1);
+                field.setAccessible(true);
+                Object o = null;
+                try {
+                    o = field.get(obj);
+                } catch (IllegalAccessException e) {
+                    throw new RuntimeException(e);
+                }
+                table[i][i1] = String.valueOf(o == null ? "NO_DATA" : o);
+            }
+        }
+
+        return FlipTable.of(tableHeader.toArray(new String[0]), table);
+    }
+
+}
+package cn.com.helei.DepinBot.core;
+
+
+import lombok.Data;
+
+import java.util.List;
+
+@Data
+public abstract class BaseDepinBotConfig {
+
+    /**
+     * 名字
+     */
+    private String name = "Default Name";
+
+    /**
+     * 并发数量
+     */
+    private int concurrentCount = 5;
+
+
+    /**
+     * 账户奖励刷新间隔
+     */
+    private long accountRewardRefreshIntervalSeconds = 600;
+
+    /**
+     * 网络代理池配置文件名
+     */
+    private String networkPoolConfig = "bot/network-proxy.yaml";
+
+    /**
+     * 浏览器环境池配置文件名
+     */
+    private String browserEnvPoolConfig = "bot/browser-env.yaml";
+
+    /**
+     * 账户配置文件名
+     */
+    private String accountPoolConfig = "bot/account.yaml";
+
+    /**
+     * 连接url
+     */
+    private String wsBaseUrl;
+}
+package cn.com.helei.DepinBot.core;
+
+import cn.com.helei.DepinBot.core.dto.account.ConnectStatusInfo;
+import cn.com.helei.DepinBot.core.netty.base.AbstractWebSocketClientHandler;
+import io.netty.channel.ChannelHandlerContext;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+public abstract class BaseDepinWSClientHandler<Req, Resp> extends AbstractWebSocketClientHandler<Req, Resp> {
+
+    /**
+     * channel 空闲，向其发送心跳
+     * @param ctx ctx
+     */
+    @Override
+    protected void handleAllIdle(ChannelHandlerContext ctx) {
+        BaseDepinWSClient<Req, Resp> depinWSClient = getDepinWSClient();
+
+        depinWSClient
+                .sendMessage(depinWSClient.getHeartbeatMessage(depinWSClient))
+                .whenCompleteAsync((unused, throwable) -> {
+                    ConnectStatusInfo connectStatusInfo = depinWSClient
+                            .getAccountContext()
+                            .getConnectStatusInfo();
+
+                    if (throwable != null) {
+                        log.error("client[{}] 发送心跳异常", websocketClient.getName(), throwable);
+                        // 发送心跳失败，记录次数
+                        connectStatusInfo.getErrorHeartBeatCount().getAndIncrement();
+                    }
+
+                    // 心跳计数
+                    connectStatusInfo.getHeartBeatCount()
+                            .getAndIncrement();
+                }, depinWSClient.getCallbackInvoker());
+    }
+
+
+    @Override
+    public String getRequestId(Req request) {
+        return "";
+    }
+
+    @Override
+    public String getResponseId(Resp response) {
+        return "";
+    }
+
+
+    @Override
+    protected void handleResponseMessage(String id, Resp response) {
+        BaseDepinWSClient<Req, Resp> depinWSClient = getDepinWSClient();
+
+        depinWSClient.whenAccountReceiveResponse(depinWSClient, id, response);
+    }
+
+    @Override
+    protected void handleOtherMessage(Resp message) {
+        BaseDepinWSClient<Req, Resp> depinWSClient = getDepinWSClient();
+
+        depinWSClient.whenAccountReceiveMessage(depinWSClient, message);
+    }
+
+    private BaseDepinWSClient<Req, Resp> getDepinWSClient() {
+        return (BaseDepinWSClient<Req, Resp>) websocketClient;
+    }
+}
+package cn.com.helei.DepinBot.depined;
+
+import cn.com.helei.DepinBot.core.BaseDepinBotConfig;
+import cn.com.helei.DepinBot.core.pool.account.DepinClientAccount;
+import cn.com.helei.DepinBot.core.util.YamlConfigLoadUtil;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+
+@EqualsAndHashCode(callSuper = true)
+@Slf4j
+@Data
+public class DepinedConfig extends BaseDepinBotConfig {
+
+    private String inviteCode;
+
+    public static void main(String[] args) {
+        System.out.println(loadYamlConfig("app/oasis.yaml"));
+    }
+
+    public static DepinedConfig loadYamlConfig(String classpath) {
+        log.info("开始加载 OasisBot配置信息-file classpath:[{}}", classpath);
+        DepinedConfig oasisBotConfig = YamlConfigLoadUtil
+                .load(classpath, List.of("depin", "app", "oasis"), DepinedConfig.class);
+
+        log.info("OasisBot配置信息加载完毕,{}", oasisBotConfig);
+        return oasisBotConfig;
+    }
+}
+package cn.com.helei.DepinBot.oasis;
+
+import cn.com.helei.DepinBot.core.BaseDepinBotConfig;
+import cn.com.helei.DepinBot.core.pool.account.DepinClientAccount;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.extern.slf4j.Slf4j;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
+
+@EqualsAndHashCode(callSuper = true)
+@Slf4j
+@Data
+public class OasisBotConfig extends BaseDepinBotConfig {
+
+    private String inviteCode;
+
+    public static void main(String[] args) {
+        System.out.println(loadYamlConfig("app/oasis.yaml"));
+    }
+
+    public static OasisBotConfig loadYamlConfig(String classpath) {
+        Yaml yaml = new Yaml();
+        log.info("开始加载 OasisBot配置信息-file classpath:[{}}", classpath);
+        try (InputStream inputStream = OasisBotConfig.class.getClassLoader().getResourceAsStream(classpath)) {
+            Map<String, Object> yamlData = yaml.load(inputStream);
+            Map<String, Object> depin = (Map<String, Object>) yamlData.get("depin");
+            Map<String, Object> app = (Map<String, Object>) depin.get("app");
+            Map<String, Object> oasis = (Map<String, Object>) app.get("oasis");
+
+            //Step 1 基础配置文件
+            OasisBotConfig oasisBotConfig = yaml.loadAs(yaml.dump(oasis), OasisBotConfig.class);
+
+            log.info("OasisBot配置信息加载完毕");
+
+            return oasisBotConfig;
+        } catch (IOException e) {
+            throw new RuntimeException(String.format("加载配置文件[%s]发生错误", classpath));
+        }
+    }
+}
+
+
+package cn.com.helei.DepinBot.openLedger;
+
+import cn.com.helei.DepinBot.core.BaseDepinBotConfig;
+import cn.com.helei.DepinBot.core.pool.account.DepinClientAccount;
+import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.HttpHeaders;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.ToString;
+import lombok.extern.slf4j.Slf4j;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
+
+@EqualsAndHashCode(callSuper = true)
+@Data
+@Slf4j
+@ToString
+public class OpenLedgerConfig extends BaseDepinBotConfig {
+
+
+    /**
+     * 浏览器标识
+     */
+    private String origin;
+
+    /**
+     * 账户列表
+     */
+    private List<OpenLedgerAccount> openLedgerAccounts;
+
+
+    public static void main(String[] args) {
+        OpenLedgerConfig openLedgerConfig = loadYamlConfig("app/openledger.yaml");
+        System.out.println(openLedgerConfig);
+    }
+
+    public static OpenLedgerConfig loadYamlConfig(String classpath) {
+        Yaml yaml = new Yaml();
+        log.info("开始加载OpenLedger配置信息-file classpath:[{}}", classpath);
+        try (InputStream inputStream = OpenLedgerConfig.class.getClassLoader().getResourceAsStream(classpath)) {
+            Map<String, Object> yamlData = yaml.load(inputStream);
+            Map<String, Object> depin = (Map<String, Object>) yamlData.get("depin");
+            Map<String, Object> openledger = (Map<String, Object>) depin.get("openledger");
+
+            //Step 1 基础配置文件
+            OpenLedgerConfig openLedgerConfig = yaml.loadAs(yaml.dump(openledger), OpenLedgerConfig.class);
+
+            //Step 4 账户列表完善
+            openLedgerConfig.getOpenLedgerAccounts().forEach(openLedgerAccount -> {
+                openLedgerAccount.setOpenLedgerConfig(openLedgerConfig);
+            });
+
+            log.info("OpenLedger配置信息加载完毕: 共{}个账号", openLedgerConfig.getOpenLedgerAccounts().size());
+
+            return openLedgerConfig;
+        } catch (IOException e) {
+            throw new RuntimeException(String.format("价值配置网络代理池文件[%s]发生错误", classpath));
+        }
+    }
+
+
+
+    @EqualsAndHashCode(callSuper = true)
+    @Data
+    public static class OpenLedgerAccount extends DepinClientAccount {
+
+        private final static String printTemplate = "%-25s\t%-25s\t%-5s";
+
+        private transient OpenLedgerConfig openLedgerConfig;
+
+        private String token;
+
+        private String identity;
+
+        private String ownerAddress;
+
+
+        public static String printTittle() {
+            return String.format(printTemplate, "账户名", "代理", "环境ID");
+        }
+
+        @Override
+        public String getConnectUrl() {
+            return openLedgerConfig.getWsBaseUrl() + "?authToken=" + token;
+        }
+
+        @Override
+        public HttpHeaders getWSHeaders() {
+            HttpHeaders headers = new DefaultHttpHeaders();
+
+            headers.add("Upgrade", "websocket")
+                    .add("Origin", openLedgerConfig.origin)
+                    .add("Host", "apitn.openledger.xyz")
+                    .add("Connection", "Upgrade")
+            ;
+            return headers;
+        }
+
+        @Override
+        public HttpHeaders getRestHeaders() {
+            HttpHeaders restHeaders = super.getRestHeaders();
+
+            restHeaders.add("authorization", "Bearer " + token);
+
+            return restHeaders;
+        }
+
+        @Override
+        public String toString() {
+            return "OpenLedgerAccount{" +
+                    "token='" + token + '\'' +
+                    ", identity='" + identity + '\'' +
+                    ", ownerAddress='" + ownerAddress + '\'' +
+                    "} " + super.toString();
+        }
+    }
+}
+package cn.com.helei.DepinBot.core.persistence;
+
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import cn.com.helei.DepinBot.core.pool.account.DepinClientAccount;
+import cn.com.helei.DepinBot.core.supporter.persistence.AccountPersistenceManager;
 import org.junit.jupiter.api.Test;
 
-public class OpenLeaguedTest {
 
+class AccountPersistenceManagerTest {
 
     @Test
-    public void set() throws IOException {
+    void bindPersistenceAnnoListener() {
+        AccountPersistenceManager accountPersistenceManager = new AccountPersistenceManager();
 
-        OkHttpClient client = new OkHttpClient();
+        DepinClientAccount clientAccount = new DepinClientAccount();
 
-        String requestBody = "{\"key\":\"043fa106e6bee656626ebb7936c36796d118b24a30b8a4e3b94371d2d1c7d75384dccaff9deff284130ddb0cdb32ee47e045ee0e4b783762e5084a318cf4d032c6\",\"data\":\"{\\\"iv\\\":\\\"d0bfebc08fb341686b00e3b047c6530b\\\",\\\"ephemPublicKey\\\":\\\"04a8036d01e65fd79eedef56083bfb66af9d7acb50b64e3bf8efa91b02ccde51699a2bb0ef2cf64c3491dd1d226e4f429300b4f544dc24f5c064e14e1a7caafe79\\\",\\\"ciphertext\\\":\\\"50934155e39629561c602945a3c7866e7afc21b18eb3f49873782fd3438c19b5a1764470439c6f5bb78cf94932f39e35491762600843151ac3278cc944218de86770fc1c84b060cba558a0cf0db5823ce507b0a2a4759dc54df9662f4a88fc27258b3784a2cca27faeffe9ad4683da06bcefed7e0781842caa868a1fe5b983bf967edcca07aa5c56480228dcc32296b21ed77abd5eee306b4c62e49f1138fbe482d998a8b8b71e6a6bd828e374be392037a16d2578e3c52d5d043853480d54cd9816c8aa3c256e4c9835d956b411c530c12c4ad13969d10d7a4f76a002470b71126215dcbbcbebd10df228c4128325a565d0d966ed47cbd5bbf9e93cc90527ed974b9bbbed19227729b60b86abd445af4cc51858d7c417106aecbf46e87a4cf97a134dc97e7d077b2934638811d969f3704052ff9194f78d15a788008d95f05f611f11be39145851c060a302f093367ec79fbe59735bec0aa6bbb9fff113dc8a0587ed0a752e238a47512fe54cdbfe43b37e86155691dda3dd0dfa7a8e65251c0ed3ff3fcd23b78c5fdf9f4570d561195bff9d6014303139ac87fd9c490c5fdb34928af987664e95291318ba413dba41585d43187c92aca589e2d8065dcd199dd727ec0c2d01e1acd0304ee3a66b6294d0401c4405aa239e259a2cea0ebcbace1ee419a02349adc818738819fae950bd3085802c659688d11ccbd57b16b382d0f0825e4a991be8f4a2f0bc4533f648e3b3cdd158ccaed174f0d1cdbda1c1978aec606300a1381281064596b95de9f633981cc0c7066e3ecf6da4cab7a526ba66ded05e7e7289d77803ef329fe4da4f55f534f0dfeedc0646c216e7eddf981b44823039ebca8bfdcbc62928a9d9d2aff4057b9588d8cadf95deb9607450ca210291f3d327af33fdd2eac0abc527369494953bae449de4453abda0b7b826e0fc48e435b103ce5516eeb05a32fe69f68432aba70394c7656e0dd79e410e9fcdf599a7e5dfbab1deefe4bdeb9113cf5de9dccd386b6964a540645ca2bd7ff6639a0129e2d93d19a72845b95e6a30d80479c17e427fb8dd384f6faca2343d44fd568e62909d32f91a7463f68ebc65206a7bec678fee9c20dc5b596aafe6ce6d11f5e94538bc1c64ce5efe1e735f7892965494a9230102cb77bc4f22df30e6b986fdc0694926ab5236eca6e4d0d18e4b93fd29df0684da07b09036dfe6ea43921346d943bf7795fcb1d5047043233ff4d7f6f52594521c8d301e0dcf2073ae4049e40c76f0f5f27e527127e615a66983e924b8ed1f37279821522284eca5e084a3e4a79016a948ade72ae3ba258340837bb90cc1e8a2667fe883be6edffc8e09b00d456b8ac89998452e1687b3946f867062327c693aac4c6800d87cb76e5af8a92997c5a74ff11618a0faab1e307f338a355a2b13911cc42fe6be6c6c3264612aeff77d3eaa984ea71b834d3deda8d2d7c79d890a6d371f4e336f655fd692ba1070d43e3740e886b29367ed35890e89ac184b80905894dd1a1c3930e4f6bea8fcc9a12875e8717adbd9f356baa1b06bf256f5001394f1e20d1f72968cdbd6beec1cc21549c5ecd72b4172966ba1450ebf2d7cbc282538bca6c0b6116cd61e4ecd4f7b77b951c411f04988ddf2a3bdc7ab0ed8e2a0a377840c80f4dbe468be38aff51fa5436f5acb1936d0b15dc83780cf0afef74dd695253b4c7a225aefc1bbc057d23f5baa66a507b48e445222e9568c541ff22d7b661ce8f2705762c645907473e66470a2e0027aac4290c1dc18b1b721e013933dbb876ba0a859de6c1f46861d9d9c0c02f817730f099cf2f9f7e06dd136e7b58fe3dade6e305ccbca2f787da366bd966eb78174876b93bfc5fcccce40fe704ae942babf27f6ca4e805ea92a9ca9589ac84070fcb1a76b9e7894ceccdaa470d12a55bdf768d4504f8407e528b222ebf1bd211fbd85cf76bb9b73cd704ceba691e479d1d1831808d97b1a8bcd76b3f3e00b46022208eb947f73ba8b3b0ccede2006f1f67b9ed287853265876e9d34ff7a242e96442c3ce047d1fe2ac10d854c7ec7323c618b7df0f9a135b9533aa48d958663512a3b6e4d0936ba9d45294b93ac288631473e9fa22400455a6912e211b17616b8b720d3224fdfbd732108beba582f19233b9d482a4f79baaebba0586f55ae6a082f1c87e1bafec31c12ace1bb4d63f2b318377ce427bac69988ccc09680abe3c838d144c15c69007d341b5c6f5b3e79a7c25f076cacc67f675a0881f2ca71172bc5fd19e4f368f3552847ccfb3a938aa0a6161a1980ba55c9e7fc8da3f8a39d0c415008002b0624d1d9ea727e4bd286208c93e9f7f3698b7609e9e35cf1b36bdb60e92084c4add567094b1b083267fa7db70c4d9451dc95f699a1c4608157a7c06155850781a2ab18dc789cc2629ad654df8ca37498d1d235723c21f55b2c9c36620f2da4ca2f21e1805e9c0274a6841eab8ad9bc6fcad259332e587cf46d29cb0c76a3fa5d023cc9141487cd0a469e38dc4695c6d58c117bfda43dd016f1920f341bb04987431b84f22d87f89adcedeee14ef83665c9f3aa9387dc03656114c57078c178208e2d6a66f359be6ba4442e04d69d9903dd15bcb4a695c13e47bd3127247e46ad8e2e7a4b0354e1db3b6a19b8220074d72ac2d0e9fb9e662df07c71a437c974e1217af0b15be46fff3c5685460209016e07969587e5e77a0b068baf1bf88901605463d2a1cc9362b492c42ef0bf80ba0b9269e66a171e72e532ff170bcd042fe0068970d84339693bb2454a1e5ea64e85a55c02429d652494026f371ae9a9d0f218860ef1eba61575608e7c5eac31adf57e5d1846d08df2afd7570473a2c5cef75a1346567311ee8e25fe95443303472a92dcad4e1315810a39bd1d129c9ba137fe8316dc1ee3eccb0a75eec2749fb664fbc709edbac4845e5681728aaa3694bc3ccb731c6f786b7243522f7df19e7d0dde0946a684e13dd9435f9e84213aa31fdecf8d3f9f20c7f42bf8e32fd0eb39f660e9016bc0d7a0beb13a2ce07fdba03f18809afa078e2ed4483890f3831834ac6686e4eef4753a651ed3befbbc9a6645529b8e0527a85015f54a7ce51c49fa15da773cc17a194e21abbf19d942c3006d74e7555df8a8adeffb18183e5a828e126e4abe3ec7abae51ba39fb55d9f27cafc381826e4e62d212444618a714fafd156f0272c1a1f2a22422caba40519addf55807d2b938cfb0cdb9ccdc604ce7d191672800ff0c7dda83f9f5f6c536955e081f7a9835434899c1b3100f441bfa72d02ee086a1cf534782ed024a67ffccd6da015bd223e363509c88bd6b2e9db3d9493288b966840deff2a5eeef40e3d99943075bbb197f3226592850d16b6a5caad1bd1bf728ff3f73dd47ef667c142d6e650a2050b53a2442c089a3797038e1c0c4d7c95c71bd1d8925fd8887a60cf4c09248598063992272927a9eca1cd7463f51168b734affdc403d5a34bd6516a6f6e5600b41bc35223342e401834a2615256cdc66aab27dbb4d327f13a9bc09aa7c04e36800fee5f136377d7a42c3b2c4dbd6682c47b90d5c844933ab75b063a53c152542d20ae59e42af616050b68547082137a9cb327ba07f18fffde60dd5d99e6b1a72b1cf8773d7b52f3631fe89d166e94a475d27711654f33490009c7fe7cf747ecb637ef9b0d75544bb36e7225cd0beda755414c4d734d57aea12a7ca829a2221546756aeb73b876e05b579b636109a8a53b856c2cb94c22ea610144efc253742750dfcb688739e14f26849945877d4e8c111695a5b04827857185dae5e0104341aaec74a9f71b6ab74d70a74efcc3f6832b2c86efb59a32010909b72dffabc2b9ac6f55fc7e5dc6d2f1495697df212e7ffaa962947483bec7987711233d57829ef005e2f155734c1d4a94124dc0cc45acff69626d7544946265c39f20676ab45cc34e5fb37f010323a88b0749498d3bab46073a22730c9bc3e5e10242f554041d909dc82a5e9fcee83571194404103e1a64c1cd2a0fab1297e7090319d576b03900f70d12cffcebf9b2b6f8ea32a4ec4224b1a028381a048cbd8b6dedf34c36e739eb3c46c1b6d946020615e80b26428fc99bf1f098f322967f59059dff1bf896ec6dea984c66b621805b1b2ecf4a45506ccd2e7eef6fe0569334328826995b491cee99876915ca0693f550d0664f5c8b96e1456f8ca1ad2fe9e1d77a686c65baf60b575b383c86f4dc0b516533699c57911731ec0bb1b1761cc0a17ad0d83153b04d1a4f1f272d133393ff70da58e8a71dbbbfddc0821900dca6f361972a2ec098dc0cbbd01f975777f0349965996b78e81879c549674a77b94cdf5e01f4a7cb1e0ec6e9c17c80a8f00e7103ab6e393fb28f836a1ce62554ffa05f769da6128673989ae8441538f0259aa9d33ca9c4cc29ce9ce27821ee1a51df8a7e062dda95d6463a1b0f886e2446151c301d1215d6e8030c5fb4f037a11c69b433b8a94fda64c0916e25ec9c3c5e54c0075fc9269a64d74c955b8c27b5af5e8815fa096360971f55b4d6d438da6225783c9ab5ef90c9953fe11022fc85ca6f18f43b60ec474469ddbc23ba0a19091ef6ceb3d0e54486d5ff2d42a6d316a2e3f211bd6a2fb1ad3f37d3109de85a7e735f2f4bdf7f1765f1917b29c2e68476e0e836785cc94ae74a34dc4bac1f66ed153e9ead8cf69144320c57b67834876920849430b296a768f4b5419f4426e4a2e9ae197d429ecf9157ac80b24203a903387ad272f7f21d98ef5cf67e82f95b6d9df23d6d3960340dd330cb4c08e79e2c7bfe4323e517899869014c31e45949dfeb97ac8aed5f7aa8e98538b310aa59f5d0c45e40b63c7c7f2ca17d1119d27d4ba00285ea0b58ad4c2415641e0110318743368c399b268e06440cf4c28a5430c076795273f9a954a5b0b38de621f7d2ff4560613f1d865bf0d8a6d9a0e3f3efc99d0ad54aab8a94af20f867e44e6e9e08fe5d20a37ce8819c98a331342ba3c458c2ed8ecabbe86f79755479e457f69a5ed810a0626ba6e9794fd38a539e333c434dcd5c3b3ee840ea6025dc479342e45517b8312e6c626585daa479333e7a5f9fd3a23353cbf37f2344be5ae03bd45421945db6b5735cc718de43ce7f6bfcb5f8431c5db71f861aec777e61b7b6dbe186372c6235e4d1a18ee2bd073ec36160e2e93900332eee526cad18b53b9f2c45bcfaac68685723465a5c5998c2eb1514100abcb212d038b1234d853467e636de7d67a365546e7398aa9931586d0b77eb772b3593f036bd3da4c48ec2281440979eb900d5f8c68be9b7bfaccf603e65e652f1577b08adc6ac47375f0b68b4be24acdeaf16d58e8421b3f09065c4997958def850213b6e0416bf041be0d495abb67d1c0674a62f506e89f9807ae362c222b90c42f852a7a59a42407de5eb7644e56fcdd81f03a865655807edea3f3c6353fced20a8c89d8fabcff7f3d784fb6df3a9731ad7b88c6360a30b2cdf1b9bb7291e0ca5aabbf8a6ece75e496918b1e048b90a64f664727be31a49e0e5e942ee515e2b13fc9b7fa34c01d30688b28234affc9feb43f21bb29884860fa001f0f568e55028f7ff4673333adac5586642e5329173165e2d5a93c60172d6e220b2e6708643852199d79835fa324697547c5b489c6a7f3d5b778f00fe6135f9b14bef64b424e1ee9d5a0232de52bd76a72e5edc379c3ebb86fe21d206fafc0ea0a15bf86fad3f04d5708819fbd8e9a968963aed2ce160377d29381460a38a23f70f3bd791221b8f57580795215bc619254aaeaa6df7917959321906a18da577aa34b8a65379e9be71faeadf4bd9ceab9127d0a1ba0fda0d9ae57ac23e2a8346778880c91d679a359dd97fcb9e359f8d1724a3b65544dd220c92db41a228569809cb06db7df8fad81d4ec060a241009ed16f1b5f8f73dcf1da00a637e2fc1f8dd1a75569e759279a199dff407c4631a3dc90467641e19f0a855fc501f45396e8983927d34b0d5c9d85486922f78ccb682e115c9186f902f75085004186f2fef08a061160041cb3a7ca9c93258329aa4f2b0e2463027faa5047743956405459dbd36aea8408b59aed7d9c3ef51c85c754cd8ae9aaf1991637156cccbe7ac378af4f1423485a26456c8fd690c7fb9710415e671705c1b29791182a1f6f88e8f1fd07395e8127739990d9298f9078d4540007768768137be7b74874ce6eb55b1228a993752350602fccd528437e2bdb16da17383c2d1862ca9ebabaa10d16ea8d5130170c04c749209e8f8aa109f90ff1d0455426b61d6d7793a017af5d7c3f177ec9b02d802c3a7fddb98685b3489434ede26e2b374d583b4268071aa3909496248c50f2e82af2eb645a89b4a3e26fafe8906ca63250e8204933ca19f6d755f19a5c1765a79384f26ae7198693294bbc94cfa69678f22304b7f73ae413cba309c1d4315b43644462cd8699443a32b8472c54fd7eb6a0065f3bab1e45c7b3807daba347cbb607c76233a1444207b1b76816f61466c60521cf8b86fff53979aaccf8fa48a7e01aef8106675c13306a532f7d8fa14c749efe84c95d959056808d6db2440356912b4d8fee6a9219a4da8716869ad3084527de0b2ea04fd30ec0265ccf40915adabde927c41a3b149f0d81f58044bb4554e05c46708e2ea58f2ae9f5dac1a94897e5bcbe376d35c4fd67b62c9c7aeaec1615e929e0c01a67a9878e11e6268cc6c7412dfa484b99ec29cf862f8f166f3b084b426b4dcc1ca5efcc9aca67770cde0ba78c5a24dd397eb08222c2736e47c52631d3a29ba7117538b28ceee5900778cb2dcfc882fb4280fe2a77f75ea3d979d3d574bdd1a80c88f8dbcedeb1871bf462cbf380f203d04cc8f8076648501354317cb88e638451e662f26db42ae8cea89b4c0c9fad1565389728c2a550479e56fac639884dff67a3396e5e9c3bc607a393b02860d647c1a87c8ff6db2832c9ee6a4e163d9e71bdd41771cad57cf124dbfd34c696b9bd34bd551d22bdfcaab040858dd16d91b991a1370d9b4266c4b52d2b861a19b7bd35bca0d9fb61e8980084127dc0458f7495e23f270389159dee15c8f26c82bee6d869778644f0e2cad9eef7e5beef72b102fbe1f6c594713dc43106d038a502b9cc080a0166cf8e215dd85ddc5d13279b4ae7af5a782945a3cd99e04ed24d9ecfddfc8f331ce4b03367cdf22e3d31744e2530b37bf1e85c65189929d84ab978b434c56da474a13c5b8277d75fdaaefd1d65cf9fa5c05639cc5207633903cbe8f80d7c6401386717a724af40dd1556b7c979b764c7a1c72e5b83730c9d22c633a8a6ef22e32bc3b069ca8cbeb29cecdb3df375a120faec24eb7a3bf221dde880b6c9beb2fa3e4297ec66af2be35ff4819324d27335fa08a6d572ff5b85d691a722bf86536421fa6da275cb0d2048dd69f88dadc7628fcd67e9bd21cdcd2a41aaf41ddb05e6571e56cc6195a8addfa52d238943597d481bfbc7594297efdfeac427e8e060fc1402a3d39c1e81c9c2281494415e05c6feb643412f89b6c5f0ee9e1c3831b1064a1608330c671e88b89c989c4feb287d783f17be4406ef15324f2599ced997bc7a7752b26250b1d9d79a881821b7ecae8f239dcc173aaeb450a5b79e6ecda187e0c3c514c28849bba5d6c547c22900e993f30ea3427b2345158869e4b9119b1ad7b37e7bad4064108d3add9151e93b2c11355b37446f9129988c1007c427822995d3a719ed5f55d016128c80d6179bb71036d4ddbdae65a3115bec90c127217714882196b410b37337604c9c0991721cbd0a442465c634482ad6147d777e475e5bf3b0efb204f3419ddef083481024294180489c858f84a014bdf23447496677acaa322c8ce60fe040d9d697b5e690ea31a9fa503a2ca74a3650f453932a372c67452f54dfffc6edb0b7221bd4a67c8f51c075b76e9dc3d2069d50d408ff5d1f7c2ae909645541f8e424f570ae64723d65b17c90bcc818e8b46bca3ac74682bf2c2a25aae862c244b2bce618221170345d512e808499eeabb1da4db4e2d326d3ead534ead6edd1383094481bd54c52016afa940d0f3b12356be604f35f4526da5fc17e62754570a8ee4244039761c296146ee90e1aff2d7c2f3f8eadbe17ef868563256e1fd4000acbc6d1a0a2c54967c991637b6226f5c1c033981940e637d8a3c50528b1b7e9dbfb43aa24479ee7398fbd084054408fb3ad128f6eb1eb51b5e7a9182c4079ba9662537f341a7a1c42424fad55d174eb0cae871005d450d5ce2c08389c150ff4c8b0111b331727fb34137568e895915dbfcd131cf677477ced4a79015d9e097df7481f453056733623d823e3d\\\",\\\"mac\\\":\\\"2dbf661e60262374607c570d4965c30e2818bbf34587e2c2ead90a618c3d1136\\\"}\",\"signature\":\"304502210092189a957d2d82da6649dde82d9aef818c2a70faa4c7b2832ee56c483ab15c4302205f436d95912d2c359f2fbdb8634aae90361526b7acc43ae1dea5e1435dbde268\",\"timeout\":600,\"allowedOrigin\":\"https://auth.web3auth.io\"}";
-        JSONObject jb = JSONObject.parseObject(requestBody);
-        FormBody.Builder bodyBuilder = new FormBody.Builder();
+        AccountContext accountContext = AccountContext.builder().clientAccount(clientAccount).build();
 
-        jb.keySet().forEach(key->bodyBuilder.add(key, jb.getString(key)));
+        AccountContext proxy = accountPersistenceManager.bindPersistenceAnnoListener(accountContext);
 
-        Request request = new Request.Builder()
-                .url("https://api.web3auth.io/session-service/v2/store/set")
-                .post(bodyBuilder.build())
-                .header("Accept", "*/*")
-                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-                .header("Cache-Control", "no-cache")
-                .header("Connection", "keep-alive")
-                .header("Content-Type", "application/json; charset=utf-8")
-                .header("Cookie", "_ga=GA1.1.398799594.1730295772; _ga_DY71GQK057=GS1.1.1736778675.2.1.1736778863.0.0.0; AWSALBTG=OCIkjRYg+HrdZkhZhJwZrv8xDCUR6o6ayjU6d3/iUr7XQAgeTBxHtYEGqWn8XeLvRaHbWZZXJLf3hR7VcmcycXv0yjtjQn6YVGhBS5HcR9ZEc7Q25EftVBH79trLaCm88Ms6SAs6PH9EwpBGwhlFK25VO7UWuNwOGKZ6Cm6ofdDL; AWSALBTGCORS=OCIkjRYg+HrdZkhZhJwZrv8xDCUR6o6ayjU6d3/iUr7XQAgeTBxHtYEGqWn8XeLvRaHbWZZXJLf3hR7VcmcycXv0yjtjQn6YVGhBS5HcR9ZEc7Q25EftVBH79trLaCm88Ms6SAs6PH9EwpBGwhlFK25VO7UWuNwOGKZ6Cm6ofdDL; AWSALB=e1PEof/Ex57ATBQijmS077jdt2TjizalYLCrH0p32wGx+TEnLAfmjCbfcxQPnV24vSSRFHHZNJeN7PTUtS5+TK4BT9Xo+BesxBjCFtRGu1Fx7ecgIBGOOsHHtQkw; AWSALBCORS=e1PEof/Ex57ATBQijmS077jdt2TjizalYLCrH0p32wGx+TEnLAfmjCbfcxQPnV24vSSRFHHZNJeN7PTUtS5+TK4BT9Xo+BesxBjCFtRGu1Fx7ecgIBGOOsHHtQkw")
-                .header("Origin", "chrome-extension://ekbbplmjjgoobhdlffmgeokalelnmjjc")
-                .header("Pragma", "no-cache")
-                .header("Sec-Fetch-Dest", "empty")
-                .header("Sec-Fetch-Mode", "cors")
-                .header("Sec-Fetch-Site", "none")
-                .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-                .header("sec-ch-ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"")
-                .header("sec-ch-ua-mobile", "?0")
-                .header("sec-ch-ua-platform", "\"macOS\"")
-                .build();
-
-        try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
-            response.body().string();
-        }
-    }
-
-    {
-        "message": {
-        "Worker": {
-            "Identity": "MHgzMmVBRDg0NURkNGQyQ2U0NUQ1ZkFCODFiRDBGOTdjMWI0M0U4OTY0",
-                    "ownerAddress": "0x32eAD845Dd4d2Ce45D5fAB81bD0F97c1b43E8964",
-                    "type": "LWEXT",
-                    "Host": "chrome-extension://ekbbplmjjgoobhdlffmgeokalelnmjjc"
-        },
-        "Capacity": {
-            "AvailableMemory": 0.85,
-                    "AvailableStorage": "99.99",
-                    "AvailableGPU": "",
-                    "AvailableModels": []
-        }
-    },
-        "msgType": "HEARTBEAT",
-            "workerType": "LWEXT",
-            "workerID": "MHgzMmVBRDg0NURkNGQyQ2U0NUQ1ZkFCODFiRDBGOTdjMWI0M0U4OTY0"
-    }
-    @Test
-    public void get() throws IOException {
-        OkHttpClient client = new OkHttpClient();
-
-        String requestBody = "{\"key\":\"04cacbf9f6923083bb597c9f79b13d37948f1e98307a4f19b0e0f447d6faa7090e61683bb655c99b69e08c2ffa32d68e86530a67e9f5c347c7dd8b25f20f307350\"}";
-        JSONObject jb = JSONObject.parseObject(requestBody);
-        FormBody.Builder bodyBuilder = new FormBody.Builder();
-
-        jb.keySet().forEach(key->bodyBuilder.add(key, jb.getString(key)));
-
-        Request request = new Request.Builder()
-                .url("https://api.web3auth.io/session-service/v2/store/get")
-                .post(bodyBuilder.build())
-                .header("Accept", "*/*")
-                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-                .header("Cache-Control", "no-cache")
-                .header("Connection", "keep-alive")
-                .header("Content-Type", "application/json; charset=utf-8")
-                .header("Cookie", "_ga=GA1.1.398799594.1730295772; AWSALBTG=SOvHYZA1GRqHCz1nruHniL27Y8DJYPOiCnQJyCKW8IKMO/JeBbvvTb4cW/QXiJr/fRGLGaZRW+NEs8mMTsA9cwIzVn4h7LgzrqM7sm250p5T4svxiWwXsJ62PRDnKcgvqGfrKRWJuBIXaf4MWAJE+TBIBaofb9ft5uCzazjfClMo; AWSALBTGCORS=SOvHYZA1GRqHCz1nruHniL27Y8DJYPOiCnQJyCKW8IKMO/JeBbvvTb4cW/QXiJr/fRGLGaZRW+NEs8mMTsA9cwIzVn4h7LgzrqM7sm250p5T4svxiWwXsJ62PRDnKcgvqGfrKRWJuBIXaf4MWAJE+TBIBaofb9ft5uCzazjfClMo; AWSALB=GXRSPsMEiUl29mpI7gwYaHBUjjLYDjQZW4E2iIUQxBQhNf36yV44VOWe0rN4dPXe70QewP9ufkcJD2BrQyL/WKIRxc3YbWE/sNJK8P6Oy95drKZEYVSbnZkH/Ovi; AWSALBCORS=GXRSPsMEiUl29mpI7gwYaHBUjjLYDjQZW4E2iIUQxBQhNf36yV44VOWe0rN4dPXe70QewP9ufkcJD2BrQyL/WKIRxc3YbWE/sNJK8P6Oy95drKZEYVSbnZkH/Ovi; _ga_DY71GQK057=GS1.1.1736953824.3.1.1736955051.0.0.0")
-                .header("Origin", "chrome-extension://ekbbplmjjgoobhdlffmgeokalelnmjjc")
-                .header("Pragma", "no-cache")
-                .header("Sec-Fetch-Dest", "empty")
-                .header("Sec-Fetch-Mode", "cors")
-                .header("Sec-Fetch-Site", "none")
-                .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-                .header("sec-ch-ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"")
-                .header("sec-ch-ua-mobile", "?0")
-                .header("sec-ch-ua-platform", "\"macOS\"")
-                .build();
-
-        try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
-            response.body().string();
-        }
-    }
-
-
-    public void me() {
-        import java.io.IOException;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-
-        OkHttpClient client = new OkHttpClient();
-
-        Request request = new Request.Builder()
-                .url("https://apitn.openledger.xyz/api/v1/users/me")
-                .header("accept", "application/json, text/plain, */*")
-                .header("accept-language", "zh-CN,zh;q=0.9,en;q=0.8")
-                .header("authorization", "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyZXNzIjoiMHgzMmVhZDg0NWRkNGQyY2U0NWQ1ZmFiODFiZDBmOTdjMWI0M2U4OTY0IiwiaWQiOjAsImV4cCI6MTc2ODQ5MjU5NX0.T_gielpE_1CL1GeJXgM3VlQp3pt_HaURu_y5nhbh8yo")
-                .header("cache-control", "no-cache")
-                .header("cookie", "_ga=GA1.1.1498815278.1736778795; _gcl_aw=GCL.1736778795.Cj0KCQiAkJO8BhCGARIsAMkswyjwN4CVnn7Bdd8LgfBi9OORTuZZHLwWEyL92Hv4br4iy7uNAsvWL_saAiJiEALw_wcB; _gcl_gs=2.1.k1$i1736778778$u260728712; __adroll_fpc=8ba35f432065f87026fcc1f91d07ae32-1736778795959; _ga_13BNN0Y51H=GS1.1.1736953043.2.0.1736953043.0.0.0")
-                .header("pragma", "no-cache")
-                .header("priority", "u=1, i")
-                .header("sec-ch-ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"")
-                .header("sec-ch-ua-mobile", "?0")
-                .header("sec-ch-ua-platform", "\"macOS\"")
-                .header("sec-fetch-dest", "empty")
-                .header("sec-fetch-mode", "cors")
-                .header("sec-fetch-site", "none")
-                .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-                .build();
-
-        try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
-            response.body().string();
-        }
-        {
-            "status": 200,
-                "data": {
-            "address": "0x32ead845dd4d2ce45d5fab81bd0f97c1b43e8964",
-                    "id": 398731,
-                    "referral_code": "wzfglgfcgu"
-        },
-            "timestamp": "2025-01-15T21:39:01.286856824+05:30"
-        }
-    }
-
-
-    public void rewordReltime() {
-        import java.io.IOException;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-
-        OkHttpClient client = new OkHttpClient();
-
-        Request request = new Request.Builder()
-                .url("https://rewardstn.openledger.xyz/api/v1/reward_realtime")
-                .header("accept", "application/json, text/plain, */*")
-                .header("accept-language", "zh-CN,zh;q=0.9,en;q=0.8")
-                .header("authorization", "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyZXNzIjoiMHgzMmVhZDg0NWRkNGQyY2U0NWQ1ZmFiODFiZDBmOTdjMWI0M2U4OTY0IiwiaWQiOjAsImV4cCI6MTc2ODQ5MjU5NX0.T_gielpE_1CL1GeJXgM3VlQp3pt_HaURu_y5nhbh8yo")
-                .header("cache-control", "no-cache")
-                .header("cookie", "_ga=GA1.1.1498815278.1736778795; _gcl_aw=GCL.1736778795.Cj0KCQiAkJO8BhCGARIsAMkswyjwN4CVnn7Bdd8LgfBi9OORTuZZHLwWEyL92Hv4br4iy7uNAsvWL_saAiJiEALw_wcB; _gcl_gs=2.1.k1$i1736778778$u260728712; __adroll_fpc=8ba35f432065f87026fcc1f91d07ae32-1736778795959; _ga_13BNN0Y51H=GS1.1.1736953043.2.0.1736953043.0.0.0; connect.sid=s%3AGhIwNh0SrA1AvRqbLYIhH-4kSB6KdkAQ.y4esG%2BouhpfXSzoPTWi7S4gzlWzy8F%2B5931%2F5iXha8c; AWSALB=lijvyLQGt8bJvgyRYeClKV/OQnXIDAg8ASt2qJKD4DRjHBk8AQknKBXYrnBANmOj2nVg0k/MeOM/xmzk+7HhoQb2R70OIFM/evIMBlRfIvLjDd32ouXeUnr5j0HZ")
-                .header("pragma", "no-cache")
-                .header("priority", "u=1, i")
-                .header("sec-ch-ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"")
-                .header("sec-ch-ua-mobile", "?0")
-                .header("sec-ch-ua-platform", "\"macOS\"")
-                .header("sec-fetch-dest", "empty")
-                .header("sec-fetch-mode", "cors")
-                .header("sec-fetch-site", "none")
-                .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-                .build();
-
-        try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
-            response.body().string();
-        }
-        {
-            "status": "SUCCESS",
-                "message": null,
-                "data": [
-            {
-                "date": "2025-01-15",
-                    "total_heartbeats": "1497",
-                    "total_scraps": "0",
-                    "total_prompts": "0"
-            }
-    ]
-        }
-    }
-
-
-
-    public void rewordHis() {
-        import java.io.IOException;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-
-        OkHttpClient client = new OkHttpClient();
-
-        Request request = new Request.Builder()
-                .url("https://rewardstn.openledger.xyz/api/v1/reward_history")
-                .header("accept", "application/json, text/plain, */*")
-                .header("accept-language", "zh-CN,zh;q=0.9,en;q=0.8")
-                .header("authorization", "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyZXNzIjoiMHgzMmVhZDg0NWRkNGQyY2U0NWQ1ZmFiODFiZDBmOTdjMWI0M2U4OTY0IiwiaWQiOjAsImV4cCI6MTc2ODQ5MjU5NX0.T_gielpE_1CL1GeJXgM3VlQp3pt_HaURu_y5nhbh8yo")
-                .header("cache-control", "no-cache")
-                .header("cookie", "_ga=GA1.1.1498815278.1736778795; _gcl_aw=GCL.1736778795.Cj0KCQiAkJO8BhCGARIsAMkswyjwN4CVnn7Bdd8LgfBi9OORTuZZHLwWEyL92Hv4br4iy7uNAsvWL_saAiJiEALw_wcB; _gcl_gs=2.1.k1$i1736778778$u260728712; __adroll_fpc=8ba35f432065f87026fcc1f91d07ae32-1736778795959; _ga_13BNN0Y51H=GS1.1.1736953043.2.0.1736953043.0.0.0; connect.sid=s%3AGhIwNh0SrA1AvRqbLYIhH-4kSB6KdkAQ.y4esG%2BouhpfXSzoPTWi7S4gzlWzy8F%2B5931%2F5iXha8c; AWSALB=ucl6keHuccIqtxDNiaiUFVJfHFyYZmPhKEetgvypoPXhVfD6FTRehdr5xCFDpa9kjMTj7Hw/LQL72y37Z1KiOocstqRK14nMRIEsv+tJdPR+DElVtNRtpq/JJONs")
-                .header("pragma", "no-cache")
-                .header("priority", "u=1, i")
-                .header("sec-ch-ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"")
-                .header("sec-ch-ua-mobile", "?0")
-                .header("sec-ch-ua-platform", "\"macOS\"")
-                .header("sec-fetch-dest", "empty")
-                .header("sec-fetch-mode", "cors")
-                .header("sec-fetch-site", "none")
-                .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-                .build();
-
-        try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
-            response.body().string();
-        }
-
-        {
-            "status": "SUCCESS",
-                "message": null,
-                "data": [
-            {
-                "date": "2025-01-15",
-                    "total_points": 50,
-                    "details": [
-                {
-                    "claim_type": 2,
-                        "points": 50
-                }
-            ]
-            },
-            {
-                "date": "2025-01-13",
-                    "total_points": 70,
-                    "details": [
-                {
-                    "claim_type": 2,
-                        "points": 50
-                },
-                {
-                    "claim_type": 5,
-                        "points": 20
-                }
-            ]
-            },
-            {
-                "date": "2025-01-14",
-                    "total_points": 1704,
-                    "details": [
-                {
-                    "claim_type": 2,
-                        "points": 50
-                },
-                {
-                    "claim_type": 3,
-                        "points": 1654
-                }
-            ]
-            }
-    ]
-        }
-    }
-
-
-    public void reword() {
-        import java.io.IOException;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-
-        OkHttpClient client = new OkHttpClient();
-
-        Request request = new Request.Builder()
-                .url("https://rewardstn.openledger.xyz/api/v1/reward")
-                .header("accept", "application/json, text/plain, */*")
-                .header("accept-language", "zh-CN,zh;q=0.9,en;q=0.8")
-                .header("authorization", "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyZXNzIjoiMHgzMmVhZDg0NWRkNGQyY2U0NWQ1ZmFiODFiZDBmOTdjMWI0M2U4OTY0IiwiaWQiOjAsImV4cCI6MTc2ODQ5MjU5NX0.T_gielpE_1CL1GeJXgM3VlQp3pt_HaURu_y5nhbh8yo")
-                .header("cache-control", "no-cache")
-                .header("cookie", "_ga=GA1.1.1498815278.1736778795; _gcl_aw=GCL.1736778795.Cj0KCQiAkJO8BhCGARIsAMkswyjwN4CVnn7Bdd8LgfBi9OORTuZZHLwWEyL92Hv4br4iy7uNAsvWL_saAiJiEALw_wcB; _gcl_gs=2.1.k1$i1736778778$u260728712; __adroll_fpc=8ba35f432065f87026fcc1f91d07ae32-1736778795959; _ga_13BNN0Y51H=GS1.1.1736953043.2.0.1736953043.0.0.0; connect.sid=s%3AGhIwNh0SrA1AvRqbLYIhH-4kSB6KdkAQ.y4esG%2BouhpfXSzoPTWi7S4gzlWzy8F%2B5931%2F5iXha8c; AWSALB=kJzSrpxtsUgvZRa7xzMiVUXLspZYZROb5VN9ZcVR3+fyvL5wrc3q0JWyL7lpQ3LL5Vn97VzpLbR0QTT01/GZQinvNXt2UCg5r6ruBmnr4nT8WYWMGwU6XvE+H6R5")
-                .header("pragma", "no-cache")
-                .header("priority", "u=1, i")
-                .header("sec-ch-ua", "\"Google Chrome\";v=\"131\", \"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\"")
-                .header("sec-ch-ua-mobile", "?0")
-                .header("sec-ch-ua-platform", "\"macOS\"")
-                .header("sec-fetch-dest", "empty")
-                .header("sec-fetch-mode", "cors")
-                .header("sec-fetch-site", "none")
-                .header("user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-                .build();
-
-        try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
-            response.body().string();
-        }
-
-        {
-            "status": "SUCCESS",
-                "message": null,
-                "data": {
-            "totalPoint": "1824.00",
-                    "point": "1824.00",
-                    "name": "Epoch 1",
-                    "endDate": "2025-01-31"
-        }
-        }
-    }
-    
-    public void ws() {
-        import java.io.IOException;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
-
-        OkHttpClient client = new OkHttpClient();
-
-        Request request = new Request.Builder()
-                .url("wss://apitn.openledger.xyz/ws/v1/orch?authToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyZXNzIjoiMHgzMmVhZDg0NWRkNGQyY2U0NWQ1ZmFiODFiZDBmOTdjMWI0M2U4OTY0IiwiaWQiOjAsImV4cCI6MTc2ODQ5MjU5NX0.T_gielpE_1CL1GeJXgM3VlQp3pt_HaURu_y5nhbh8yo")
-                .header("Upgrade", "websocket")
-                .header("Origin", "chrome-extension://ekbbplmjjgoobhdlffmgeokalelnmjjc")
-                .header("Cache-Control", "no-cache")
-                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-                .header("Pragma", "no-cache")
-                .header("Connection", "Upgrade")
-                .header("Sec-WebSocket-Key", "+NesbIUcRmBqCnqFzamlJw==")
-                .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-                .header("Sec-WebSocket-Version", "13")
-                .header("Sec-WebSocket-Extensions", "permessage-deflate; client_max_window_bits")
-                .build();
-
-        try (Response response = client.newCall(request).execute()) {
-            if (!response.isSuccessful()) throw new IOException("Unexpected code " + response);
-            response.body().string();
-        }
+        proxy.getParams().put("1", "a");
+        proxy.getParams().put("1", "b");
+        proxy.getParams().put("1", "c");
+        proxy.getParams().put("1", "d");
     }
 }
