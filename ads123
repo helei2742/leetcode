@@ -1,363 +1,275 @@
-package cn.com.helei.DepinBot.core.dto;
-
-
-import io.netty.handler.codec.http.DefaultHttpHeaders;
-import io.netty.handler.codec.http.HttpHeaders;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-
-
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-public class DepinClientAccount {
-
-    /**
-     * 账户名
-     */
-    private String name;
-
-    /**
-     * 邮箱
-     */
-    private String email;
-
-    /**
-     * 密码
-     */
-    private String password;
-
-    /**
-     * 代理id
-     */
-    private Integer proxyId;
-
-
-    /**
-     * 浏览器环境id
-     */
-    private Integer browserEnvId;
-
-
-    public HttpHeaders getWSHeaders() {
-        return new DefaultHttpHeaders();
-    }
-
-    public HttpHeaders getRestHeaders() {
-        return new DefaultHttpHeaders();
-    }
-
-    public String getConnectUrl() {
-        return "";
-    }
-}
-
-
-package cn.com.helei.DepinBot.core.network;
-
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import java.net.InetSocketAddress;
-import java.net.Proxy;
-import java.net.SocketAddress;
-
-@NoArgsConstructor
-@Data
-public class NetworkProxy {
-
-    private Integer id;
-
-    private ProxyType proxyType;
-
-    private String host;
-
-    private int port;
-
-    private String username;
-
-    private String password;
-
-    public NetworkProxy(String proxyUrl) {
-        String[] split = proxyUrl.split("://");
-        String protocol = split[0];
-
-        proxyType = switch (protocol) {
-            case "http" -> ProxyType.HTTP;
-            case "sockt5" -> ProxyType.SOCKT5;
-            default -> throw new IllegalStateException("Unexpected value: " + protocol);
-        };
-        String[] upAndAddress = split[1].split("@");
-
-        String[] up = upAndAddress[0].split(":");
-        this.username = up[0];
-        this.password = up[1];
-
-        String[] address = upAndAddress[1].split(":");
-        this.host = address[0];
-        this.port = Integer.parseInt(address[1]);
-
-    }
-
-    public SocketAddress getAddress() {
-        return new InetSocketAddress(host, port);
-    }
-}
-
-
-package cn.com.helei.DepinBot.core.network;
-
-import cn.com.helei.DepinBot.core.util.table.CommandLineTablePrintHelper;
-import lombok.Getter;
-import lombok.Setter;
-import org.yaml.snakeyaml.Yaml;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicInteger;
-
-public class NetworkProxyPool {
-
-    private static final Map<String, NetworkProxyPool> LOADED_POOL_MAP = new ConcurrentHashMap<>();
-
-    @Getter
-    private String configClassPath;
-
-    @Setter
-    @Getter
-    private List<NetworkProxy> pool;
-
-    private final ConcurrentMap<Integer, NetworkProxy> idMapProxy = new ConcurrentHashMap<>();
-
-    /**
-     * 使用次数
-     */
-    private final Map<Integer, Integer> useCount = new HashMap<>();
-
-
-    public static void main(String[] args) {
-        System.out.println(loadYamlNetworkPool("network-proxy.yaml"));
-    }
-
-    public static NetworkProxyPool loadYamlNetworkPool(String classpath) {
-        return LOADED_POOL_MAP.compute(classpath, (k, pool) -> {
-            if (pool == null) {
-                Yaml yaml = new Yaml();
-                try (InputStream inputStream = NetworkProxyPool.class.getClassLoader().getResourceAsStream(classpath)) {
-                    Map<String, Object> yamlData = yaml.load(inputStream);
-                    Map<String, Object> depin = (Map<String, Object>) yamlData.get("depin");
-                    Map<String, Object> network = (Map<String, Object>) depin.get("network");
-                    Map<String, Object> proxy = (Map<String, Object>) network.get("proxy");
-
-                    NetworkProxyPool networkProxyPool = yaml.loadAs(yaml.dump(proxy), NetworkProxyPool.class);
-
-                    AtomicInteger id = new AtomicInteger();
-                    networkProxyPool.pool.forEach(networkProxy -> {
-                        networkProxy.setId(id.get());
-                        networkProxyPool.idMapProxy.put(id.getAndIncrement(), networkProxy);
-                        networkProxyPool.useCount.put(id.get(), 0);
-                    });
-
-                    networkProxyPool.configClassPath = classpath;
-
-                    pool = networkProxyPool;
-                } catch (IOException e) {
-                    throw new RuntimeException(String.format("价值配置网络代理池文件[%s]发生错误", classpath));
-                }
-            }
-            return pool;
-        });
-    }
-
-
-    /**
-     * 获取最少使用的代理
-     *
-     * @param count 数量
-     * @return List<NetworkProxy>
-     */
-    public synchronized List<NetworkProxy> getLessUsedProxy(int count) {
-        int batchSize = Math.min(count, useCount.size());
-
-        List<NetworkProxy> res = new ArrayList<>(count);
-
-        int needCount = count;
-        while (needCount > 0) {
-            int currentSize = Math.min(needCount, batchSize);
-
-            List<NetworkProxy> batch = useCount.entrySet().stream()
-                    .sorted((e1, e2) -> e1.getValue().compareTo(e2.getValue()))
-                    .limit(currentSize)
-                    .map(e -> {
-                        useCount.compute(e.getKey(), (k, v) -> v == null ? 0 : v + 1);
-                        return idMapProxy.get(e.getKey());
-                    }).toList();
-            res.addAll(batch);
-
-            needCount -= batch.size();
-        }
-
-        return res;
-    }
-
-    /**
-     * 获取代理
-     *
-     * @param id id
-     * @return NetworkProxy
-     */
-    public synchronized NetworkProxy getProxy(Integer id) {
-        return idMapProxy.compute(id, (k, v) -> {
-            if (v == null) return null;
-
-            useCount.compute(id, (k1, v1) -> {
-                if (v1 == null) v1 = 0;
-
-                return v1 + 1;
-            });
-
-            return v;
-        });
-    }
-
-
-    /**
-     * 打印池
-     *
-     * @return String
-     */
-    public String printPool() {
-        return CommandLineTablePrintHelper.generateTableString(pool.stream().toList(), NetworkProxy.class);
-    }
-}
-
-
-package cn.com.helei.DepinBot.core.network;
-
-public enum ProxyType {
-
-    HTTP,
-    SOCKT5
-}
-
-
-package cn.com.helei.DepinBot.core.network;
-
-import org.yaml.snakeyaml.DumperOptions;
-import org.yaml.snakeyaml.Yaml;
-
-import java.io.*;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-
-public class TxtProxyConvert2YamlConfig {
-
-    public static void main(String[] args) throws RuntimeException {
-
-        String fileName = "/Users/helei/develop/ideaworkspace/depinbot/DepinBot/src/main/resources/proxy.txt";
-        String fileName1 = "/Users/helei/develop/ideaworkspace/depinbot/DepinBot/src/main/resources/build-proxy.yaml";
-
-        try (BufferedReader fr = new BufferedReader(new FileReader(fileName))){
-
-            List<NetworkProxy> set = new ArrayList<>();
-            String line;
-            int id = 1;
-            while ((line = fr.readLine()) != null) {
-                String[] split = line.split(":");
-
-                NetworkProxy networkProxy = new NetworkProxy();
-                networkProxy.setHost(split[0]);
-                networkProxy.setPort(Integer.parseInt(split[1]));
-                networkProxy.setUsername(split[2]);
-                networkProxy.setPassword(split[3]);
-                set.add(networkProxy);
-            }
-
-            // 配置 YAML 输出选项
-            DumperOptions options = new DumperOptions();
-            options.setIndent(2);  // 设置缩进级别为 2
-            options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK); // 使用块风格
-
-            Yaml yaml = new Yaml(options);
-
-            // 写入 YAML 文件
-            try (FileWriter writer = new FileWriter(fileName1)) {
-                NetworkProxyPool data = new NetworkProxyPool();
-                data.setPool(set);
-                yaml.dump(data, writer);  // 将对象写入 YAML 文件
-                System.out.println("YAML 文件写入成功！");
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-    }
-}
-
-
-package cn.com.helei.DepinBot.core;
-
-import cn.com.helei.DepinBot.core.dto.AccountContext;
-import com.alibaba.fastjson.JSONObject;
-
-public class SimpleDepinWSClient extends AbstractDepinWSClient<JSONObject, JSONObject> {
-
-    public SimpleDepinWSClient(AccountContext accountContext) {
-        super(accountContext, new SimpleDepinWSClientHandler());
-    }
-
-
-
-
-    public static class SimpleDepinWSClientHandler extends AbstractDepinWSClientHandler<JSONObject, JSONObject> {
-
-        @Override
-        protected JSONObject heartBeatMessage() {
-            return null;
-        }
-
-        @Override
-        protected void handleOtherMessage(JSONObject message) {
-
-        }
-
-        @Override
-        public JSONObject convertMessageToRespType(String message) {
-            return null;
-        }
-    }
-}
-
-
-package cn.com.helei.DepinBot.oasis;
-
-import cn.com.helei.DepinBot.core.network.NetworkProxy;
+package cn.com.helei.DepinBot.openLedger;
+
+import cn.com.helei.DepinBot.core.BaseDepinWSClient;
+import cn.com.helei.DepinBot.core.bot.CommandLineDepinBot;
+import cn.com.helei.DepinBot.core.commandMenu.CommandMenuNode;
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import cn.com.helei.DepinBot.core.dto.RewordInfo;
 import cn.com.helei.DepinBot.core.util.RestApiClient;
+import cn.com.helei.DepinBot.core.util.RestApiClientFactory;
+import cn.hutool.core.util.BooleanUtil;
 import com.alibaba.fastjson.JSONObject;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.Map;
+import java.time.LocalDateTime;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+
+
+/**
+ * OpenLedger depin 项目机器人
+ */
+@Slf4j
+public class OpenLedgerDepinBot extends CommandLineDepinBot<String, String> {
+
+    private final OpenLedgerConfig openLedgerConfig;
+
+    public OpenLedgerDepinBot(OpenLedgerConfig openLedgerConfig) {
+        super(openLedgerConfig);
+        this.openLedgerConfig = openLedgerConfig;
+    }
+
+    @Override
+    protected void buildMenuNode(CommandMenuNode mainManu) {
+        CommandMenuNode menuNodeA = new CommandMenuNode("子菜单A", "这是子菜单A，请选择", null);
+        CommandMenuNode menuNodeB = new CommandMenuNode("子菜单B", "这是子菜单B，请选择", null);
+
+        menuNodeA.addSubMenu(new CommandMenuNode("子菜单A-1", "这是子菜单A-1，请选择", () -> "haha进入了A-1"));
+        menuNodeA.addSubMenu(new CommandMenuNode("子菜单A-2", "这是子菜单A-2，请选择", () -> "haha进入了A-2"));
+
+        menuNodeB.addSubMenu(new CommandMenuNode("子菜单B-1", "这是子菜单B-1，请选择", null));
+        menuNodeB.addSubMenu(new CommandMenuNode("子菜单B-2", "这是子菜单B-2，请选择", null));
+
+        mainManu.addSubMenu(menuNodeA);
+        mainManu.addSubMenu(menuNodeB);
+    }
+
+    @Override
+    public BaseDepinWSClient<String, String> buildAccountWSClient(AccountContext accountContext) {
+        return new OpenLedgerDepinWSClient(accountContext);
+    }
+
+    @Override
+    public void whenAccountConnected(BaseDepinWSClient<String, String> depinWSClient, Boolean success) {
+        if (BooleanUtil.isTrue(success)) {
+            //Step 1 1 设置定时刷新奖励信息设置
+            addTimer(() -> {
+                updateRewardInfo(depinWSClient.getAccountContext());
+            }, openLedgerConfig.getAccountRewardRefreshIntervalSeconds(), TimeUnit.SECONDS);
+        }
+    }
+
+    @Override
+    public void whenAccountReceiveResponse(BaseDepinWSClient<String, String> depinWSClient, String id, String response) {
+
+    }
+
+    @Override
+    public void whenAccountReceiveMessage(BaseDepinWSClient<String, String> depinWSClient, String message) {
+
+    }
+
+    @Override
+    public String getHeartbeatMessage(BaseDepinWSClient<String, String> depinWSClient) {
+        return "";
+    }
+
+    /**
+     * 更新奖励信息
+     *
+     * @param accountContext accountContext
+     */
+    private void updateRewardInfo(AccountContext accountContext) {
+        log.info("开始账户[{}]更新奖励信息", accountContext.getClientAccount().getName());
+
+        RewordInfo rewordInfo = accountContext.getRewordInfo();
+        if (rewordInfo == null) {
+            return;
+        }
+
+        //计算当前获得的奖励
+        CompletableFuture<JSONObject> rewardFuture = queryReward(accountContext);
+        CompletableFuture<JSONObject> rewardRealtimeFuture = queryRewardRealtime(accountContext);
+        CompletableFuture<JSONObject> claimDetailFuture = queryClaimDetail(accountContext);
+
+        rewardFuture.thenAcceptBothAsync(rewardRealtimeFuture, (reward, rewardRealtime) -> {
+                    //总分
+                    rewordInfo.addTotalPoints(reward.getDouble("totalPoint"));
+                    rewordInfo.addSessionPoints(reward.getDouble("point"));
+                    rewordInfo.setSessionId(reward.getString("name"));
+
+
+                    //今日链接奖励
+                    if (rewardRealtime != null) {
+                        Double todayHeartBeats = rewardRealtime.getDouble("total_heartbeats");
+
+                        rewordInfo.addTodayPoints(todayHeartBeats);
+                        rewordInfo.addTotalPoints(todayHeartBeats);
+                        rewordInfo.addSessionPoints(todayHeartBeats);
+                    }
+
+                    //今日签到奖励
+                    try {
+                        JSONObject claimDetail = claimDetailFuture.get();
+                        if (claimDetail != null && claimDetail.getBoolean("claimed")) {
+                            Double dailyPoint = claimDetail.getDouble("dailyPoint");
+
+                            rewordInfo.addTodayPoints(dailyPoint);
+                            rewordInfo.addTotalPoints(dailyPoint);
+                            rewordInfo.addSessionPoints(dailyPoint);
+                        }
+                    } catch (Exception e) {
+                        log.error("计算奖励查询每日签到信息发生异常, [{}}", accountContext, e);
+                    }
+
+                    rewordInfo.setUpdateTime(LocalDateTime.now());
+                    log.info("账户[{}]更新奖励信息更新完毕[{}}", accountContext.getClientAccount().getName(), rewordInfo);
+                }, getExecutorService())
+                .exceptionally(throwable -> {
+                    log.error("计算奖励查询每日签到信息发生异常, [{}}", accountContext, throwable);
+                    return null;
+                });
+    }
+
+
+    /**
+     * 查询每日签到信息
+     *
+     * @param accountContext accountContext
+     * @return {
+     * "status": "SUCCESS",
+     * "message": null,
+     * "data": {
+     * "tier": "Shrimp",
+     * "image": "<a href="https://cdn.openledger.xyz/Tier-2-active.png">...</a>",
+     * "claimed": true,
+     * "dailyPoint": 50,
+     * "nextClaim": "2025-01-19T00:00:00.000Z"
+     * }
+     * }
+     */
+    private CompletableFuture<JSONObject> queryClaimDetail(AccountContext accountContext) {
+        RestApiClient restApiClient = RestApiClientFactory.getClient(accountContext.getProxy());
+        String url = "https://rewardstn.openledger.xyz/api/v1/claim_details";
+
+        return requestAndTakeData(accountContext, restApiClient, url);
+    }
+
+    /**
+     * 查查reword
+     *
+     * @param accountContext accountContext
+     * @return {
+     * "status": "SUCCESS",
+     * "message": null,
+     * "data": {
+     * "totalPoint": "2989.00",
+     * "point": "2989.00",
+     * "name": "Epoch 1",
+     * "endDate": "2025-01-31"
+     * }
+     * }
+     */
+    private CompletableFuture<JSONObject> queryReward(AccountContext accountContext) {
+        RestApiClient restApiClient = RestApiClientFactory.getClient(accountContext.getProxy());
+        String url = "https://rewardstn.openledger.xyz/api/v1/reward";
+
+        return requestAndTakeData(accountContext, restApiClient, url);
+    }
+
+    /**
+     * 查查reword history
+     *
+     * @param accountContext accountContext
+     * @return {
+     * "status": "SUCCESS",
+     * "message": null,
+     * "data": [
+     * {
+     * "date": "2025-01-18",
+     * "total_points": 50,
+     * "details": [
+     * {
+     * "claim_type": 2,
+     * "points": 50
+     * }
+     * ]
+     * }
+     * ]
+     * }
+     */
+    private CompletableFuture<JSONObject> queryRewordHistory(AccountContext accountContext) {
+        RestApiClient restApiClient = RestApiClientFactory.getClient(accountContext.getProxy());
+        String url = "https://rewardstn.openledger.xyz/api/v1/reward_history";
+
+        return requestAndTakeData(accountContext, restApiClient, url);
+    }
+
+
+    /**
+     * 查查reword realtime
+     *
+     * @param accountContext accountContext
+     * @return {
+     * "status": "SUCCESS",
+     * "message": null,
+     * "data": [
+     * {
+     * "date": "2025-01-18",
+     * "total_heartbeats": "134",
+     * "total_scraps": "0",
+     * "total_prompts": "0"
+     * }
+     * ]
+     * }
+     */
+    private CompletableFuture<JSONObject> queryRewardRealtime(AccountContext accountContext) {
+        RestApiClient restApiClient = RestApiClientFactory.getClient(accountContext.getProxy());
+        String url = "https://rewardstn.openledger.xyz/api/v1/reward_realtime";
+
+        return requestAndTakeData(accountContext, restApiClient, url);
+    }
+
+    private CompletableFuture<JSONObject> requestAndTakeData(AccountContext accountContext, RestApiClient restApiClient, String url) {
+        return restApiClient
+                .request(
+                        url,
+                        "get",
+                        accountContext.getRestHeaders(),
+                        null,
+                        null
+                )
+                .thenApplyAsync(s -> {
+                    JSONObject resp = JSONObject.parseObject(s);
+                    if (resp.getString("status").equalsIgnoreCase("success")) {
+                        //一次heartbeats一分
+                        return resp.getJSONArray("data").getJSONObject(0);
+                    }
+                    return null;
+                }, getExecutorService());
+    }
+}
+package cn.com.helei.DepinBot.openloop;
+
+import cn.com.helei.DepinBot.core.pool.network.NetworkProxy;
+import com.alibaba.fastjson.JSONObject;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Random;
+import java.util.concurrent.CompletableFuture;
 
 @Slf4j
-public class OasisApi {
+public class OpenLoopApi {
 
-    private static final Map<NetworkProxy, RestApiClient> proxyRestApiClientMap = new ConcurrentHashMap<>();
+    private static final Random random = new Random();
 
-    private final ExecutorService executorService;
+    private final OpenLoopDepinBot openLoopDepinBot;
 
-    public OasisApi(ExecutorService executorService) {
-        this.executorService = executorService;
+    public OpenLoopApi(OpenLoopDepinBot openLoopDepinBot) {
+        this.openLoopDepinBot = openLoopDepinBot;
     }
 
 
@@ -369,26 +281,32 @@ public class OasisApi {
      * @param inviteCode 邀请码
      * @return 结果
      */
-    public CompletableFuture<Boolean> registerUser(NetworkProxy networkProxy, String email, String password, String inviteCode) {
-        JSONObject payload = new JSONObject();
-
+    public CompletableFuture<Boolean> registerUser(NetworkProxy networkProxy, String email, String name,
+                                                   String password, String inviteCode) {
         JSONObject account = new JSONObject();
         account.put("email", email);
+        account.put("username", name);
         account.put("password", password);
-        account.put("referralCode", inviteCode);
-        payload.put("0", account);
-        return getRestApiClient(networkProxy)
-                .request("https://api.oasis.ai/internal/authSignup?batch=1", "post", null, null, payload)
+        account.put("inviteCode", inviteCode);
+
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Content-Type", "application/json; charset=utf-8");
+
+        return openLoopDepinBot
+                .syncRequest(networkProxy,"https://api.openloop.so/users/register",
+                        "post", headers, null, account, ()-> String.format("开始注册[%s]-email[%s]", name, email)
+                )
                 .thenApplyAsync((res) -> {
-                    try {
-                        JSONObject result = JSONObject.parseObject(res);
-                        return result.getJSONArray("data").getJSONObject(0).getBoolean("result");
-                    } catch (Exception e) {
-                        log.error("注册邮箱[{}]发生异常！", email);
+                    if (Objects.equals(res, "")) {
+                        log.info("注册邮箱[{}]成功！请前往验证", email);
+                        return true;
+                    } else {
+                        log.error("注册[{}]失败, {}", email, res);
                         return false;
                     }
                 });
     }
+
 
     /**
      * 登录用户,返回token
@@ -398,198 +316,216 @@ public class OasisApi {
      * @return 结果
      */
     public CompletableFuture<String> loginUser(NetworkProxy networkProxy, String email, String password) {
-        JSONObject payload = new JSONObject();
 
         JSONObject account = new JSONObject();
         account.put("email", email);
         account.put("password", password);
-        account.put("rememberSession", true);
-        payload.put("0", account);
 
-        return getRestApiClient(networkProxy)
-                .request("https://api.oasis.ai/internal/authLogin?batch=1", "post", null, null, payload)
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Content-Type", "application/json");
+
+        return openLoopDepinBot
+                .syncRequest(
+                        networkProxy,
+                        "https://api.openloop.so/users/login",
+                        "post",
+                        headers,
+                        null,
+                        account,
+                        ()-> String.format("账户[%s]开始获取token", email)
+                )
+                .thenApplyAsync((res) -> {
+                    JSONObject result = JSONObject.parseObject(res);
+                    return result.getString("accessToken");
+                });
+    }
+
+    /**
+     * 分享带宽
+     *
+     * @param proxy proxy
+     * @param token token
+     * @return JSONObject
+     */
+    public CompletableFuture<JSONObject> shareBandwidth(NetworkProxy proxy, String name, String token) {
+        JSONObject body = new JSONObject();
+        body.put("quality", getRandomQuality());
+
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Content-Type", "application/json; charset=utf-8");
+        headers.put("Authorization", "Bearer " + token);
+
+        return openLoopDepinBot
+                .syncRequest(
+                        proxy,
+                        "https://api.openloop.so/bandwidth/share",
+                        "post",
+                        headers,
+                        null,
+                        body,
+                        () -> String.format("账户[%s]开始分享带宽", name)
+                )
                 .thenApplyAsync((res) -> {
                     try {
-                        JSONObject result = JSONObject.parseObject(res);
-                        return result.getJSONArray("data").getJSONObject(0).getString("token");
+                        JSONObject response = JSONObject.parseObject(res);
+                        return response.getJSONObject("data").getJSONObject("balances");
                     } catch (Exception e) {
-                        throw new RuntimeException(String.format("登录邮箱[%s]发生异常！", email));
+                        throw new RuntimeException("分享带宽失败, response body:" + res);
                     }
                 });
     }
 
 
-    private RestApiClient getRestApiClient(NetworkProxy networkProxy) {
-        return proxyRestApiClientMap.compute(networkProxy, (k, v) -> {
-            if (v == null) {
-                v = new RestApiClient(networkProxy, executorService);
-            }
-            return v;
-        });
+    /**
+     * 获取随机的网络质量
+     *
+     * @return 60-99
+     */
+    private int getRandomQuality() {
+        return random.nextInt(40) + 60;
     }
-
 }
-
-
-package cn.com.helei.DepinBot.oasis;
+package cn.com.helei.DepinBot.openloop;
 
 import cn.com.helei.DepinBot.core.BaseDepinBotConfig;
-import cn.com.helei.DepinBot.core.dto.DepinClientAccount;
+import cn.com.helei.DepinBot.core.util.YamlConfigLoadUtil;
+import cn.com.helei.DepinBot.oasis.OasisBotConfig;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.extern.slf4j.Slf4j;
-import org.yaml.snakeyaml.Yaml;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.util.List;
-import java.util.Map;
 
 @EqualsAndHashCode(callSuper = true)
 @Slf4j
 @Data
-public class OasisBotConfig extends BaseDepinBotConfig {
+public class OpenLoopConfig  extends BaseDepinBotConfig {
 
     private String inviteCode;
 
-    private List<DepinClientAccount> accountList;
-
     public static void main(String[] args) {
-        System.out.println(loadYamlConfig("app/oasis.yaml"));
+        System.out.println(loadYamlConfig("app/openloop.yaml"));
     }
 
-    public static OasisBotConfig loadYamlConfig(String classpath) {
-        Yaml yaml = new Yaml();
-        log.info("开始加载 OasisBot配置信息-file classpath:[{}}", classpath);
-        try (InputStream inputStream = OasisBotConfig.class.getClassLoader().getResourceAsStream(classpath)) {
-            Map<String, Object> yamlData = yaml.load(inputStream);
-            Map<String, Object> depin = (Map<String, Object>) yamlData.get("depin");
-            Map<String, Object> app = (Map<String, Object>) depin.get("app");
-            Map<String, Object> oasis = (Map<String, Object>) app.get("oasis");
-
-            //Step 1 基础配置文件
-            OasisBotConfig oasisBotConfig = yaml.loadAs(yaml.dump(oasis), OasisBotConfig.class);
-
-            log.info("OasisBot配置信息加载完毕: 共{}个账号", oasisBotConfig.accountList.size());
-
-            return oasisBotConfig;
-        } catch (IOException e) {
-            throw new RuntimeException(String.format("加载配置文件[%s]发生错误", classpath));
-        }
+    public static OpenLoopConfig loadYamlConfig(String classpath) {
+        return YamlConfigLoadUtil.load(classpath, List.of("depin", "app", "openloop"), OpenLoopConfig.class);
     }
-
 }
+package cn.com.helei.DepinBot.openloop;
 
-
-
-
-
-package cn.com.helei.DepinBot.oasis;
-
-import cn.com.helei.DepinBot.core.AbstractDepinWSClient;
-import cn.com.helei.DepinBot.core.CommandLineDepinBot;
-import cn.com.helei.DepinBot.core.commandMenu.CommandMenuNode;
-import cn.com.helei.DepinBot.core.dto.AccountContext;
+import cn.com.helei.DepinBot.core.bot.DefaultMenuCMDLineDepinBot;
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import cn.com.helei.DepinBot.core.dto.account.ConnectStatusInfo;
 import com.alibaba.fastjson.JSONObject;
 import lombok.extern.slf4j.Slf4j;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.TimeUnit;
+
 
 @Slf4j
-public class OasisDepinBot extends CommandLineDepinBot<JSONObject, JSONObject> {
+public class OpenLoopDepinBot extends DefaultMenuCMDLineDepinBot<OpenLoopConfig> {
 
-    private final OasisApi oasisApi;
+    private final OpenLoopApi openLoopApi;
 
-    public OasisDepinBot(OasisBotConfig oasisBotConfig) {
-        super(oasisBotConfig);
-        this.oasisApi = new OasisApi(getExecutorService());
+    public OpenLoopDepinBot(String configClassPath) {
+        super(OpenLoopConfig.loadYamlConfig(configClassPath));
+
+        openLoopApi = new OpenLoopApi(this);
+    }
+
+
+    @Override
+    protected CompletableFuture<Boolean> registerAccount(AccountContext accountContext, String inviteCode) {
+        return openLoopApi.registerUser(
+                accountContext.getProxy(),
+                accountContext.getClientAccount().getEmail(),
+                accountContext.getName(),
+                accountContext.getClientAccount().getPassword(),
+                inviteCode
+        );
     }
 
     @Override
-    protected CommandMenuNode buildMenuNode() {
-        CommandMenuNode main = new CommandMenuNode("主菜单", "欢迎使用机器人", null);
-
-        CommandMenuNode commandMenuNode = new CommandMenuNode(true, "账户注册", "开始批量注册账号", this::registerAccount);
-
-
-        return main.addSubMenu(commandMenuNode);
+    protected CompletableFuture<String> requestTokenOfAccount(AccountContext accountContext) {
+        return openLoopApi.loginUser(
+                accountContext.getProxy(),
+                accountContext.getClientAccount().getEmail(),
+                accountContext.getClientAccount().getPassword()
+        );
     }
+
 
     @Override
-    public AbstractDepinWSClient<JSONObject, JSONObject> buildAccountWSClient(AccountContext accountContext) {
-        return null;
-    }
+    public CompletableFuture<Void> connectAllAccount() {
+        return CompletableFuture.runAsync(()-> {
+            //Step 1 设置启动时间
+            getAccounts().forEach(accountContext ->
+                    accountContext.getConnectStatusInfo().setStartDateTime(LocalDateTime.now()));
 
-    @Override
-    public void whenAccountConnected(AccountContext accountContext, Boolean success) {
-        
-    }
+            //Step 2 设置定时任务
+            addTimer(() -> {
+                List<AccountContext> accounts = getAccounts();
 
+                List<CompletableFuture<JSONObject>> futures = accounts
+                        .stream()
+                        .map(account -> {
+                            // 发起网络请求，心跳数++
+                            account.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
+                            account.getConnectStatusInfo().getHeartBeatCount().incrementAndGet();
 
-    private String registerAccount() {
-        OasisBotConfig oasisBotConfig = (OasisBotConfig) getBaseDepinBotConfig();
-        String inviteCode = oasisBotConfig.getInviteCode();
+                            return openLoopApi.shareBandwidth(account.getProxy(), account.getName(), account.getParam("token"));
+                        })
+                        .toList();
 
-        log.info("开始注册账户");
-        AtomicInteger successCount = new AtomicInteger(0);
-        List<CompletableFuture<Void>> futureList = getAccountContextManager().getAccounts().stream().map(accountContext -> {
-            String email = accountContext.getClientAccount().getEmail();
+                // 获取异步结果，处理心跳数和收益数据
+                for (int i = 0; i < futures.size(); i++) {
+                    CompletableFuture<JSONObject> future = futures.get(i);
+                    AccountContext accountContext = accounts.get(i);
 
-            log.info("注册[{}]..使用邀请码[{}]..代理[{}]", email, inviteCode, accountContext.getProxy().getId());
-            return oasisApi.registerUser(accountContext.getProxy(), email, accountContext.getClientAccount().getPassword(), inviteCode)
-                    .thenAcceptAsync(success -> {
-                        if (success) {
-                            accountContext.setUsable(true);
-                            log.info("注册[{}]成功", email);
-                            successCount.getAndIncrement();
-                        } else {
-                            accountContext.setUsable(false);
-                            log.error("注册[{}]失败", email);
-                        }
-                    });
-        }).toList();
+                    ConnectStatusInfo connectStatusInfo = accountContext.getConnectStatusInfo();
+                    try {
+                        JSONObject balances = future.get();
+                        Double totalPoint = balances.getDouble("POINT");
 
+                        accountContext.getRewordInfo().setSessionPoints(totalPoint);
+                        accountContext.getRewordInfo().setUpdateTime(LocalDateTime.now());
+                    } catch (ExecutionException | InterruptedException e) {
+                        connectStatusInfo.getErrorHeartBeatCount().getAndIncrement();
+                        connectStatusInfo.setUpdateDateTime(LocalDateTime.now());
 
-        try {
-            CompletableFuture.allOf(futureList.toArray(new CompletableFuture[0])).get();
-        } catch (InterruptedException | ExecutionException e) {
-            log.error("等待账户注册完成失败",e);
-            return "等待账户注册完成失败";
-        }
-        return "注册完成,成功注册" + successCount.get() + "个账户" + "共:" + getAccountContextManager().getAccounts().size() + "个账户";
+                        log.error("账号[{}]分享带宽发生异常, {}", accountContext.getName(), e.getMessage());
+                    }
+                }
+            }, 60, TimeUnit.SECONDS);
+        }, getExecutorService());
     }
 }
+package cn.com.helei.DepinBot.openloop;
+
+import cn.com.helei.DepinBot.core.exception.DepinBotStartException;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class OpenLoopDepinBotTest {
+
+    static OpenLoopDepinBot openLoopDepinBot;
 
 
-depin:
-  app:
-    oasis:
-      accounts:
-        - email: 914577981@qq.com
-          password: 123123123
-        - email: 12321312@qq.com
-          password: 123123123
+    @BeforeAll
+    static void beforeAll() {
+        openLoopDepinBot = new OpenLoopDepinBot("app/openloop.yaml");
+        openLoopDepinBot.init();
+    }
 
+    @Test
+    public void test() throws DepinBotStartException {
+        openLoopDepinBot.start();
+    }
 
-depin:
-  network:
-    proxy:
-      pool:
-        - http://12321:12321@172.0.0.1:12135
-        - http://123:12321@172.0.0.1:12135
-        - http://213:12321@172.0.0.1:12135
-        - http://123:12321@172.0.0.1:12135
-
-depin:
-  browser:
-    envs:
-      - id: 1
-        headers:
-          User-Agent:
-          Cache-Control:  no-cache
-          Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
-
-
+}
