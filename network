@@ -1,152 +1,219 @@
+package cn.com.helei.DepinBot.unich;
 
-package com.helei.tool.excel;
+import cn.com.helei.DepinBot.core.bot.DefaultMenuCMDLineDepinBot;
+import cn.com.helei.DepinBot.core.commandMenu.CommandMenuNode;
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import cn.com.helei.DepinBot.core.exception.DepinBotInitException;
+import cn.com.helei.DepinBot.core.exception.DepinBotStartException;
+import cn.com.helei.DepinBot.core.pool.network.NetworkProxy;
+import cn.hutool.core.util.BooleanUtil;
+import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import lombok.extern.slf4j.Slf4j;
+import okhttp3.ResponseBody;
 
-import com.alibaba.excel.EasyExcel;
-import com.alibaba.excel.ExcelWriter;
-import com.alibaba.excel.annotation.ExcelProperty;
-import com.alibaba.excel.write.metadata.WriteSheet;
-import com.google.common.io.Files;
-import lombok.Builder;
-import lombok.Data;
-
-import java.io.File;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
-public class BuildAccountExcel {
-
-    public static void main(String[] args) throws IOException {
-        String outputFilename = "D:\\workspace\\ADSAutoSyncApp\\adsautosyncapp\\src\\main\\resources\\account\\account.xlsx";
-        List<TwitterInfo> twitterInfos = buildTwitterInfos("D:\\workspace\\ADSAutoSyncApp\\adsautosyncapp\\src\\main\\resources\\account\\twitter.txt");
-        List<GoogleInfo> googleInfos = buildGoogleInfos("D:\\workspace\\ADSAutoSyncApp\\adsautosyncapp\\src\\main\\resources\\account\\gmail.txt");
-        List<DiscardInfo> discardInfos = buildDiscardInfos("D:\\workspace\\ADSAutoSyncApp\\adsautosyncapp\\src\\main\\resources\\account\\discard.txt");
+@Slf4j
+public class UnichClaimBot extends DefaultMenuCMDLineDepinBot<UnichConfig> {
 
 
-        try (ExcelWriter writer = EasyExcel.write(outputFilename).build()) {
+    public UnichClaimBot(UnichConfig botConfig) {
+        super(botConfig);
+    }
 
-            WriteSheet googleSheet = EasyExcel.writerSheet(0, "google").head(GoogleInfo.class).build();
-            WriteSheet twitterSheet = EasyExcel.writerSheet(1, "twitter").head(TwitterInfo.class).build();
-            WriteSheet discardSheet = EasyExcel.writerSheet(2, "discard").head(DiscardInfo.class).build();
+    @Override
+    protected void doInit() throws DepinBotInitException {
+        super.doInit();
 
-            writer.write(googleInfos, googleSheet);
-            writer.write(twitterInfos, twitterSheet);
-            writer.write(discardInfos, discardSheet);
+        // 将tokens加载到对应的accountContext
+        List<AccountContext> accounts = getAccounts();
+
+        List<String> tokens = getBotConfig().getTokens();
+        if (tokens == null) return;
+
+        for (int i = 0; i < tokens.size(); i++) {
+            accounts.get(i).setParam("token", tokens.get(i));
         }
     }
 
-    public static List<TwitterInfo> buildTwitterInfos(String filePath) throws IOException {
-        List<String> lines = Files.readLines(new File(filePath), StandardCharsets.UTF_8);
 
-        return lines.stream().map(line -> {
-            String[] split = line.split(":");
-            StringBuilder date = new StringBuilder();
-            for (int i = 6; i < split.length; i++) {
-                if (!split[i].isBlank()) {
-                    date.append(split[i]).append(":");
+    @Override
+    protected void buildMenuNode(CommandMenuNode mainManu) {
+        super.buildMenuNode(mainManu);
+        mainManu.addSubMenu(new CommandMenuNode("领取社交奖励", "开始领取社交奖励...", this::startClaimSocialReward));
+    }
+
+    @Override
+    protected CompletableFuture<Boolean> registerAccount(AccountContext accountContext, String inviteCode) {
+        return null;
+    }
+
+    @Override
+    protected CompletableFuture<String> requestTokenOfAccount(AccountContext accountContext) {
+        return null;
+    }
+
+    @Override
+    protected CompletableFuture<Void> connectAllAccount() {
+        return null;
+    }
+
+    /**
+     * 开始领取社交任务
+     *
+     * @return print str
+     */
+    private String startClaimSocialReward() {
+        getAccounts().stream()
+                .filter(accountContext -> !BooleanUtil.toBoolean(accountContext.getParam("social_completed")))
+                .forEach(accountContext -> {
+                    NetworkProxy proxy = accountContext.getProxy();
+                    String proxyAddress = proxy.getHost() + ":" + proxy.getPort();
+                    String token = accountContext.getParam("token");
+
+                    Map<String, String> headers = accountContext.getBrowserEnv().getHeaders();
+                    headers.put("Authorization", "Bearer " + token);
+
+                    // Step 1 获取用户的社交任务列表
+                    CompletableFuture<List<String>> taskListFuture = null;
+                    String unclaimedTaskIdsStr = accountContext.getParam("unclaimed_task_ids");
+
+                    if (unclaimedTaskIdsStr != null) {
+                        taskListFuture = CompletableFuture.completedFuture(JSONObject.parseArray(unclaimedTaskIdsStr, String.class));
+                    } else {
+                        String listUrl = "https://api.unich.com/airdrop/user/v1/social/list-by-user";
+
+                        taskListFuture = syncRequest(proxy, listUrl, "get", headers, null, null,
+                                () -> String.format("账户[%s]-token[%s]-proxy[%s]开始领取社交奖励", accountContext.getName(), token, proxyAddress))
+                                // Step 1.1 处理响应结果
+                                .thenApplyAsync(response -> {
+                                    ResponseBody body = null;
+
+                                    if (response.isSuccessful() && (body = response.body()) != null) {
+                                        try {
+                                            JSONObject result = JSONObject.parseObject(body.string());
+
+                                            // Step 1.2 过滤出未领取的任务
+                                            List<String> ids = new ArrayList<>();
+                                            JSONArray taskList = result.getJSONArray("data");
+                                            for (int i = 0; i < taskList.size(); i++) {
+                                                JSONObject item = taskList.getJSONObject(i);
+                                                if (!item.getBoolean("claimed")) {
+                                                    ids.add(item.getString("id"));
+                                                }
+                                            }
+
+                                            log.info("账户[{}]-token[{}]-proxy[{}]获取任务列表成功", accountContext.getName(), token, proxyAddress);
+                                            return ids;
+                                        } catch (IOException e) {
+                                            throw new RuntimeException(String.format("获取账户[%s]-token[%s]任务列表失败, %s", accountContext.getName(), token, e.getMessage()));
+                                        }
+                                    } else {
+                                        throw new RuntimeException(String.format("获取账户[%s]-token[%s]任务列表失败", accountContext.getName(), token));
+                                    }
+                                }, getExecutorService());
+                    }
+
+
+                    // Step 2 开始领取任务
+                    taskListFuture.
+                            thenApplyAsync(taskList -> claimAccountTasks(accountContext, taskList, headers), getExecutorService())
+                            // Step 3 处理结果,未领取的标记一下
+                            .thenAcceptAsync(errorIds -> {
+                                if (errorIds == null || !errorIds.isEmpty()) {
+                                    accountContext.setParam("unclaimed_task_ids", JSONObject.toJSONString(errorIds));
+                                } else {
+                                    accountContext.setParam("social_completed", "true");
+                                }
+                            }, getExecutorService())
+                            .exceptionallyAsync(throwable -> {
+                                log.error("账户[{}]-token[{}]-proxy[{}]领取社交奖励发生异常,{}", accountContext.getName(), token, proxyAddress, throwable.getMessage());
+                                accountContext.setParam("social_completed", "false");
+                                return null;
+                            });
+                });
+
+        return "已开始领取账户社交奖励任务, 共[{}]" + getAccounts().size() + "个账户";
+    }
+
+
+    /**
+     * 领取账户taskId的任务
+     *
+     * @param accountContext  accountContext
+     * @param unclaimedTaskId unclaimedTaskId
+     * @param headers         headers
+     * @return List<String> 未完成的任务
+     */
+    private List<String> claimAccountTasks(AccountContext accountContext, List<String> unclaimedTaskId, Map<String, String> headers) {
+        NetworkProxy proxy = accountContext.getProxy();
+        String proxyAddress = proxy.getHost() + ":" + proxy.getPort();
+        String token = accountContext.getParam("token");
+
+        log.info("账户[{}]共[{}]个未领取的任务", accountContext.getName(), unclaimedTaskId.size());
+
+        // Step 2.2 开始领取任务
+        String claimUrl = "https://api.unich.com/airdrop/user/v1/social/claim/";
+
+        List<CompletableFuture<String>> subTaskFutures = unclaimedTaskId.stream().map(taskId -> {
+            JSONObject body = new JSONObject();
+            body.put("evidence", taskId);
+
+            return syncRequest(proxy, claimUrl + taskId, "post", headers, null, body,
+                    () -> String.format("账户[%s]-token[%s]-proxy[%s]-taskId[%s]开始领取", accountContext.getName(), token, proxyAddress, taskId))
+                    .thenApplyAsync(response -> {
+                        ResponseBody responseBody = null;
+
+                        if (response.isSuccessful() && (responseBody = response.body()) != null) {
+                            try {
+                                log.info("账户[{}]-token[{}]-proxy[{}]-taskId-[{}]领取成功, {}",
+                                        accountContext.getName(), token, proxyAddress, taskId, responseBody.string());
+                                return null;
+                            } catch (IOException e) {
+                                log.error("获取账户[{}]-token[{}]-taskId[{}]任务领取失败, {}",
+                                        accountContext.getName(), token, taskId, e.getMessage());
+                            }
+                        } else {
+                            log.error("获取账户[{}]-token[{}]-taskId[{}]任务领取失败",
+                                    accountContext.getName(), token, taskId);
+                        }
+                        return taskId;
+                    });
+        }).toList();
+
+        // Step 2.3 等待所有任务完成
+        CompletableFuture.allOf(subTaskFutures.toArray(new CompletableFuture[0])).join();
+
+        ArrayList<String> result = new ArrayList<>();
+        for (int i = 0; i < subTaskFutures.size(); i++) {
+            CompletableFuture<String> future = subTaskFutures.get(i);
+            try {
+                String id = future.get();
+                if (StrUtil.isNotBlank(id)) {
+                    result.add(id);
                 }
+            } catch (ExecutionException | InterruptedException e) {
+                log.error("获取账户[{}]-token[{}]-taskId[{}]任务领取发生系统错误, {}",
+                        accountContext.getName(), token, result.add(unclaimedTaskId.get(i)), e.getMessage());
+                result.add(unclaimedTaskId.get(i));
             }
+        }
 
-            return TwitterInfo
-                    .builder()
-                    .username(split[0])
-                    .password(split[1])
-                    .email(split[2])
-                    .emailPassword(split[3])
-                    .token(split[4])
-                    .token2fa(split[5])
-                    .registerDate(date.toString())
-                    .build();
-        }).toList();
-    }
-
-    public static List<GoogleInfo> buildGoogleInfos(String filePath) throws IOException {
-        List<String> lines = Files.readLines(new File(filePath), StandardCharsets.UTF_8);
-
-        return lines.stream().map(line -> {
-            String[] split = line.split("----");
-
-            return GoogleInfo
-                    .builder()
-                    .email(split[0])
-                    .password(split[1])
-                    .supportEmail(split[2])
-                    .build();
-        }).toList();
+        return result;
     }
 
 
-    public static List<DiscardInfo> buildDiscardInfos(String filePath) throws IOException {
-        List<String> lines = Files.readLines(new File(filePath), StandardCharsets.UTF_8);
+    public static void main(String[] args) throws DepinBotStartException {
+        UnichClaimBot unichClaimBot = new UnichClaimBot(UnichConfig.loadYamlConfig(List.of("depin", "app", "unich"), "unich.yaml"));
+        unichClaimBot.init();
 
-
-        return lines.stream().map(line -> {
-            String[] split = line.split(":");
-
-            return DiscardInfo
-                    .builder()
-                    .email(split[0])
-                    .password(split[1])
-                    .token(split[2])
-                    .build();
-        }).toList();
-    }
-
-    @Data
-    @Builder
-    static class TwitterInfo {
-        @ExcelProperty("用户名")
-        private String username;
-
-        @ExcelProperty("密码")
-        private String password;
-
-        @ExcelProperty("邮箱")
-        private String email;
-
-        @ExcelProperty("邮箱密码")
-        private String emailPassword;
-
-        @ExcelProperty("token")
-        private String token;
-
-        @ExcelProperty("2fa密钥")
-        private String token2fa;
-
-        @ExcelProperty("注册日期")
-        private String registerDate;
-    }
-
-    @Data
-    @Builder
-    static class DiscardInfo {
-        @ExcelProperty("邮箱")
-        private String email;
-
-        @ExcelProperty("密码")
-        private String password;
-
-        @ExcelProperty("token")
-        private String token;
-    }
-
-    @Data
-    @Builder
-    static class GoogleInfo {
-        @ExcelProperty("邮箱")
-        private String email;
-
-        @ExcelProperty("密码")
-        private String password;
-
-        @ExcelProperty("辅助邮箱")
-        private String supportEmail;
+        unichClaimBot.start();
     }
 }
-
-        <dependency>
-            <groupId>com.alibaba</groupId>
-            <artifactId>easyexcel</artifactId>
-            <version>3.2.0</version>
-        </dependency>
