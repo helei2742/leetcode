@@ -1,32 +1,36 @@
-package cn.com.helei.depin.core;
+package cn.com.helei.DepinBot.core.bot;
 
-import cn.com.helei.depin.core.command.CommandMenuNode;
-import cn.com.helei.depin.core.env.BrowserEnvPool;
-import cn.com.helei.depin.core.network.NetworkProxyPool;
-import cn.com.helei.depin.core.supporter.AccountContextManager;
+import cn.com.helei.DepinBot.core.BaseDepinBotConfig;
+import cn.com.helei.DepinBot.core.BaseDepinWSClient;
+import cn.com.helei.DepinBot.core.constants.DepinBotStatus;
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import cn.com.helei.DepinBot.core.pool.account.AccountPool;
+import cn.com.helei.DepinBot.core.pool.env.BrowserEnvPool;
+import cn.com.helei.DepinBot.core.exception.DepinBotInitException;
+import cn.com.helei.DepinBot.core.exception.DepinBotStartException;
+import cn.com.helei.DepinBot.core.exception.DepinBotStatusException;
+import cn.com.helei.DepinBot.core.pool.network.NetworkProxy;
+import cn.com.helei.DepinBot.core.pool.network.NetworkProxyPool;
+import cn.com.helei.DepinBot.core.util.NamedThreadFactory;
+import cn.com.helei.DepinBot.core.util.RestApiClientFactory;
+import cn.hutool.core.util.RandomUtil;
+import com.alibaba.fastjson.JSONObject;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
-import org.jline.reader.LineReader;
-import org.jline.reader.LineReaderBuilder;
-import org.jline.reader.impl.DefaultParser;
-import org.jline.terminal.Terminal;
-import org.jline.terminal.TerminalBuilder;
+import okhttp3.Response;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Stack;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
+import java.util.Map;
+import java.util.concurrent.*;
+import java.util.function.Supplier;
 
-
-/**
- * 命令行交互的depin机器人
- */
 @Slf4j
 @Getter
-public abstract class CommandLineDepinBot {
+public abstract class AbstractDepinBot<Req, Resp> {
+    /**
+     * 执行异步任务的线程池
+     */
+    private final ExecutorService executorService;
 
     /**
      * 代理池
@@ -39,45 +43,229 @@ public abstract class CommandLineDepinBot {
     private final BrowserEnvPool browserEnvPool;
 
     /**
+     * 账户池
+     */
+    private final AccountPool accountPool;
+
+    /**
      * 配置
      */
     private final BaseDepinBotConfig baseDepinBotConfig;
 
+    /**
+     * 状态
+     */
+    private DepinBotStatus status = DepinBotStatus.NEW;
 
-    private final AccountContextManager accountContextManager;
+    /**
+     * 同步控制
+     */
+    private final Semaphore syncController;
 
-    public CommandLineDepinBot(BaseDepinBotConfig baseDepinBotConfig) {
+    public AbstractDepinBot(BaseDepinBotConfig baseDepinBotConfig) {
         this.baseDepinBotConfig = baseDepinBotConfig;
+        this.executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory(baseDepinBotConfig.getName() + "-executor"));
 
-        this.proxyPool = NetworkProxyPool.loadYamlNetworkPool(baseDepinBotConfig.getNetworkPoolConfig());
-        this.browserEnvPool = BrowserEnvPool.loadYamlBrowserEnvPool(baseDepinBotConfig.getBrowserEnvPoolConfig());
+        this.proxyPool = NetworkProxyPool.loadYamlPool(
+                baseDepinBotConfig.getNetworkPoolConfig(),
+                "bot.network.proxy",
+                NetworkProxyPool.class
+        );
+        this.browserEnvPool = BrowserEnvPool.loadYamlPool(
+                baseDepinBotConfig.getBrowserEnvPoolConfig(),
+                "bot.browser",
+                BrowserEnvPool.class
+        );
+        this.accountPool = AccountPool.loadYamlPool(
+                baseDepinBotConfig.getAccountPoolConfig(),
+                "bot.account",
+                AccountPool.class
+        );
 
-        this.accountContextManager = new AccountContextManager(proxyPool, browserEnvPool, baseDepinBotConfig);
-        init();
+        syncController = new Semaphore(baseDepinBotConfig.getConcurrentCount());
     }
 
     public void init() {
-        //Step 1 初始化账号
-        accountContextManager.initAccount();
+        updateState(DepinBotStatus.INIT);
+        try {
+            doInit();
 
+            //更新状态
+            updateState(DepinBotStatus.INIT_FINISH);
+        } catch (Exception e) {
+            log.error("初始化DepinBot[{}}发生错误", getBaseDepinBotConfig().getName(), e);
+            updateState(DepinBotStatus.INIT_ERROR);
+        }
     }
+
+    /**
+     * 初始化方法
+     */
+    protected abstract void doInit() throws DepinBotInitException;
+
+
+    protected abstract void doExecute() throws IOException;
+
+    /**
+     * 使用accountContext构建AbstractDepinWSClient
+     *
+     * @param accountContext accountContext
+     * @return AbstractDepinWSClient
+     */
+    public abstract BaseDepinWSClient<Req, Resp> buildAccountWSClient(AccountContext accountContext);
+
+
+    /**
+     * 当账户链接时调用
+     *
+     * @param depinWSClient depinWSClient
+     * @param success       是否成功
+     */
+    public abstract void whenAccountConnected(BaseDepinWSClient<Req, Resp> depinWSClient, Boolean success);
+
+    /**
+     * 当ws连接收到响应
+     *
+     * @param depinWSClient depinWSClient
+     * @param id            id
+     * @param response      response
+     */
+    public abstract void whenAccountReceiveResponse(BaseDepinWSClient<Req, Resp> depinWSClient, String id, Resp response);
+
+    /**
+     * 当ws连接收到消息
+     *
+     * @param depinWSClient depinWSClient
+     * @param message       message
+     */
+    public abstract void whenAccountReceiveMessage(BaseDepinWSClient<Req, Resp> depinWSClient, Resp message);
+
+    /**
+     * 获取心跳消息
+     *
+     * @param depinWSClient depinWSClient
+     * @return 消息体
+     */
+    public abstract Req getHeartbeatMessage(BaseDepinWSClient<Req, Resp> depinWSClient);
 
 
     /**
      * 启动bot
      *
-     * @throws InterruptedException InterruptedException
+     * @throws DepinBotStartException DepinBotStartException
      */
-    public void start() throws InterruptedException {
+    public void start() throws DepinBotStartException {
+        updateState(DepinBotStatus.STARTING);
         log.info("正在启动Depin Bot");
+        try {
+            CountDownLatch startLatch = new CountDownLatch(1);
+            //启动命令行交互的线程
+            asyncExecute(startLatch);
 
-        CountDownLatch startLatch = new CountDownLatch(1);
-        //启动命令行交互的线程
-        asyncExecute(startLatch);
+            log.info("Depin Bot启动完毕");
 
-        log.info("Depin Bot启动完毕");
+            updateState(DepinBotStatus.RUNNING);
+            startLatch.await();
 
-        startLatch.await();
+        } catch (Exception e) {
+            updateState(DepinBotStatus.SHUTDOWN);
+            throw new DepinBotStartException("启动CommandLineDepinBot发生错误", e);
+        }
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<String> response str
+     */
+    public CompletableFuture<Response> syncRequest(
+            NetworkProxy proxy,
+            String url,
+            String method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body
+    ) {
+        return syncRequest(proxy, url, method, headers, params, body, null);
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<Response> response
+     */
+    public CompletableFuture<Response> syncRequest(
+            NetworkProxy proxy,
+            String url,
+            String method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            Supplier<String> requestStart
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                syncController.acquire();
+                // 随机延迟
+                TimeUnit.MILLISECONDS.sleep(RandomUtil.randomLong(1000, 3000));
+
+                String str = "开始";
+                if (requestStart != null) {
+                    str = requestStart.get();
+                }
+                log.info("同步器允许发送请求-{}", str);
+
+                return RestApiClientFactory.getClient(proxy).request(
+                        url,
+                        method,
+                        headers,
+                        params,
+                        body
+                ).get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            } finally {
+                syncController.release();
+            }
+        }, executorService);
+    }
+
+    /**
+     * 添加定时任务
+     *
+     * @param runnable runnable
+     * @param delay    delay
+     * @param timeUnit timeUnit
+     */
+    public void addTimer(Runnable runnable, long delay, TimeUnit timeUnit) {
+        executorService.execute(() -> {
+            while (true) {
+                try {
+                    syncController.acquire();
+
+                    runnable.run();
+
+                    timeUnit.sleep(delay);
+                } catch (InterruptedException e) {
+                    log.error("timer interrupted will stop it", e);
+                    break;
+                } finally {
+                    syncController.release();
+                }
+            }
+        });
     }
 
     /**
@@ -88,84 +276,512 @@ public abstract class CommandLineDepinBot {
             try {
                 doExecute();
             } catch (IOException e) {
-                log.error("控制台输入发生错误", e);
+                log.error("启动bot发生错误", e);
             } finally {
                 startLatch.countDown();
             }
-        }, "command-input");
+        }, "depin-bot-main");
         commandInputThread.setDaemon(true);
         commandInputThread.start();
     }
 
+
     /**
-     * 运行机器人
+     * 更新DepinBotStatus
      *
-     * @throws IOException IOException
+     * @param newStatus 新状态
      */
-    private void doExecute() throws IOException {
-        //Step 1 获取输入
-        CommandMenuNode mainMenuNode = getMenuNode();
-        Terminal terminal = TerminalBuilder.builder().system(true).build();
-        LineReader reader = LineReaderBuilder.builder().terminal(terminal).parser(new DefaultParser()).build();
+    private synchronized void updateState(DepinBotStatus newStatus) throws DepinBotStatusException {
+        boolean b = true;
+        if (newStatus.equals(DepinBotStatus.SHUTDOWN)) {
+            status = DepinBotStatus.SHUTDOWN;
+            b = false;
+        } else {
+            b = switch (status) {
+                //当前为NEW，新状态才能为NEW,SHUTDOWN
+                case NEW -> DepinBotStatus.INIT.equals(newStatus);
+                //当前为INIT，新状态只能为INIT_FINISH、INIT_ERROR,SHUTDOWN
+                case INIT -> newStatus.equals(DepinBotStatus.INIT_FINISH)
+                        || newStatus.equals(DepinBotStatus.INIT_ERROR);
+                //当前为INIT_ERROR,新状态只能为ACCOUNT_LOADING, SHUTDOWN
+                case INIT_ERROR -> newStatus.equals(DepinBotStatus.INIT);
+                //当前状态为INIT_FINISH，新状态只能为ACCOUNT_LIST_CONNECT, SHUTDOWN
+                case INIT_FINISH -> newStatus.equals(DepinBotStatus.STARTING);
+                //当前状态为STARING，新状态只能为RUNNING,SHUTDOWN
+                case STARTING -> newStatus.equals(DepinBotStatus.RUNNING);
+                //RUNNING，新状态只能为 SHUTDOWN
+                case RUNNING -> false;
+                case SHUTDOWN -> false;
+            };
+        }
 
-        Stack<CommandMenuNode> menuNodeStack = new Stack<>();
-        CommandMenuNode currentMenuNode = mainMenuNode;
 
-        //Step 2 不断监听控制台输入
-        while (true) {
-            //Step 2.1 获取输入
-            String choice = reader.readLine("\n<\n" + getMenuNodePrintStr(currentMenuNode) + "请选择>");
-            try {
-                //Step 2.2 退出
-                if ("exit".equals(choice)) {
-                    exitHandler();
-                    break;
-                }
+        if (b) {
+            log.info("CommandLineDepinBot Status change [{}] => [{}]", status, newStatus);
+            this.status = newStatus;
+        } else {
+            throw new DepinBotStatusException(String.format("Depin Bot Status不能从[%s]->[%s]", status, newStatus));
+        }
+    }
+}
+package cn.com.helei.DepinBot.core.bot;
 
-                //Step 2.3 选择操作
-                int option = Integer.parseInt(choice.trim());
-                if (option == 0) {
-                    //返回上一级菜单
-                    if (!menuNodeStack.isEmpty()) {
-                        currentMenuNode = menuNodeStack.pop();
+import cn.com.helei.DepinBot.core.BaseDepinBotConfig;
+import cn.com.helei.DepinBot.core.BaseDepinWSClient;
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import cn.com.helei.DepinBot.core.dto.account.AccountPrintDto;
+import cn.com.helei.DepinBot.core.dto.RewordInfo;
+import cn.com.helei.DepinBot.core.exception.DepinBotStartException;
+import cn.com.helei.DepinBot.core.exception.RewardQueryException;
+import cn.com.helei.DepinBot.core.pool.env.BrowserEnv;
+import cn.com.helei.DepinBot.core.exception.DepinBotInitException;
+import cn.com.helei.DepinBot.core.exception.DepinBotStatusException;
+import cn.com.helei.DepinBot.core.netty.constants.WebsocketClientStatus;
+import cn.com.helei.DepinBot.core.pool.network.NetworkProxy;
+import cn.com.helei.DepinBot.core.supporter.persistence.AccountPersistenceManager;
+import cn.com.helei.DepinBot.core.util.NamedThreadFactory;
+import cn.com.helei.DepinBot.core.util.table.CommandLineTablePrintHelper;
+import cn.hutool.core.util.BooleanUtil;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Function;
+
+@Slf4j
+public abstract class AccountAutoManageDepinBot<Req, Resp> extends AbstractDepinBot<Req, Resp> {
+    /**
+     * 异步操作线程池
+     */
+    private final ExecutorService executorService;
+
+    /**
+     * 账户客户端
+     */
+    private final ConcurrentMap<AccountContext, BaseDepinWSClient<Req, Resp>> accountWSClientMap = new ConcurrentHashMap<>();
+
+    /**
+     * 持久化管理器
+     */
+    private final AccountPersistenceManager persistenceManager;
+
+    /**
+     * 账号列表
+     */
+    @Getter
+    private final List<AccountContext> accounts = new ArrayList<>();
+
+    /**
+     * 是否允许账户收益查询
+     */
+    private final AtomicBoolean isRunningAccountRewardQuery = new AtomicBoolean(true);
+
+
+    public AccountAutoManageDepinBot(BaseDepinBotConfig baseDepinBotConfig) {
+        super(baseDepinBotConfig);
+
+
+        this.executorService = Executors
+                .newThreadPerTaskExecutor(new NamedThreadFactory(baseDepinBotConfig.getName() + "-account"));
+
+        this.persistenceManager = new AccountPersistenceManager(baseDepinBotConfig.getName());
+    }
+
+    @Override
+    protected void doInit() throws DepinBotInitException {
+        // Step 1 初始化保存的线程
+        persistenceManager.init();
+
+        // Step 2 初始化账户
+        initAccounts();
+    }
+
+
+    @Override
+    public void start() throws DepinBotStartException {
+        super.start();
+
+        // 启动奖励查询任务
+        if (BooleanUtil.isTrue(getBaseDepinBotConfig().isAccountRewardAutoRefresh())) {
+            startAccountRewardQueryTask();
+        }
+    }
+
+    /**
+     * 开启账户奖励查询任务
+     */
+    private void startAccountRewardQueryTask() {
+        getExecutorService().execute(() -> {
+            while (isRunningAccountRewardQuery.get()) {
+                List<AccountContext> accounts = getAccounts();
+
+                List<CompletableFuture<Boolean>> futures = accounts.stream().map(accountContext -> {
+                    try {
+                        return updateAccountRewordInfo(accountContext);
+                    } catch (Exception e) {
+                        throw new RewardQueryException(e);
                     }
-                } else if (option > 0 && option <= currentMenuNode.getSubNodeList().size()) {
-                    //进入选择的菜单
-                    menuNodeStack.push(currentMenuNode);
-                    currentMenuNode = currentMenuNode.getSubNodeList().get(option - 1);
-                } else {
-                    System.out.println("输入无效，请重新输入");
+                }).toList();
+
+                for (int i = 0; i < futures.size(); i++) {
+                    try {
+                        futures.get(i).get();
+                    } catch (InterruptedException | ExecutionException e) {
+                        log.error("查询账户[" + accounts.get(i).getName() + "]奖励失败", e.getMessage());
+                    }
                 }
-            } catch (Exception e) {
-                System.out.println("输入无效，请重新输入");
+                try {
+                    TimeUnit.SECONDS.sleep(getBaseDepinBotConfig().getAccountRewardRefreshIntervalSeconds());
+                } catch (InterruptedException e) {
+                    log.error("等待执行账户查询时发生异常", e);
+                }
             }
+        });
+    }
+
+
+    /**
+     * 更新账户奖励信息
+     *
+     * @param accountContext accountContext
+     * @return CompletableFuture<Boolean>
+     */
+    protected abstract CompletableFuture<Boolean> updateAccountRewordInfo(AccountContext accountContext);
+
+
+    /**
+     * 初始化账号方法
+     */
+    private void initAccounts() throws DepinBotInitException {
+        try {
+            // Step 1 获取持久化的
+            Map<Integer, AccountContext> accountContextMap = persistenceManager.loadAccountContexts();
+
+            // Step 2 没有保存的数据，加载新的
+            List<AccountContext> accountContexts;
+            if (accountContextMap == null || accountContextMap.isEmpty()) {
+                log.info("bot[{}]加载新账户数据", getBaseDepinBotConfig().getName());
+                // Step 2.1 加载新的
+                accountContexts = loadNewAccountContexts();
+
+                // Step 2.2 持久化
+                persistenceManager.persistenceAccountContexts(accountContexts);
+            } else {
+                log.info("bot[{}]使用历史账户数据", getBaseDepinBotConfig().getName());
+                accountContexts = new ArrayList<>(accountContextMap.values());
+            }
+
+            // Step 3 加载到bot
+            registerAccountsInBot(accountContexts, AccountPersistenceManager::getAccountContextPersistencePath);
+
+            accounts.addAll(accountContexts);
+        } catch (Exception e) {
+            throw new DepinBotInitException("初始化账户发生错误", e);
+        }
+    }
+
+    /**
+     * 将账户加载到bot， 会注册监听，当属性发生改变时自动刷入磁盘
+     *
+     * @param accountContexts accountContexts
+     */
+    private void registerAccountsInBot(List<AccountContext> accountContexts, Function<AccountContext, String> getSavePath) {
+        persistenceManager.registerPersistenceListener(accountContexts, getSavePath);
+    }
+
+
+    /**
+     * 加载新的账户上下文列表，从配置文件中
+     *
+     * @return List<AccountContext>
+     */
+    private List<AccountContext> loadNewAccountContexts() {
+        // Step 1 初始化账号
+
+        List<AccountContext> newAccountContexts = new ArrayList<>();
+
+        List<AccountContext> noProxyIds = new ArrayList<>();
+        List<AccountContext> noBrowserEnvIds = new ArrayList<>();
+
+        getAccountPool()
+                .getAllItem()
+                .forEach(depinClientAccount -> {
+                    AccountContext accountContext = AccountContext.builder()
+                            .clientAccount(depinClientAccount).build();
+
+                    Integer id = depinClientAccount.getId();
+
+                    // 账号没有配置代
+                    if (depinClientAccount.getProxyId() == null) {
+                        noProxyIds.add(accountContext);
+                    } else {
+                        accountContext.setProxy(getProxyPool().getItem(depinClientAccount.getProxyId()));
+                    }
+
+                    // 账号没有配置浏览器环境
+                    if (depinClientAccount.getBrowserEnvId() == null) {
+                        noBrowserEnvIds.add(accountContext);
+                    } else {
+                        accountContext.setBrowserEnv(getBrowserEnvPool().getItem(depinClientAccount.getBrowserEnvId()));
+                    }
+
+                    newAccountContexts.add(accountContext);
+                });
+
+        // Step 2 账号没代理的尝试给他设置代理
+        if (!noProxyIds.isEmpty()) {
+            log.warn("以下账号没有配置代理，将随机选择一个代理进行使用");
+            List<NetworkProxy> lessUsedProxy = getProxyPool().getLessUsedItem(noProxyIds.size());
+            for (int i = 0; i < noProxyIds.size(); i++) {
+                AccountContext accountContext = noProxyIds.get(i);
+
+                NetworkProxy proxy = lessUsedProxy.get(i);
+                accountContext.setProxy(proxy);
+
+                log.warn("账号:{},将使用代理:{}", accountContext.getName(), proxy);
+            }
+        }
+
+        // Step 3 账号没浏览器环境的尝试给他设置浏览器环境
+        if (!noBrowserEnvIds.isEmpty()) {
+            log.warn("以下账号没有配置浏览器环境，将随机选择一个浏览器环境使用");
+            List<BrowserEnv> lessUsedBrowserEnv = getBrowserEnvPool().getLessUsedItem(noBrowserEnvIds.size());
+            for (int i = 0; i < noBrowserEnvIds.size(); i++) {
+                AccountContext accountContext = noBrowserEnvIds.get(i);
+
+                BrowserEnv browserEnv = lessUsedBrowserEnv.get(i);
+                accountContext.setBrowserEnv(browserEnv);
+
+                log.warn("账号:{},将使用浏览器环境:{}", accountContext.getName(), browserEnv);
+            }
+        }
+
+        return newAccountContexts;
+    }
+
+
+    /**
+     * 所有账户建立连接
+     *
+     * @return CompletableFuture<Void>
+     */
+    protected CompletableFuture<Void> connectAllAccount() {
+        return CompletableFuture.runAsync(() -> {
+            //Step 1 遍历账户
+            List<CompletableFuture<Void>> connectFutures = accounts.stream()
+                    .map(accountContext -> {
+                        // Step 2 根据账户获取ws client
+                        BaseDepinWSClient<Req, Resp> depinWSClient = accountWSClientMap.compute(accountContext, (k, v) -> {
+                            // 没有创建过，或被关闭，创建新的
+                            if (v == null || v.getClientStatus().equals(WebsocketClientStatus.SHUTDOWN)) {
+                                v = buildAccountWSClient(accountContext);
+                            }
+
+                            return v;
+                        });
+
+                        String accountName = accountContext.getClientAccount().getName();
+
+                        //Step 3 建立连接
+                        WebsocketClientStatus clientStatus = depinWSClient.getClientStatus();
+                        return switch (clientStatus) {
+                            case NEW, STOP:  // 新创建，停止状态，需要建立连接
+                                yield depinWSClient
+                                        .connect()
+                                        .thenAcceptAsync(success -> {
+                                            try {
+                                                whenAccountConnected(depinWSClient, success);
+                                            } catch (Exception e) {
+                                                log.error("账户[{}]-连接完成后执行回调发生错误", accountName, e);
+                                            }
+                                        }, executorService)
+                                        .exceptionallyAsync(throwable -> {
+                                            log.error("账户[{}]连接失败, ", accountName,
+                                                    throwable);
+                                            return null;
+                                        }, executorService);
+                            case STARTING, RUNNING: // 正在建立连接，直接返回
+                                CompletableFuture.completedFuture(null);
+                            case SHUTDOWN: // 被禁止使用，抛出异常
+                                throw new DepinBotStatusException("cannot start ws client when it shutdown, " + accountName);
+                        };
+                    })
+                    .toList();
+
+            //Step 4 等所有账户连接建立完成
+            try {
+                CompletableFuture
+                        .allOf(connectFutures.toArray(new CompletableFuture[0]))
+                        .get();
+            } catch (InterruptedException | ExecutionException e) {
+                log.error("账户建立连接发生异常", e);
+            }
+        }, executorService);
+    }
+
+
+    /**
+     * 打印账号列表
+     *
+     * @return String
+     */
+    public String printAccountList() {
+        List<AccountPrintDto> list = accounts.stream().map(accountContext -> {
+            NetworkProxy proxy = accountContext.getProxy();
+            BrowserEnv browserEnv = accountContext.getBrowserEnv();
+            return AccountPrintDto
+                    .builder()
+                    .id(accountContext.getClientAccount().getId())
+                    .name(accountContext.getName())
+                    .proxyInfo(proxy.getId() + "-" + proxy.getAddress())
+                    .browserEnvInfo(String.valueOf(browserEnv == null ? "NO_ENV" : browserEnv.getId()))
+                    .signUp(accountContext.getClientAccount().getSignUp())
+                    .startDateTime(accountContext.getConnectStatusInfo().getStartDateTime())
+                    .updateDateTime(accountContext.getConnectStatusInfo().getUpdateDateTime())
+                    .heartBeatCount(accountContext.getConnectStatusInfo().getHeartBeatCount().get())
+                    .connectStatus(accountContext.getConnectStatusInfo().getConnectStatus())
+                    .build();
+        }).toList();
+
+        return "账号列表:\n" +
+                CommandLineTablePrintHelper.generateTableString(list, AccountPrintDto.class) +
+                "\n";
+    }
+
+    /**
+     * 打印账号收益
+     *
+     * @return String
+     */
+    public String printAccountReward() {
+        StringBuilder sb = new StringBuilder();
+
+        List<RewordInfo> list = accounts.stream().map(AccountContext::getRewordInfo).toList();
+
+        sb.append("收益列表:\n")
+                .append(CommandLineTablePrintHelper.generateTableString(list, RewordInfo.class))
+                .append("\n");
+
+        return sb.toString();
+    }
+
+}
+package cn.com.helei.DepinBot.core.bot;
+
+import cn.com.helei.DepinBot.core.BaseDepinBotConfig;
+import cn.com.helei.DepinBot.core.BaseDepinWSClient;
+import cn.com.helei.DepinBot.core.commandMenu.CommandMenuNode;
+import cn.com.helei.DepinBot.core.commandMenu.DefaultMenuType;
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import cn.hutool.core.util.BooleanUtil;
+import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson.JSONObject;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+
+@Slf4j
+public abstract class DefaultMenuCMDLineDepinBot<C extends BaseDepinBotConfig> extends CommandLineDepinBot<JSONObject, JSONObject> {
+
+
+    private static final String INVITE_CODE_KEY = "inviteCode";
+
+    /**
+     * 刷新节点
+     */
+    public static final CommandMenuNode REFRESH_NODE = new CommandMenuNode(true, "刷新", "当前数据已刷新", null);
+
+    /**
+     * 是否开始过链接所有账号
+     */
+    private final AtomicBoolean isStartAccountConnected = new AtomicBoolean(false);
+
+
+    private final List<DefaultMenuType> defaultMenuTypes = new ArrayList<>(List.of(
+            DefaultMenuType.PROXY_LIST,
+            DefaultMenuType.ACCOUNT_LIST,
+            DefaultMenuType.PROXY_LIST,
+            DefaultMenuType.BROWSER_ENV_LIST
+    ));
+
+    @Getter
+    private final C botConfig;
+
+    public DefaultMenuCMDLineDepinBot(C botConfig) {
+        super(botConfig);
+
+        this.botConfig = botConfig;
+    }
+
+
+    @Override
+    protected CompletableFuture<Boolean> updateAccountRewordInfo(AccountContext accountContext) {
+        return CompletableFuture.completedFuture(false);
+    }
+
+    @Override
+    protected void buildMenuNode(CommandMenuNode mainManu) {
+        addCustomMenuNode(defaultMenuTypes, mainManu);
+
+        for (DefaultMenuType menuType : defaultMenuTypes) {
+            mainManu.addSubMenu(switch (menuType) {
+                case REGISTER -> buildRegisterMenuNode();
+                case LOGIN -> buildQueryTokenMenuNode();
+                case ACCOUNT_LIST -> buildAccountListMenuNode();
+                case PROXY_LIST -> buildProxyListMenuNode();
+                case BROWSER_ENV_LIST -> buildBrowserListMenuNode();
+                case START_ACCOUNT_CLAIM -> buildStartAccountConnectMenuNode();
+            });
         }
     }
 
 
     /**
-     * 获取菜单， 会放入额外的固定菜单
+     * 构建注册菜单节点
      *
      * @return CommandMenuNode
      */
-    private CommandMenuNode getMenuNode() {
-        CommandMenuNode menuNode = buildMenuNode();
+    private CommandMenuNode buildRegisterMenuNode() {
+        CommandMenuNode registerMenu = new CommandMenuNode("注册",
+                "请确认邀请码后运行", this::printCurrentInvite);
 
-        //获取到子类菜单后，给子类菜单添加新的菜单选项
-        menuNode.addSubMenu(buildProxyListMenuNode());
-        menuNode.addSubMenu(buildBrowserListMenuNode());
-        menuNode.addSubMenu(buildAccountListMenuNode());
+        CommandMenuNode interInvite = new CommandMenuNode(
+                "填入邀请码",
+                "请输入邀请码：",
+                this::printCurrentInvite
+        );
+        interInvite.setResolveInput(input -> {
+            log.info("邀请码修改[{}]->[{}]", botConfig.getConfig(INVITE_CODE_KEY), input);
+            botConfig.setConfig(INVITE_CODE_KEY, input);
+        });
 
-        return menuNode;
+
+        return registerMenu.addSubMenu(interInvite)
+                .addSubMenu(new CommandMenuNode(
+                        "开始注册",
+                        "开始注册所有账号...",
+                        this::registerAllAccount
+                ));
     }
 
     /**
-     * 构建command菜单
+     * 获取token
      *
-     * @return 主菜单节点
+     * @return CommandMenuNode
      */
-    protected abstract CommandMenuNode buildMenuNode();
-
+    private CommandMenuNode buildQueryTokenMenuNode() {
+        return new CommandMenuNode("获取token", "开始获取所有账号token...", this::loadAllAccountToken);
+    }
 
     /**
      * 构建查看代理列表的菜单节点
@@ -175,306 +791,990 @@ public abstract class CommandLineDepinBot {
     private CommandMenuNode buildProxyListMenuNode() {
         return new CommandMenuNode(
                 "查看代理列表",
-                "当前代理列表文件:" + proxyPool.getConfigClassPath(),
-                proxyPool::printPool
-        );
+                "当前代理列表文件:" + getProxyPool().getConfigClassPath(),
+                getProxyPool()::printPool
+        ).addSubMenu(REFRESH_NODE);
     }
 
     /**
-     * 构建查看代理列表的菜单节点
+     * 构建查看浏览器环境列表的菜单节点
      *
-     * @return 查看代理列表菜单节点
+     * @return 查看浏览器环境列表菜单节点
      */
     private CommandMenuNode buildBrowserListMenuNode() {
         return new CommandMenuNode(
                 "查看浏览器环境列表",
-                "当前代理列表文件:" + browserEnvPool.getConfigClassPath(),
-                browserEnvPool::printPool
-        );
+                "当前代理列表文件:" + getBrowserEnvPool().getConfigClassPath(),
+                getBrowserEnvPool()::printPool
+        ).addSubMenu(REFRESH_NODE);
     }
 
     /**
      * 账户列表菜单节点
      *
-     * @return 账户列表
+     * @return 账户列表节点
      */
     private CommandMenuNode buildAccountListMenuNode() {
-        return new CommandMenuNode(
+        CommandMenuNode accountListMenuNode = new CommandMenuNode(
                 "查看账号",
-                "当前账户详情:" + browserEnvPool.getConfigClassPath(),
-                accountContextManager::printAccountList
+                "当前账户详情列表:",
+                this::printAccountList
         );
+
+        return accountListMenuNode
+                .addSubMenu(buildAccountRewardMenuNode())
+                .addSubMenu(REFRESH_NODE);
     }
 
-    private CommandMenuNode buildStartAccountClimMenuNode() {
+    /**
+     * 查看账户收益菜单节点
+     *
+     * @return 账户收益节点
+     */
+    private CommandMenuNode buildAccountRewardMenuNode() {
         return new CommandMenuNode(
+                "查看账号收益",
+                "账号收益详情列表:",
+                this::printAccountReward
+        ).addSubMenu(REFRESH_NODE);
+    }
+
+    /**
+     * 开始账户连接菜单节点
+     *
+     * @return 连接账户菜单节点
+     */
+    private CommandMenuNode buildStartAccountConnectMenuNode() {
+        CommandMenuNode menuNode = new CommandMenuNode(
                 "启动账号",
-                "账号启动完毕，列表：",
-                () -> {
-                    try {
-                        startAccountDepinClient().get();
-                    } catch (InterruptedException | ExecutionException e) {
-                        throw new RuntimeException(e);
+                "启动账号界面，",
+                this::startAccountsDepin
+        );
+
+        CommandMenuNode refresh = new CommandMenuNode(true, "刷新", "当前账户列表",
+                this::printAccountList);
+
+        menuNode.addSubMenu(refresh);
+        return menuNode;
+    }
+
+    /**
+     * 注册所有账号
+     *
+     * @return String
+     */
+    private String registerAllAccount() {
+        CompletableFuture.supplyAsync(() -> {
+            List<CompletableFuture<Boolean>> futures = getAccounts().stream()
+                    .map(account -> {
+                        // 账户注册过，
+                        if (BooleanUtil.isTrue(account.getClientAccount().getSignUp())) {
+                            log.warn("账户[{}]-email[{}]注册过", account.getName(), account.getClientAccount().getEmail());
+                            return CompletableFuture.completedFuture(false);
+                        } else {
+                            return registerAccount(account, botConfig.getConfig(INVITE_CODE_KEY));
+                        }
+                    }).toList();
+
+            int successCount = 0;
+            for (int i = 0; i < futures.size(); i++) {
+                CompletableFuture<Boolean> future = futures.get(i);
+                AccountContext accountContext = getAccounts().get(i);
+                try {
+                    if (future.get()) {
+                        //注册成功
+                        successCount++;
+                        accountContext.getClientAccount().setSignUp(true);
                     }
-                    return "";
+                } catch (InterruptedException | ExecutionException e) {
+                    log.error("注册账号[{}]发生错误, {}", accountContext.getName(), e.getMessage());
                 }
+            }
+
+            return String.format("所有账号注册完毕，[%d/%d]", successCount, getAccounts().size());
+        }, getExecutorService());
+
+        return "已开始账户注册";
+    }
+
+    /**
+     * 获取账号的token
+     *
+     * @return String
+     */
+    public String loadAllAccountToken() {
+        List<CompletableFuture<String>> futures = getAccounts().stream()
+                .map(this::requestTokenOfAccount).toList();
+
+        int successCount = 0;
+        for (int i = 0; i < futures.size(); i++) {
+            CompletableFuture<String> future = futures.get(i);
+            AccountContext accountContext = getAccounts().get(i);
+            try {
+                String token = future.get();
+                if (StrUtil.isNotBlank(token)) {
+                    successCount++;
+                    accountContext.getParams().put("token", token);
+                }
+            } catch (InterruptedException | ExecutionException e) {
+                log.error("账号[{}]获取token发生错误, {}", accountContext.getName(), e.getMessage());
+            }
+        }
+
+        return String.format("所有账号获取token完毕，[%d/%d]", successCount, getAccounts().size());
+    }
+
+
+    /**
+     * 开始所有账户的连接
+     *
+     * @return String 打印的消息
+     */
+    private String startAccountsDepin() {
+        if (isStartAccountConnected.compareAndSet(false, true)) {
+            connectAllAccount()
+                    .exceptionally(throwable -> {
+                        log.error("开始所有账户连接时发生异常", throwable);
+                        return null;
+                    });
+            return "已开始账号链接任务";
+        }
+
+        return "已提交过建立连接任务";
+    }
+
+    /**
+     * 打印当前的邀请码
+     *
+     * @return 邀请码
+     */
+    private String printCurrentInvite() {
+        String inviteCode = botConfig.getConfigMap().get("inviteCode");
+        return "(当前邀请码为:" + inviteCode + ")";
+    }
+
+    /**
+     * 添加自定义菜单节点, defaultMenuTypes中可额外添加菜单类型
+     *
+     * @param defaultMenuTypes defaultMenuTypes
+     * @param mainMenu         mainMenu
+     */
+    protected abstract void addCustomMenuNode(List<DefaultMenuType> defaultMenuTypes, CommandMenuNode mainMenu);
+
+    /**
+     * 注册账户
+     *
+     * @param accountContext accountContext
+     * @param inviteCode     inviteCode
+     * @return CompletableFuture<Boolean> 是否注册成功
+     */
+    protected abstract CompletableFuture<Boolean> registerAccount(AccountContext accountContext, String inviteCode);
+
+    /**
+     * 请求获取账户token
+     *
+     * @param accountContext accountContext
+     * @return CompletableFuture<String> token
+     */
+    protected abstract CompletableFuture<String> requestTokenOfAccount(AccountContext accountContext);
+
+    /**
+     * 连接所有账户
+     *
+     * @return CompletableFuture<Void>
+     */
+    protected abstract CompletableFuture<Void> connectAllAccount();
+
+
+    @Override
+    public BaseDepinWSClient<JSONObject, JSONObject> buildAccountWSClient(AccountContext accountContext) {
+        return null;
+    }
+
+    @Override
+    public void whenAccountConnected(BaseDepinWSClient<JSONObject, JSONObject> depinWSClient, Boolean success) {
+
+    }
+
+    @Override
+    public void whenAccountReceiveResponse(BaseDepinWSClient<JSONObject, JSONObject> depinWSClient, String id, JSONObject response) {
+
+    }
+
+    @Override
+    public void whenAccountReceiveMessage(BaseDepinWSClient<JSONObject, JSONObject> depinWSClient, JSONObject message) {
+
+    }
+
+    @Override
+    public JSONObject getHeartbeatMessage(BaseDepinWSClient<JSONObject, JSONObject> depinWSClient) {
+        return null;
+    }
+}
+package cn.com.helei.DepinBot.core.commandMenu;
+
+public enum DefaultMenuType {
+
+    REGISTER,
+    LOGIN,
+    ACCOUNT_LIST,
+    PROXY_LIST,
+    BROWSER_ENV_LIST,
+    START_ACCOUNT_CLAIM
+}
+package cn.com.helei.DepinBot.core.exception;
+
+public class RewardQueryException extends RuntimeException{
+
+    // 默认构造函数
+    public RewardQueryException() {
+        super("Account reward query failed.");
+    }
+
+    // 传入错误信息的构造函数
+    public RewardQueryException(String message) {
+        super(message);
+    }
+
+    // 传入错误信息和异常原因的构造函数
+    public RewardQueryException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
+    // 传入异常原因的构造函数
+    public RewardQueryException(Throwable cause) {
+        super(cause);
+    }
+}
+package cn.com.helei.DepinBot.core.pool.account;
+
+import cn.com.helei.DepinBot.core.pool.AbstractYamlLinePool;
+
+public class AccountPool extends AbstractYamlLinePool<DepinClientAccount> {
+
+    public AccountPool() {
+        super(DepinClientAccount.class);
+    }
+
+
+    public static AccountPool getDefault() {
+        return loadYamlPool(
+                "config/bot/account.yaml",
+                "bot.account",
+                AccountPool.class
         );
     }
 
-    public CompletableFuture<Void> startAccountDepinClient() {
-        return CompletableFuture.runAsync(()->{
+    public static void main(String[] args) {
+        AccountPool aDefault = getDefault();
+        System.out.println(aDefault.printPool());
+    }
+}
+package cn.com.helei.DepinBot.core.pool.env;
 
+import cn.com.helei.DepinBot.core.pool.AbstractYamlLineItem;
+import lombok.Getter;
+import lombok.Setter;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Getter
+@Setter
+public class BrowserEnv extends AbstractYamlLineItem {
+
+    private Map<String, String> headers;
+
+    public BrowserEnv(Object originLine) {
+        Map<String, String> map = (Map<String, String>) originLine;
+        if (map != null) {
+            headers = new HashMap<>(map);
+        }
+    }
+
+    public BrowserEnv() {
+            this.headers = new HashMap<>();
+    }
+
+    public Map<String, String> getHeaders() {
+        if (headers == null) return new HashMap<>();
+        return new HashMap<>(headers);
+    }
+}
+
+package cn.com.helei.DepinBot.core.supporter.persistence;
+
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeInvocation;
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenClass;
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenField;
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeProxy;
+import cn.com.helei.DepinBot.core.util.DiscardingBlockingQueue;
+import cn.com.helei.DepinBot.core.util.FileUtil;
+import com.alibaba.fastjson.JSONObject;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.*;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.function.Function;
+import java.util.stream.Stream;
+
+
+@Slf4j
+public class AccountPersistenceManager {
+
+    private static final String PERSISTENCE_PATH = "persistence/accounts";
+
+    private static final String PERSISTENCE_ACCOUNT_PATTERN = "account-%d.json";
+
+    private static final int PERSISTENCE_CACHE_SIZE = 3;
+
+    private final String botName;
+
+    /**
+     * 监听的对象 -》 该对象的root
+     */
+    private final ConcurrentMap<Object, Object> listenedObjRootMap = new ConcurrentHashMap<>();
+
+    private final ConcurrentMap<Object, Object> originRoot2ProxyMap = new ConcurrentHashMap<>();
+
+    /**
+     * root更新队列
+     */
+    private final ConcurrentMap<Object, DiscardingBlockingQueue<String>> rootUpdateQueueMap = new ConcurrentHashMap<>();
+
+    /**
+     * root -> dumpPath
+     */
+    private final ConcurrentMap<Object, String> rootDumpPathMap = new ConcurrentHashMap<>();
+
+    /**
+     * dump数据
+     */
+    private final DumpDataSupporter dumpDataSupporter = new DumpDataSupporter();
+
+    public AccountPersistenceManager(String botName) {
+        this.botName = botName;
+    }
+
+
+    public void init() {
+        dumpDataSupporter.startDumpTask();
+    }
+
+    /**
+     * 持久化保存accountContexts
+     *
+     * @param accountContexts accountContexts
+     */
+    public synchronized void persistenceAccountContexts(List<AccountContext> accountContexts) throws IOException {
+        Path path = Paths.get(getPersistencePath(PERSISTENCE_PATH));
+        if (!Files.exists(path)) Files.createDirectories(path);
+
+        for (AccountContext accountContext : accountContexts) {
+            String fileName = String.format(PERSISTENCE_ACCOUNT_PATTERN, accountContext.getClientAccount().getId());
+
+            saveAccountContext(accountContext, path, fileName);
+        }
+    }
+
+
+    /**
+     * 加载账户上下文
+     *
+     * @return PersistenceDto
+     */
+    public synchronized Map<Integer, AccountContext> loadAccountContexts() {
+        Path path = Paths.get(getPersistencePath(PERSISTENCE_PATH));
+
+        if (!Files.exists(path)) return null;
+
+        Map<Integer, AccountContext> map = new HashMap<>();
+
+        try (Stream<Path> walk = Files.walk(path);) {
+
+            for (Path filePath : walk.filter(Files::isRegularFile)
+                    .filter(p -> p.toString().contains("account-")).toList()) {
+
+                Integer idx = Integer.valueOf(filePath.toString()
+                        .split("account-")[1].split(".json")[0]);
+
+                try (BufferedReader reader = new BufferedReader(new FileReader(filePath.toFile()));) {
+                    String line = null;
+                    StringBuilder sb = new StringBuilder();
+                    while ((line = reader.readLine()) != null) {
+                        sb.append(line);
+                    }
+
+                    map.put(idx, JSONObject.parseObject(sb.toString(), AccountContext.class));
+                }
+            }
+
+            return map;
+        } catch (Exception e) {
+            throw new RuntimeException("读取账户文件失败", e);
+        }
+    }
+
+
+    /**
+     * 注册持久化监听
+     *
+     * @param targetList targetList
+     * @param <T>        targetType
+     */
+    public <T> void registerPersistenceListener(List<T> targetList, Function<T, String> getSavePath) {
+        targetList.replaceAll(target -> bindPersistenceAnnoListener(target, getSavePath.apply(target)));
+    }
+
+    /**
+     * 对象属性添加变化监听
+     *
+     * @param target target 目标对象
+     * @param <T>    T
+     * @return 添加监听后被动态代理的对象
+     */
+    public <T> T bindPersistenceAnnoListener(T target, String savePath) {
+        rootDumpPathMap.put(target, savePath);
+        return doBindPersistenceAnnoListener(target, target);
+    }
+
+
+    /**
+     * 对象属性添加变化监听
+     *
+     * @param target target 目标对象
+     * @param <T>    T
+     * @return 添加监听后被动态代理的对象
+     */
+    private <T> T doBindPersistenceAnnoListener(T target, Object rootObj) {
+        if (target == null) return null;
+
+        Class<?> targetClass = target.getClass();
+
+        PropertyChangeListenClass propertyChangeListenClass = targetClass.getAnnotation(PropertyChangeListenClass.class);
+
+        // 类上带有PersistenceClass注解，表示可以的类
+        if (propertyChangeListenClass == null) {
+            return target;
+        }
+
+        T proxy = PropertyChangeProxy.createProxy(target, this::propertyChangeHandler);
+
+        // 深度监听，还要给监听的字段对象内的属性监听
+        if (propertyChangeListenClass.isDeep()) {
+
+            for (Field field : targetClass.getDeclaredFields()) {
+                field.setAccessible(true);
+                // 字段上带有PersistenceField注解，表示可以的字段， 字段类型上带有PersistenceClass，还要监听字段对象的属性
+                if (field.isAnnotationPresent(PropertyChangeListenField.class)
+                        && field.getType().isAnnotationPresent(PropertyChangeListenClass.class)) {
+                    try {
+                        Object fieldValue = field.get(target);
+                        Object filedProxy = doBindPersistenceAnnoListener(fieldValue, rootObj);
+
+                        field.set(target, filedProxy);
+                    } catch (IllegalAccessException e) {
+                        throw new RuntimeException("访问字段失败", e);
+                    }
+                }
+            }
+        }
+
+        listenedObjRootMap.put(target, rootObj);
+
+        if (target.equals(rootObj)) {
+            originRoot2ProxyMap.put(rootObj, proxy);
+        }
+
+        return proxy;
+    }
+
+    /**
+     * 获取账户持久化路径
+     *
+     * @param accountContext accountContext
+     * @return path
+     */
+    public static String getAccountContextPersistencePath(AccountContext accountContext) {
+        Path path = Paths.get(getPersistencePath(PERSISTENCE_PATH));
+        String fileName = String.format(PERSISTENCE_ACCOUNT_PATTERN, accountContext.getClientAccount().getId());
+
+        return Paths.get(path.toString(), fileName).toString();
+    }
+
+    /**
+     * 属性改变后触发
+     *
+     * @param invocation invocation
+     */
+    private void propertyChangeHandler(PropertyChangeInvocation invocation) {
+        // 找到root，更新后的root放入队列
+        Object root = listenedObjRootMap.get(invocation.getTarget());
+        Object rootProxy = originRoot2ProxyMap.get(root);
+
+        rootUpdateQueueMap.compute(root, (k, v) -> {
+            log.info("目标[{}] 属性改变了:{},{}->{} [{}]", root.hashCode(), invocation.getPropertyName(),
+                    invocation.getOldValue(), invocation.getNewValue(), invocation.getTimestamp());
+
+            if (v == null) {
+                v = new DiscardingBlockingQueue<>(PERSISTENCE_CACHE_SIZE);
+
+                dumpDataSupporter.bindUpdateQueue(rootDumpPathMap.get(root), v);
+            }
+
+            try {
+                v.put(JSONObject.toJSONString(rootProxy));
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+            return v;
         });
     }
 
-    /**
-     * 退出回调
-     */
-    public void exitHandler() {
-    }
 
     /**
-     * 获取当前菜单打印的字符串
+     * 保存账户
      *
-     * @param currentMenuNode currentMenuNode
+     * @param accountContext accountContext
+     * @param path           accountContext
+     * @param fileName       fileName
+     */
+    private static void saveAccountContext(AccountContext accountContext, Path path, String fileName) {
+        FileUtil.saveJSONStringContext(Path.of(path.toString(), fileName), JSONObject.toJSONString(accountContext));
+    }
+
+
+    /**
+     * 获取持久化路径， 项目根目录开始
+     *
+     * @param subPath subPath
      * @return String
      */
-    public String getMenuNodePrintStr(CommandMenuNode currentMenuNode) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(currentMenuNode.getDescribe()).append("\n");
-
-        if (currentMenuNode.getAction() != null) {
-            sb.append(currentMenuNode.getAction().get()).append("\n");
-        }
-
-        sb.append("选项:\n");
-        List<CommandMenuNode> menuNodeList = currentMenuNode.getSubNodeList();
-        for (int i = 0; i < menuNodeList.size(); i++) {
-            sb.append(i + 1).append(". ").append(menuNodeList.get(i).getTittle()).append("\n");
-        }
-
-        sb.append("0. 返回上一级菜单\n");
-
-        return sb.toString();
+    private static String getPersistencePath(String subPath) {
+        return FileUtil.RESOURCE_ROOT_DIR + File.separator + subPath;
     }
 }
+package cn.com.helei.DepinBot.core.util;
 
-depin:
-  openledger:
-    browserEnvPoolConfig: browser-env.yaml
-    networkPoolConfig: network-proxy.yaml
-
-    wsBaseUrl: wss://apitn.openledger.xyz/ws/v1/orch
-    origin: chrome-extension://ekbbplmjjgoobhdlffmgeokalelnmjjc
-    openLedgerAccounts:
-      - name: 914577981@qq.com
-        token: 123
-        proxyId: 1
-        browserEnvId: 1
-
-
-depin:
-  browser:
-    envs:
-      - id: 1
-        headers:
-          User-Agent:
-          Cache-Control:  no-cache
-          Accept-Language: zh-CN,zh;q=0.9,en;q=0.8
-
-
-depin:
-  network:
-    proxy:
-      pool:
-        - id: 1
-          host: 172.0.0.1
-          port: 12135
-          username: 12321
-          password: 412312
-        - id: 2
-          host: 172.0.0.2
-          port: 12135
-          username: 12321
-          password: 412312
-        - id: 3
-          host: 172.0.0.3
-          port: 12135
-          username: 12321
-          password: 412312
-        - id: 4
-          host: 172.0.0.3
-          port: 12135
-          username: 12321
-          password: 412312
-
-
-package cn.com.helei.depin.depin;
-
-import cn.com.helei.depin.app.openLedger.OpenLedgerConfig;
-import cn.com.helei.depin.core.CommandLineDepinBot;
-import cn.com.helei.depin.core.command.CommandMenuNode;
-import org.junit.jupiter.api.Test;
+import cn.com.helei.DepinBot.core.dto.system.CpuInfo;
+import cn.com.helei.DepinBot.core.dto.system.GpuInfo;
+import cn.com.helei.DepinBot.core.dto.system.MemoryInfo;
+import cn.com.helei.DepinBot.core.pool.network.NetworkProxyPool;
+import lombok.Data;
+import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.security.SecureRandom;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 
-class CommandLineDepinBotTest {
+@Data
+public class SystemInfo {
+
+    public final static SystemInfo INSTANCE;
+
+    private static final String RANDOM_ID_TYPE1 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+    private static final List<String> features = List.of("mmx", "sse", "sse2", "sse3", "ssse3", "sse4_1", "sse4_2", "avx");
+
+    private static final List<Integer> processorCount = List.of(4, 8, 16, 32);
+
+    private static final SecureRandom random = new SecureRandom();
+
+    private List<String> cpuModelNames;
+
+    private List<String> renderers;
+
+    private List<String> vendors;
+
+    private List<String> osList;
+
+    static {
+        INSTANCE = loadFromYaml("system-info.yaml");
+    }
+
+    /**
+     * 获取随机id
+     *
+     * @param length length
+     * @return String
+     */
+    public String getRandomId(int length) {
+        StringBuilder result = new StringBuilder();
+
+        for (int i = 0; i < length; i++) {
+            result.append(RANDOM_ID_TYPE1.charAt(random.nextInt(RANDOM_ID_TYPE1.length())));
+        }
+
+        return result.toString();
+    }
 
 
-    @Test
-    public void testMenu() throws IOException, InterruptedException {
-        CommandLineDepinBot commandLineDepinBot = new CommandLineDepinBot(OpenLedgerConfig.loadYamlConfig("app/openledger.yaml")) {
+    /**
+     * 随机cpu信息
+     *
+     * @return CpuInfo
+     */
+    public CpuInfo generateRandomCpuInfo() {
+        Integer processor = processorCount.get(random.nextInt(processorCount.size()));
 
-            @Override
-            protected CommandMenuNode buildMenuNode() {
-                CommandMenuNode menuNode = new CommandMenuNode("主菜单", "这是主菜单，请选择", null);
-                CommandMenuNode menuNodeA = new CommandMenuNode("子菜单A", "这是子菜单A，请选择", null);
-                CommandMenuNode menuNodeB = new CommandMenuNode("子菜单B", "这是子菜单B，请选择", null);
+        List<CpuInfo.CpuProcessor> cpuProcessors = new ArrayList<>();
+        for (int i = 0; i < processor; i++) {
+            CpuInfo.CpuProcessor e = new CpuInfo.CpuProcessor();
+            e.setUsage(
+                    Math.floor(Math.random() * 2000000000000L),
+                    Math.floor(Math.random() * 10000000000L),
+                    Math.floor(Math.random() * 2000000000000L),
+                    Math.floor(Math.random() * 50000000000L)
+            );
+            cpuProcessors.add(e);
+        }
 
-                menuNodeA.addSubMenu(new CommandMenuNode("子菜单A-1", "这是子菜单A-1，请选择", ()->"haha进入了A-1"));
-                menuNodeA.addSubMenu(new CommandMenuNode("子菜单A-2", "这是子菜单A-2，请选择", ()->"haha进入了A-2"));
+        return CpuInfo.builder()
+                .archName("x86_64")
+                .features(features)
+                .modelName(cpuModelNames.get(random.nextInt(cpuModelNames.size())))
+                .numOfProcessors(processor)
+                .cpuProcessors(cpuProcessors)
+                .temperatures(List.of())
+                .build();
+    }
 
-                menuNodeB.addSubMenu(new CommandMenuNode("子菜单B-1", "这是子菜单B-1，请选择", null));
-                menuNodeB.addSubMenu(new CommandMenuNode("子菜单B-2", "这是子菜单B-2，请选择", null));
 
-                menuNode.addSubMenu(menuNodeA);
-                menuNode.addSubMenu(menuNodeB);
+    /**
+     * 随机GPU信息
+     *
+     * @return GpuInfo
+     */
+    public GpuInfo generateRandomGpuInfo() {
+        return GpuInfo
+                .builder()
+                .renderer(renderers.get(random.nextInt(renderers.size())))
+                .vendor(vendors.get(random.nextInt(vendors.size())))
+                .build();
+    }
 
-                return menuNode;
-            }
-        };
+    /**
+     * 随机操作系统信息
+     *
+     * @return os
+     */
+    public String generateRandomOperatingSystem() {
+        return osList.get(random.nextInt(osList.size()));
+    }
 
-        commandLineDepinBot.start();
+    /**
+     * 随机内存信息
+     *
+     * @return JSONObject
+     */
+    public MemoryInfo generateRandomMemoryInfo() {
+        return MemoryInfo
+                .builder()
+                .availableCapacity((long) (Math.floor(Math.random() * 1000000000) + 1000000000))
+                .capacity((long) (Math.floor(Math.random() * 1000000000) + 2000000000))
+                .build();
+    }
+
+    public static SystemInfo loadFromYaml(String classpath) {
+        Yaml yaml = new Yaml();
+        try (InputStream inputStream = NetworkProxyPool.class.getClassLoader().getResourceAsStream(classpath)) {
+            Map<String, Object> yamlData = yaml.load(inputStream);
+            Map<String, Object> bot = (Map<String, Object>) yamlData.get("config/bot");
+            Map<String, Object> system = (Map<String, Object>) bot.get("system");
+
+            return yaml.loadAs(yaml.dump(system), SystemInfo.class);
+        } catch (IOException e) {
+            throw new RuntimeException(String.format("价值配置网络代理池文件[%s]发生错误", classpath));
+        }
+    }
+
+
+    public static void main(String[] args) {
+        CpuInfo x = INSTANCE.generateRandomCpuInfo();
+        System.out.println(x);
+        System.out.println(INSTANCE.generateRandomGpuInfo());
     }
 }
+package cn.com.helei.DepinBot.core.util;
+
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+public class YamlConfigLoadUtil {
+
+    private static final ConcurrentHashMap<String, Object> LOADED_CONFIG_MAP = new ConcurrentHashMap<>();
+
+    public static <T> T load(
+            List<String> path,
+            String fileName,
+            List<String> prefixList,
+            Class<T> clazz
+    ) {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(path, fileName);
+
+        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
+            if (config == null) {
+                Yaml yaml = new Yaml();
+                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
+                    Map<String, Object> yamlData = yaml.load(inputStream);
+
+                    if (prefixList != null) {
+                        for (String prefix : prefixList) {
+                            yamlData = (Map<String, Object>) yamlData.get(prefix);
+                        }
+                    }
+
+                    config = yaml.loadAs(yaml.dump(yamlData), clazz);
+                } catch (IOException e) {
+                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
+                }
+            }
+
+            return config;
+        });
+
+        return (T) compute;
+    }
+}
+package cn.com.helei.DepinBot.core;
 
 
-<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
+import lombok.Data;
 
-    <groupId>com.helei</groupId>
-    <artifactId>depin-bot</artifactId>
-    <version>1.0-SNAPSHOT</version>
+import java.util.HashMap;
+import java.util.Map;
 
+@Data
+public class BaseDepinBotConfig {
 
-    <properties>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
-        <java.version>21</java.version>
-        <netty.version>4.1.100.Final</netty.version>
-        <gsonn.version>2.9.1</gsonn.version>
-        <guava.version>19.0</guava.version>
-        <lombok.version>1.18.30</lombok.version>
-        <protostuff.version>1.7.2</protostuff.version>
-        <flink.version>1.20.0</flink.version>
-        <scala.version>2.12</scala.version>
-        <hutool.version>5.8.21</hutool.version>
-        <mapstruct.version>1.6.0</mapstruct.version>
-        <slf4j.version>2.0.4</slf4j.version>
-        <springboot.version>3.2.0</springboot.version>
-        <snakeyaml.version>2.2</snakeyaml.version>
-        <mapstruct.version>1.6.0</mapstruct.version>
-        <junit.version>5.9.1</junit.version>
-        <okhttp.version>4.11.0</okhttp.version>
-        <logback.version>1.3.7</logback.version>
-    </properties>
+    /**
+     * 名字
+     */
+    private String name = "Default Name";
+
+    /**
+     * 并发数量
+     */
+    private int concurrentCount = 5;
 
 
-    <dependencies>
+    /**
+     * 是否开启账户收益自动刷新
+     */
+    private boolean isAccountRewardAutoRefresh = false;
 
-        <dependency>
-            <groupId>com.jakewharton.fliptables</groupId>
-            <artifactId>fliptables</artifactId>
-            <version>1.0.0</version>
-        </dependency>
+    /**
+     * 账户奖励刷新间隔
+     */
+    private long accountRewardRefreshIntervalSeconds = 600;
 
-        <dependency>
-            <groupId>org.jline</groupId>
-            <artifactId>jline</artifactId>
-            <version>3.2.0</version>
-        </dependency>
+    /**
+     * 网络代理池配置文件名
+     */
+    private String networkPoolConfig = "network-proxy.yaml";
 
-        <dependency>
-            <groupId>com.alibaba</groupId>
-            <artifactId>fastjson</artifactId>
-            <version>1.2.83</version>
-        </dependency>
+    /**
+     * 浏览器环境池配置文件名
+     */
+    private String browserEnvPoolConfig = "browser-env.yaml";
 
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-dependencies</artifactId>
-            <version>${springboot.version}</version>
-            <type>pom</type>
-            <scope>import</scope>
-        </dependency>
+    /**
+     * 账户配置文件名
+     */
+    private String accountPoolConfig = "account.yaml";
 
-        <dependency>
-            <groupId>io.netty</groupId>
-            <artifactId>netty-all</artifactId>
-            <version>${netty.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.projectlombok</groupId>
-            <artifactId>lombok</artifactId>
-            <version>${lombok.version}</version>
-        </dependency>
+    /**
+     * 连接url
+     */
+    private String wsBaseUrl;
 
-        <dependency>
-            <groupId>io.protostuff</groupId>
-            <artifactId>protostuff-core</artifactId>
-            <version>${protostuff.version}</version>
-        </dependency>
 
-        <dependency>
-            <groupId>io.protostuff</groupId>
-            <artifactId>protostuff-runtime</artifactId>
-            <version>${protostuff.version}</version>
-        </dependency>
+    private Map<String, String> configMap = new HashMap<>();
 
-        <dependency>
-            <groupId>cn.hutool</groupId>
-            <artifactId>hutool-all</artifactId>
-            <version>${hutool.version}</version>
-        </dependency>
+    public String getConfig(String key) {
+        return configMap.get(key);
+    }
 
-        <dependency>
-            <groupId>org.yaml</groupId>
-            <artifactId>snakeyaml</artifactId>
-            <version>${snakeyaml.version}</version>
-        </dependency>
+    public void setConfig(String key, String value) {
+        this.configMap.put(key, value);
+    }
+}
+package cn.com.helei.DepinBot.depined;
 
-        <dependency>
-            <groupId>org.mapstruct</groupId>
-            <artifactId>mapstruct</artifactId>
-            <version>${mapstruct.version}</version>
-        </dependency>
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import cn.com.helei.DepinBot.core.pool.account.DepinClientAccount;
+import cn.com.helei.DepinBot.core.pool.env.BrowserEnv;
+import cn.com.helei.DepinBot.core.exception.RegisterException;
+import cn.com.helei.DepinBot.core.pool.network.NetworkProxy;
+import cn.com.helei.DepinBot.core.util.RestApiClient;
+import cn.com.helei.DepinBot.core.util.RestApiClientFactory;
+import com.alibaba.fastjson.JSONObject;
+import io.netty.handler.codec.http.DefaultHttpHeaders;
+import io.netty.handler.codec.http.HttpHeaders;
 
-        <dependency>
-            <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <version>5.9.1</version>
-            <scope>${junit.version}</scope>
-        </dependency>
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
-        <dependency>
-            <groupId>com.squareup.okhttp3</groupId>
-            <artifactId>okhttp</artifactId>
-            <version>${okhttp.version}</version>
-        </dependency>
+public class DepinedApi {
 
-        <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-classic</artifactId>
-            <version>${logback.version}</version>
-        </dependency>
-    </dependencies>
+    private final DepinedDepinBot  depinedBot;
 
-    <build>
-        <plugins>
-        </plugins>
-    </build>
-</project>
+    public DepinedApi(DepinedDepinBot depinedBot) {
+        this.depinedBot = depinedBot;
+    }
+
+    public CompletableFuture<Void> register(NetworkProxy proxy, AccountContext accountContext) {
+        DepinClientAccount clientAccount = accountContext.getClientAccount();
+        JSONObject body = new JSONObject();
+        body.put("email", clientAccount.getEmail());
+        body.put("password", clientAccount.getPassword());
+
+        BrowserEnv browserEnv = accountContext.getBrowserEnv();
+
+
+        Map<String, String> headers = new HashMap<>(browserEnv.getHeaders());
+        headers.put("content-type", "application/json");
+        headers.put("origin", "https://app.depined.org");
+        headers.put("referer", "https://app.depined.org/");
+        headers.put("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36");
+
+
+        return getRestApiClient(proxy)
+                .request("https://api.depined.org/api/user/register", "POST", headers, null, body)
+                .thenAcceptAsync(res -> {
+                    // 注册获得token
+                    JSONObject result = JSONObject.parseObject(res);
+
+                    if (result.getBoolean("status")) {
+                        JSONObject data = result.getJSONObject("data");
+                        accountContext.setParam("token", data.getString("token"));
+                        accountContext.setParam("user_id", data.getString("user_id"));
+
+                    } else {
+                        throw new RegisterException(String.format("账户[%s]注册失败，[%s]", accountContext.getName(), res));
+                    }
+                }).thenRunAsync(() -> {
+                    //设置用户名
+                    try {
+                        setUsername(proxy, accountContext).get();
+                    } catch (InterruptedException | ExecutionException e) {
+                        throw new RegisterException(String.format("账户[%s]注册失败，[%s]", accountContext.getName(), e.getMessage()));
+                    }
+                }).thenRunAsync(()->{
+                    //设置Rendering
+
+
+                });
+
+    }
+
+
+    public CompletableFuture<Void> setUsername(NetworkProxy proxy, AccountContext accountContext) {
+        String token = accountContext.getParam("token");
+        String username = accountContext.getClientAccount().getEmail().split("@")[0];
+
+        JSONObject body = new JSONObject();
+
+        body.put("username", username);
+        body.put("step", "username");
+
+        BrowserEnv browserEnv = accountContext.getBrowserEnv();
+        Map<String, String> headers = new HashMap<>(browserEnv.getHeaders());
+
+        headers.put("content-type", "application/json");
+        headers.put("origin", "https://app.depined.org");
+        headers.put("referer", "https://app.depined.org/");
+        headers.put("authorization", "Bearer " + token);
+
+        return getRestApiClient(proxy)
+                .request("https://api.depined.org/api/user/profile-creation", "POST", headers, null, body)
+                .thenAcceptAsync(res -> {
+                    // 注册获得token
+                    JSONObject result = JSONObject.parseObject(res);
+
+                    if (!result.getBoolean("status")) {
+                        throw new RegisterException(String.format("账户[%s]设置用户名失败，[%s]", accountContext.getName(), res));
+                    }
+                });
+    }
+
+    public CompletableFuture<Void> setRendering(NetworkProxy proxy, AccountContext accountContext) {
+        String token = accountContext.getParam("token");
+        JSONObject body = new JSONObject();
+
+        body.put("step", "description");
+        body.put("description", "Rendering");
+
+        BrowserEnv browserEnv = accountContext.getBrowserEnv();
+        Map<String, String> headers = new HashMap<>(browserEnv.getHeaders());
+
+        headers.put("content-type", "application/json");
+        headers.put("origin", "https://app.depined.org");
+        headers.put("referer", "https://app.depined.org/");
+        headers.put("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36");
+        headers.put("authorization", "Bearer " + token);
+
+        return getRestApiClient(proxy)
+                .request("https://api.depined.org/api/user/profile-creation", "POST", headers, null, body)
+                .thenAcceptAsync(res -> {
+                    // 注册获得token
+                    JSONObject result = JSONObject.parseObject(res);
+
+                    if (!result.getBoolean("status")) {
+                        throw new RegisterException(String.format("账户[%s]设置Rendering失败，[%s]", accountContext.getName(), res));
+                    }
+                });
+    }
+
+    public CompletableFuture<Void> setReferral(NetworkProxy proxy, AccountContext accountContext) {
+        String token = accountContext.getParam("token");
+        JSONObject body = new JSONObject();
+
+//        body.put("referral_code", );
+
+        BrowserEnv browserEnv = accountContext.getBrowserEnv();
+        Map<String, String> headers = new HashMap<>(browserEnv.getHeaders());
+
+        headers.put("content-type", "application/json");
+        headers.put("origin", "https://app.depined.org");
+        headers.put("referer", "https://app.depined.org/");
+        headers.put("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36");
+        headers.put("authorization", "Bearer " + token);
+
+        return getRestApiClient(proxy)
+                .request("https://api.depined.org/api/user/profile-creation", "POST", headers, null, body)
+                .thenAcceptAsync(res -> {
+                    // 注册获得token
+                    JSONObject result = JSONObject.parseObject(res);
+
+                    if (!result.getBoolean("status")) {
+                        throw new RegisterException(String.format("账户[%s]设置Rendering失败，[%s]", accountContext.getName(), res));
+                    }
+                });
+    }
+    private RestApiClient getRestApiClient(NetworkProxy networkProxy) {
+        return RestApiClientFactory.getClient(networkProxy);
+    }
+
+}
