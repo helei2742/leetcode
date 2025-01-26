@@ -1,516 +1,1102 @@
+package cn.com.helei.DepinBot.core.netty.base;
+
+import cn.com.helei.DepinBot.core.netty.constants.NettyConstants;
+import cn.hutool.core.util.StrUtil;
+import io.netty.channel.*;
+
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 
-package com.helei.tradesignalprocess.config;
+/**
+ * WebSocket客户端处理器抽象类
+ * 能够处理请求响应类型的消息。
+ * 其它类型的消息要通过handleOtherMessage()抽象方法处理
+ *
+ * @param <Resp>
+ */
+@Slf4j
+@ChannelHandler.Sharable
+public abstract class AbstractWebSocketClientHandler<Req, Resp> extends BaseWebSocketClientHandler<Req, Resp> {
 
-import com.helei.constants.trade.TradeType;
-import com.helei.constants.RunEnv;
-import com.helei.dto.config.RunTypeConfig;
-import com.helei.dto.kafka.TradeSignalTopic;
+    /**
+     * 存放请求响应的回调
+     */
+    protected final ConcurrentMap<Object, HandlerEntity<Resp>> requestIdMap = new ConcurrentHashMap<>();
+
+
+    @Override
+    protected void whenReceiveMessage(String text) {
+        Resp message = convertMessageToRespType(text);
+
+        Object responseId = getResponseId(message);
+
+        if (responseId != null) {
+            //有id，是发送请求的响应
+            //提交response
+            handleResponseMessage(responseId, message);
+        } else {
+            //没有id，按其它格式处理
+            handleOtherMessage(message);
+        }
+    }
+
+
+    /**
+     * 注册request
+     *
+     * @param request request
+     * @return 是否注册成功
+     */
+    public boolean registryRequest(Req request, Consumer<Resp> callback) {
+        AtomicBoolean res = new AtomicBoolean(false);
+        Object requestId = getRequestId(request);
+
+        if (requestId == null) return false;
+
+        requestIdMap.compute(requestId, (k, v) -> {
+            if (v == null) {
+                res.set(true);
+                long expireTime = System.currentTimeMillis() + NettyConstants.REQUEST_WAITE_SECONDS * 1000;
+                v = new HandlerEntity<>(expireTime, callback);
+                log.debug("registry request id[{}] success, expire time [{}]", requestId, expireTime);
+            }
+            return v;
+        });
+
+        return res.get();
+    }
+
+    /**
+     * 处理请求响应的消息
+     *
+     * @param id       id
+     * @param response 响应消息体
+     */
+    protected void handleResponseMessage(Object id, Resp response) {
+        HandlerEntity<Resp> handlerEntity = requestIdMap.get(id);
+
+        if (System.currentTimeMillis() > handlerEntity.getExpireTime()) {
+            log.warn("请求[{}]得到响应超时", id);
+        } else {
+            websocketClient.callbackInvoker.execute(() -> handlerEntity.getCallback().accept(response));
+        }
+    }
+
+    /**
+     * 处理其他类型消息
+     *
+     * @param message 消息
+     */
+    protected abstract void handleOtherMessage(Resp message);
+
+
+    /**
+     * 将websocket收到的文本消息转换为响应类型 Resp
+     *
+     * @param message websocket收到的原始消息
+     * @return typedMessage
+     */
+    public abstract Resp convertMessageToRespType(String message);
+
+
+    /**
+     * 获取请求id
+     *
+     * @param request request
+     * @return id
+     */
+    public abstract Object getRequestId(Req request);
+
+    /**
+     * 获取响应id
+     *
+     * @param response 响应
+     * @return id
+     */
+    public abstract Object getResponseId(Resp response);
+}
+package cn.com.helei.DepinBot.core.netty.base;
+
+import cn.com.helei.DepinBot.core.netty.constants.NettyConstants;
+import io.netty.channel.*;
+        import io.netty.handler.codec.http.FullHttpResponse;
+import io.netty.handler.codec.http.websocketx.*;
+        import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.util.CharsetUtil;
+import lombok.extern.slf4j.Slf4j;
+
+
+/**
+ * WebSocket客户端处理器基础类
+ * 处理连接握手
+ *
+ * @param <P>
+ * @param <T>
+ */
+@Slf4j
+@ChannelHandler.Sharable
+public abstract class BaseWebSocketClientHandler<P, T> extends SimpleChannelInboundHandler<Object> {
+    private WebSocketClientHandshaker handshaker;
+
+    private ChannelPromise handshakeFuture;
+
+    protected AbstractWebsocketClient<P, T> websocketClient;
+
+    /**
+     * 收到消息处理
+     *
+     * @param text 消息字符串
+     */
+    protected abstract void whenReceiveMessage(String text);
+
+
+    public void init(WebSocketClientHandshaker handshaker) {
+        this.handshaker = handshaker;
+    }
+
+    @Override
+    public void handlerAdded(ChannelHandlerContext ctx) {
+        handshakeFuture = ctx.newPromise();
+    }
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) {
+        Channel channel = ctx.channel();
+        log.info("WebSocket Client [{}] connected!", websocketClient.getName());
+        channel.attr(NettyConstants.CLIENT_NAME).set(websocketClient.getName());
+        handshaker.handshake(channel);
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+        log.warn("WebSocket Client [{}] disconnected!, start reconnect", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
+//        websocketClient.reconnect();
+        websocketClient.close();
+    }
+
+    @Override
+    public void channelUnregistered(ChannelHandlerContext ctx) throws Exception {
+        log.warn("WebSocket Client [{}] unregistered!", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
+        websocketClient.close();
+        websocketClient.reconnect();
+    }
+
+    @Override
+    public void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
+        Channel ch = ctx.channel();
+        // 如果握手未完成，处理 FullHttpResponse
+        if (!handshaker.isHandshakeComplete()) {
+            if (msg instanceof FullHttpResponse response) {
+                try {
+                    handshaker.finishHandshake(ch, response);
+                    log.info("WebSocket client [{}] Handshake complete!", ch.attr(NettyConstants.CLIENT_NAME).get());
+                    handshakeFuture.setSuccess();
+
+                    connectCompleteHandler(ch);
+                } catch (WebSocketHandshakeException e) {
+                    log.info("WebSocket client [{}] Handshake failed!", ch.attr(NettyConstants.CLIENT_NAME).get());
+                    handshakeFuture.setFailure(e);
+                }
+                return;
+            }
+        }
+
+        if (msg instanceof FullHttpResponse response) {
+            if (response.status().code() / 100 > 3) {
+                throw new IllegalStateException(
+                        "Unexpected FullHttpResponse (getStatus=" + response.status() +
+                                ", content=" + response.content().toString(CharsetUtil.UTF_8) + ')');
+            }
+        } else if (msg instanceof WebSocketFrame frame) {
+            switch (frame) {
+                case TextWebSocketFrame textFrame -> {
+                    log.debug("websocket client [{}] 接收到的消息：{}", ch.attr(NettyConstants.CLIENT_NAME).get(), textFrame.text());
+                    whenReceiveMessage(textFrame.text());
+                }
+                case PongWebSocketFrame pongWebSocketFrame -> handlerPong(ch, pongWebSocketFrame);
+                case PingWebSocketFrame pingWebSocketFrame -> handlerPing(ch, pingWebSocketFrame);
+                case CloseWebSocketFrame closeWebSocketFrame -> handlerClose(ch, closeWebSocketFrame);
+                default -> {
+                    log.warn("channel[{}]收到位置类型的消息[{}]", ch.attr(NettyConstants.CLIENT_NAME).get(), frame.getClass().getName());
+                }
+            }
+        }
+    }
+
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        if (!handshakeFuture.isDone()) {
+            handshakeFuture.setFailure(cause);
+        }
+        ctx.close();
+        log.error("业务处理错误，websocket client关闭", cause);
+    }
+
+    @Override
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+        // IdleStateHandler 所产生的 IdleStateEvent 的处理逻辑.
+        if (evt instanceof IdleStateEvent e) {
+            switch (e.state()) {
+                case READER_IDLE:
+                    handleReaderIdle(ctx);
+                    break;
+                case WRITER_IDLE:
+                    handleWriterIdle(ctx);
+                    break;
+                case ALL_IDLE:
+                    handleAllIdle(ctx);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    /**
+     * 连接完成
+     *
+     * @param ch ch
+     */
+    protected void connectCompleteHandler(Channel ch) {
+        log.debug("websocket active");
+    }
+
+    /**
+     * 处理close消息
+     *
+     * @param ch                  Channel ch
+     * @param closeWebSocketFrame closeWebSocketFrame
+     */
+    protected void handlerClose(Channel ch, CloseWebSocketFrame closeWebSocketFrame) {
+        log.warn("websocket client关闭");
+        ch.close();
+    }
+
+
+    /**
+     * 处理pong消息
+     *
+     * @param ch                 Channel ch
+     * @param pongWebSocketFrame pongWebSocketFrame
+     */
+    protected void handlerPong(Channel ch, PongWebSocketFrame pongWebSocketFrame) {
+        log.debug("WebSocket Client [{}] received pong", ch.attr(NettyConstants.CLIENT_NAME).get());
+
+    }
+
+
+    /**
+     * 处理ping消息
+     *
+     * @param ch                 ch
+     * @param pingWebSocketFrame pingWebSocketFrame
+     */
+    protected void handlerPing(Channel ch, PingWebSocketFrame pingWebSocketFrame) {
+        log.debug("WebSocket Client [{}] received ping", ch.attr(NettyConstants.CLIENT_NAME).get());
+        websocketClient.sendPong();
+    }
+
+    /**
+     * 超过限定时间channel没有读时触发
+     *
+     * @param ctx ctx
+     */
+    protected void handleReaderIdle(ChannelHandlerContext ctx) {
+    }
+
+    /**
+     * 超过限定时间channel没有写时触发
+     *
+     * @param ctx ctx
+     */
+    protected void handleWriterIdle(ChannelHandlerContext ctx) {
+    }
+
+    /**
+     * 超过限定时间channel没有读写时触发
+     *
+     * @param ctx ctx
+     */
+    protected void handleAllIdle(ChannelHandlerContext ctx) {
+        websocketClient.sendPing();
+    }
+
+    public ChannelFuture handshakeFuture() {
+        return handshakeFuture;
+    }
+}
+package cn.com.helei.DepinBot.core.netty.handler;
+
+public interface WSStatusHandler {
+
+    void onConnected();
+
+    void onClosed();
+}
+package cn.com.helei.DepinBot.core.pool.account;
+
+
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenClass;
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenField;
+import cn.com.helei.DepinBot.core.pool.AbstractYamlLineItem;
+import lombok.*;
+
+import java.util.HashMap;
+import java.util.Map;
+
+
+@Getter
+@Setter
+@AllArgsConstructor
+@NoArgsConstructor
+@PropertyChangeListenClass
+public class DepinClientAccount extends AbstractYamlLineItem {
+
+    /**
+     * 账户名
+     */
+    @PropertyChangeListenField
+    private String name;
+
+    /**
+     * 邮箱
+     */
+    @PropertyChangeListenField
+    private String email;
+
+    /**
+     * 密码
+     */
+    @PropertyChangeListenField
+    private String password;
+
+    /**
+     * 是否注册过
+     */
+    @PropertyChangeListenField
+    private Boolean signUp;
+
+    /**
+     * 代理id
+     */
+    @PropertyChangeListenField
+    private Integer proxyId;
+
+
+    /**
+     * 浏览器环境id
+     */
+    @PropertyChangeListenField
+    private Integer browserEnvId;
+
+
+    public DepinClientAccount(Object originLine) {
+        String emailAndPassword = (String) originLine;
+
+        String[] split = emailAndPassword.split(", ");
+        email = split[0];
+
+        String[] emailSplit = email.split("@");
+        if (emailSplit.length != 2) {
+            throw new IllegalArgumentException("邮箱格式错误");
+        }
+        this.name = emailSplit[0];
+
+
+        password = split[1];
+
+        if (split.length == 3) {
+            this.proxyId = Integer.valueOf(split[2]);
+        }
+        if (split.length == 4) {
+            this.browserEnvId = Integer.valueOf(split[2]);
+        }
+    }
+
+    public Map<String, String> getWSHeaders() {
+        return new HashMap<>();
+    }
+
+    public Map<String, String> getRestHeaders() {
+        return new HashMap<>();
+    }
+
+}
+package cn.com.helei.DepinBot.core.pool.network;
+
+import cn.com.helei.DepinBot.core.pool.AbstractYamlLineItem;
+import lombok.*;
+
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
+
+@Getter
+@Setter
+@NoArgsConstructor
+public class NetworkProxy extends AbstractYamlLineItem {
+
+    private ProxyType proxyType;
+
+    private String host;
+
+    private int port;
+
+    private String username;
+
+    private String password;
+
+    public NetworkProxy(Object originLine) {
+        String proxyUrl = (String) originLine;
+
+        String[] split = proxyUrl.split("://");
+        String protocol = split[0];
+
+        proxyType = switch (protocol) {
+            case "http" -> ProxyType.HTTP;
+            case "sockt5" -> ProxyType.SOCKT5;
+            default -> throw new IllegalStateException("Unexpected value: " + protocol);
+        };
+        String[] upAndAddress = split[1].split("@");
+
+        String[] up = upAndAddress[0].split(":");
+        this.username = up[0];
+        this.password = up[1];
+
+        String[] address = upAndAddress[1].split(":");
+        this.host = address[0];
+        this.port = Integer.parseInt(address[1]);
+
+    }
+
+    public SocketAddress getAddress() {
+        return new InetSocketAddress(host, port);
+    }
+
+    public String getAddressStr() {
+        return host + ":" + port;
+    }
+}
+package cn.com.helei.DepinBot.core.supporter.persistence;
+
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeInvocation;
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenClass;
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenField;
+import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeProxy;
+import cn.com.helei.DepinBot.core.util.DiscardingBlockingQueue;
+import cn.com.helei.DepinBot.core.util.FileUtil;
+import com.alibaba.fastjson.JSONObject;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.*;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.function.Function;
+import java.util.stream.Stream;
+
+
+@Slf4j
+public class AccountPersistenceManager {
+
+    private static final String PERSISTENCE_PATH = "accounts";
+
+    private static final String PERSISTENCE_ACCOUNT_PATTERN = "account-%d.json";
+
+    private static final int PERSISTENCE_CACHE_SIZE = 3;
+
+    private final String botName;
+
+    /**
+     * 监听的对象 -》 该对象的root
+     */
+    private final ConcurrentMap<Object, Object> listenedObjRootMap = new ConcurrentHashMap<>();
+
+    private final ConcurrentMap<Object, Object> originRoot2ProxyMap = new ConcurrentHashMap<>();
+
+    /**
+     * root更新队列
+     */
+    private final ConcurrentMap<Object, DiscardingBlockingQueue<String>> rootUpdateQueueMap = new ConcurrentHashMap<>();
+
+    /**
+     * root -> dumpPath
+     */
+    private final ConcurrentMap<Object, String> rootDumpPathMap = new ConcurrentHashMap<>();
+
+    /**
+     * dump数据
+     */
+    private final DumpDataSupporter dumpDataSupporter = new DumpDataSupporter();
+
+    public AccountPersistenceManager(String botName) {
+        this.botName = botName;
+    }
+
+
+    public void init() {
+        dumpDataSupporter.startDumpTask();
+    }
+
+    /**
+     * 持久化保存accountContexts
+     *
+     * @param accountContexts accountContexts
+     */
+    public synchronized void persistenceAccountContexts(List<AccountContext> accountContexts) throws IOException {
+        Path path = Paths.get(getPersistencePath(botName, PERSISTENCE_PATH));
+        if (!Files.exists(path)) Files.createDirectories(path);
+
+        for (AccountContext accountContext : accountContexts) {
+            String fileName = String.format(PERSISTENCE_ACCOUNT_PATTERN, accountContext.getClientAccount().getId());
+
+            saveAccountContext(accountContext, path, fileName);
+        }
+    }
+
+
+    /**
+     * 加载账户上下文
+     *
+     * @return PersistenceDto
+     */
+    public synchronized Map<Integer, AccountContext> loadAccountContexts() {
+        Path path = Paths.get(getPersistencePath(botName, PERSISTENCE_PATH));
+
+        if (!Files.exists(path)) return null;
+
+        Map<Integer, AccountContext> map = new HashMap<>();
+
+        try (Stream<Path> walk = Files.walk(path);) {
+
+            for (Path filePath : walk.filter(Files::isRegularFile)
+                    .filter(p -> p.toString().contains("account-")).toList()) {
+
+                Integer idx = Integer.valueOf(filePath.toString()
+                        .split("account-")[1].split(".json")[0]);
+
+                try (BufferedReader reader = new BufferedReader(new FileReader(filePath.toFile()));) {
+                    String line = null;
+                    StringBuilder sb = new StringBuilder();
+                    while ((line = reader.readLine()) != null) {
+                        sb.append(line);
+                    }
+
+                    map.put(idx, JSONObject.parseObject(sb.toString(), AccountContext.class));
+                }
+            }
+
+            return map;
+        } catch (Exception e) {
+            throw new RuntimeException("读取账户文件失败", e);
+        }
+    }
+
+
+    /**
+     * 注册持久化监听
+     *
+     * @param targetList targetList
+     * @param <T>        targetType
+     */
+    public <T> void registerPersistenceListener(List<T> targetList, Function<T, String> getSavePath) {
+        targetList.replaceAll(target -> bindPersistenceAnnoListener(target, getSavePath.apply(target)));
+    }
+
+    /**
+     * 对象属性添加变化监听
+     *
+     * @param target target 目标对象
+     * @param <T>    T
+     * @return 添加监听后被动态代理的对象
+     */
+    public <T> T bindPersistenceAnnoListener(T target, String savePath) {
+        rootDumpPathMap.put(target, savePath);
+        return doBindPersistenceAnnoListener(target, target);
+    }
+
+
+    /**
+     * 对象属性添加变化监听
+     *
+     * @param target target 目标对象
+     * @param <T>    T
+     * @return 添加监听后被动态代理的对象
+     */
+    private <T> T doBindPersistenceAnnoListener(T target, Object rootObj) {
+        if (target == null) return null;
+
+        Class<?> targetClass = target.getClass();
+
+        PropertyChangeListenClass propertyChangeListenClass = targetClass.getAnnotation(PropertyChangeListenClass.class);
+
+        // 类上带有PersistenceClass注解，表示可以的类
+        if (propertyChangeListenClass == null) {
+            return target;
+        }
+
+        T proxy = PropertyChangeProxy.createProxy(target, this::propertyChangeHandler);
+
+        // 深度监听，还要给监听的字段对象内的属性监听
+        if (propertyChangeListenClass.isDeep()) {
+
+            for (Field field : targetClass.getDeclaredFields()) {
+                field.setAccessible(true);
+                // 字段上带有PersistenceField注解，表示可以的字段， 字段类型上带有PersistenceClass，还要监听字段对象的属性
+                if (field.isAnnotationPresent(PropertyChangeListenField.class)
+                        && field.getType().isAnnotationPresent(PropertyChangeListenClass.class)) {
+                    try {
+                        Object fieldValue = field.get(target);
+                        Object filedProxy = doBindPersistenceAnnoListener(fieldValue, rootObj);
+
+                        field.set(target, filedProxy);
+                    } catch (IllegalAccessException e) {
+                        throw new RuntimeException("访问字段失败", e);
+                    }
+                }
+            }
+        }
+
+        listenedObjRootMap.put(target, rootObj);
+
+        if (target.equals(rootObj)) {
+            originRoot2ProxyMap.put(rootObj, proxy);
+        }
+
+        return proxy;
+    }
+
+    /**
+     * 获取账户持久化路径
+     *
+     * @param botName        botName
+     * @param accountContext accountContext
+     * @return path
+     */
+    public static String getAccountContextPersistencePath(String botName, AccountContext accountContext) {
+        Path path = Paths.get(getPersistencePath(botName, PERSISTENCE_PATH));
+        String fileName = String.format(PERSISTENCE_ACCOUNT_PATTERN, accountContext.getClientAccount().getId());
+
+        return Paths.get(path.toString(), fileName).toString();
+    }
+
+    /**
+     * 属性改变后触发
+     *
+     * @param invocation invocation
+     */
+    private void propertyChangeHandler(PropertyChangeInvocation invocation) {
+        // 找到root，更新后的root放入队列
+        Object root = listenedObjRootMap.get(invocation.getTarget());
+        Object rootProxy = originRoot2ProxyMap.get(root);
+
+        rootUpdateQueueMap.compute(root, (k, v) -> {
+            log.info("目标[{}] 属性改变了:{},{}->{} [{}]", root.hashCode(), invocation.getPropertyName(),
+                    invocation.getOldValue(), invocation.getNewValue(), invocation.getTimestamp());
+
+            if (v == null) {
+                v = new DiscardingBlockingQueue<>(PERSISTENCE_CACHE_SIZE);
+
+                dumpDataSupporter.bindUpdateQueue(rootDumpPathMap.get(root), v);
+            }
+
+            try {
+                v.put(JSONObject.toJSONString(rootProxy));
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+            return v;
+        });
+    }
+
+
+    /**
+     * 保存账户
+     *
+     * @param accountContext accountContext
+     * @param path           accountContext
+     * @param fileName       fileName
+     */
+    private static void saveAccountContext(AccountContext accountContext, Path path, String fileName) {
+        FileUtil.saveJSONStringContext(Path.of(path.toString(), fileName), JSONObject.toJSONString(accountContext));
+    }
+
+
+    /**
+     * 获取持久化路径， 项目根目录开始
+     *
+     * @param botName botName
+     * @param subPath subPath
+     * @return String
+     */
+    private static String getPersistencePath(String botName, String subPath) {
+        return FileUtil.RESOURCE_ROOT_DIR + File.separator + botName + File.separator + subPath;
+    }
+}
+package cn.com.helei.DepinBot.core.util;
+
+import lombok.Getter;
+import lombok.Setter;
+
+@Setter
+@Getter
+public abstract class ClosableTimerTask {
+
+    private volatile boolean isRunning = true;
+
+    /**
+     * Timer 任务，需要返回boolean，代表是否继续执行该任务，true继续，false跳出不执行
+     *
+     * @return  是否继续执行
+     */
+    public abstract boolean run();
+}
+package cn.com.helei.DepinBot.core;
+
+
 import lombok.Data;
-import org.yaml.snakeyaml.Yaml;
+import lombok.ToString;
 
-import java.io.InputStream;
-import java.io.Serializable;
+import java.util.HashMap;
 import java.util.Map;
 
 @Data
-public class TradeSignalConfig implements Serializable {
-    private static final String CONFIG_FILE = "trade-signal-config.yaml";
-
-    public static final TradeSignalConfig TRADE_SIGNAL_CONFIG;
+@ToString
+public class BaseDepinBotConfig {
 
     /**
-     * 信号名
+     * 名字
      */
     private String name;
 
     /**
-     * 信号交易对
+     * 并发数量
      */
-    private String symbol;
+    private int concurrentCount = 5;
 
     /**
-     * 运行环境设置
+     * 自动收获间隔
      */
-    private RunTypeConfig run_type;
+    private int autoClaimIntervalSeconds = 60;
 
     /**
-     * 历史k线加载批大小
+     * 是否开启账户收益自动刷新
      */
-    private int historyKLineBatchSize;
+    private Boolean isAccountRewardAutoRefresh = false;
 
     /**
-     * 批加载并发度
+     * 账户奖励刷新间隔
      */
-    private int batchLoadConcurrent;
+    private long accountRewardRefreshIntervalSeconds = 600;
 
     /**
-     * 实时数据配置
+     * 网络代理池配置文件名
      */
-    private RealtimeConfig realtime;
-
-    static {
-        Yaml yaml = new Yaml();
-        try (InputStream inputStream = TradeSignalConfig.class.getClassLoader().getResourceAsStream(CONFIG_FILE)) {
-            if (inputStream == null) {
-                throw new IllegalArgumentException("File not found: " + CONFIG_FILE);
-            }
-            Map<String, Object> yamlData = yaml.load(inputStream);
-            Map<String, Object> shinano = (Map<String, Object>) yamlData.get("shinano");
-            Map<String, Object> quantity = (Map<String, Object>) shinano.get("quantity");
-            Map<String, Object> trade_signal_maker = (Map<String, Object>) quantity.get("trade_signal_maker");
-
-
-            TRADE_SIGNAL_CONFIG = yaml.loadAs(yaml.dump(trade_signal_maker), TradeSignalConfig.class);
-
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to load YAML file: " + CONFIG_FILE, e);
-        }
-    }
-
-    private TradeSignalConfig() {
-    }
+    private String networkPoolConfig = "network-proxy.yaml";
 
     /**
-     * 获取最终交易信号写入到kafka到topic
-     *
-     * @return topic
+     * 浏览器环境池配置文件名
      */
-    public TradeSignalTopic getSinkTopic() {
-        return new TradeSignalTopic(getRun_env(), getTrade_type(), symbol, name);
-    }
+    private String browserEnvPoolConfig = "browser-env.yaml";
 
     /**
-     * 获取交易类型
-     *
-     * @return TradeType
+     * 账户配置文件名
      */
-    public TradeType getTrade_type() {
-        return run_type.getConfigs().stream().findFirst().get().getTrade_type().stream().findFirst().get();
+    private String accountPoolConfig = "account.yaml";
+
+
+    private Map<String, String> configMap = new HashMap<>();
+
+    public String getConfig(String key) {
+        return configMap.get(key);
     }
 
-    /**
-     * 获取运行环境
-     *
-     * @return RunEnv
-     */
-    public RunEnv getRun_env() {
-        return run_type.getConfigs().stream().findFirst().get().getEnv();
+    public void setConfig(String key, String value) {
+        this.configMap.put(key, value);
     }
-
-
-    @Data
-    public static class RealtimeConfig implements Serializable {
-
-        private RealtimeKafkaConfig kafka;
-
-        private RealtimeFlinkConfig flink;
-
-    }
-
-
-    @Data
-    public static class RealtimeKafkaConfig implements Serializable {
-
-        /**
-         * 输入的配置
-         */
-        private KafkaServerConfig input;
-
-        /**
-         * 输出的配置
-         */
-        private KafkaServerConfig output;
-
-    }
-
-    @Data
-    public static class KafkaServerConfig implements Serializable {
-        /**
-         * kafka集群连接地址
-         */
-        private String bootstrapServer;
-
-        /**
-         * 消费者组名
-         */
-        private String groupId;
-
-        /**
-         * 事务超时时间，需要比kafka broker 中设置的小
-         */
-        private String transaction_timeout_ms;
-    }
-
-    @Data
-    public static class RealtimeFlinkConfig implements Serializable {
-
-        /**
-         * flink job manager host
-         */
-        private String jobManagerHost;
-        /**
-         * flink job manager port
-         */
-        private Integer jobManagerPort;
-    }
-
-    public static void main(String[] args) {
-        System.out.println(TRADE_SIGNAL_CONFIG);
-    }
-
 }
+package cn.com.helei.DepinBot.core;
 
-
-package com.helei.tradesignalprocess.stream.d_decision;
-
-
-import com.helei.dto.trade.IndicatorMap;
-import com.helei.dto.trade.IndicatorSignal;
-import com.helei.dto.trade.TradeSignal;
-import com.helei.tradesignalprocess.stream.d_decision.config.PSTBollDecisionConfig_v1;
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import cn.com.helei.DepinBot.core.constants.ConnectStatus;
+import cn.com.helei.DepinBot.core.netty.base.AbstractWebsocketClient;
+import cn.com.helei.DepinBot.core.netty.constants.WebsocketClientStatus;
+import io.netty.handler.codec.http.DefaultHttpHeaders;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
-import java.math.BigDecimal;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
-
-/**
- * 根据PST和Boll指标决策下单
- */
-@Deprecated
-@Slf4j
-public class PSTBollDecisionMaker extends BinanceDecisionMaker {
-
-    private final PSTBollDecisionConfig_v1 config;
-
-    public PSTBollDecisionMaker(PSTBollDecisionConfig_v1 config) {
-        super(config.getName());
-        this.config = config;
-    }
-
-    @Override
-    protected TradeSignal makeBinanceTradeSignal(String symbol, List<IndicatorSignal> windowSignal, IndicatorMap indicatorMap) { String pstKey = config.getPstConfig().getIndicatorName();
-        String bollKey = config.getBollConfig().getIndicatorName();
-
-        Map<String, List<IndicatorSignal>> signalMap = windowSignal.stream().collect(Collectors.groupingBy(IndicatorSignal::getName));
-
-        List<IndicatorSignal> pstSignals = signalMap.get(pstKey);
-        List<IndicatorSignal> bollSignals = signalMap.get(bollKey);
-
-//        if (pstSignals == null || bollSignals == null || pstSignals.isEmpty() || bollSignals.isEmpty()) {
-//            log.warn("pst和boll信号不满足共振， 不生成订单");
-//            return null;
-//        }
-
-        if (bollSignals != null && !signalMap.isEmpty()) {
-            IndicatorSignal newBollSignal = bollSignals.getLast();
-            //TODO 仅仅测试用
-            return buildMarketOrder(newBollSignal);
-        }
-//        IndicatorSignal newPstSignal = pstSignals.getLast();
-
-
-        return null;
-    }
-
-    private static TradeSignal buildMarketOrder(IndicatorSignal newBollSignal) {
-        return TradeSignal
-                .builder()
-                .symbol(newBollSignal.getKLine().getSymbol())
-                .tradeSide(newBollSignal.getTradeSide())
-                .targetPrice(BigDecimal.valueOf(newBollSignal.getTargetPrice()))
-                .stopPrice(BigDecimal.valueOf(newBollSignal.getStopPrice()))
-                .enterPrice(BigDecimal.valueOf(newBollSignal.getKLine().getCloseTime()))
-                .build();
-    }
-}
-
-
-
-
-
-package com.helei.tradesignalprocess.stream.e_trade_signal;
-
-import com.helei.dto.kafka.TradeSignalTopic;
-import com.helei.tradesignalprocess.config.TradeSignalConfig;
-import com.helei.dto.trade.TradeSignal;
-import com.helei.util.Serializer;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.flink.api.common.serialization.SerializationSchema;
-import org.apache.flink.api.connector.sink2.Sink;
-import org.apache.flink.connector.kafka.sink.KafkaRecordSerializationSchema;
-import org.apache.flink.connector.kafka.sink.KafkaSink;
-import org.apache.kafka.clients.producer.ProducerConfig;
-
-import java.util.Properties;
-
-
-@Slf4j
-public class KafkaTradeSignalCommitter extends AbstractTradeSignalCommitter<TradeSignal> {
-
-
-    @Override
-    public Sink<TradeSignal> getCommitSink() {
-        TradeSignalConfig.KafkaServerConfig kafkaServerConfig = tradeSignalConfig.getRealtime().getKafka().getOutput();
-        String bootstrap = kafkaServerConfig.getBootstrapServer();
-        TradeSignalTopic topic = tradeSignalConfig.getSinkTopic();
-
-        log.info("创建 原始订单 Kafka Sink [{}] - topic [{}]", bootstrap, topic);
-
-        Properties props = new Properties();
-        props.setProperty(ProducerConfig.TRANSACTION_TIMEOUT_CONFIG, kafkaServerConfig.getTransaction_timeout_ms());
-
-        return KafkaSink.<TradeSignal>builder()
-                .setBootstrapServers(bootstrap)
-                .setRecordSerializer(
-                        KafkaRecordSerializationSchema
-                                .builder()
-                                .setTopic(topic.toString())
-                                .setValueSerializationSchema(new KafkaOriginOrderSchema())
-                                .build()
-                )
-//                .setDeliveryGuarantee(DeliveryGuarantee.EXACTLY_ONCE)
-                .setKafkaProducerConfig(props)
-                .build();
-    }
-
-
-    static class KafkaOriginOrderSchema implements SerializationSchema<TradeSignal> {
-        @Override
-        public byte[] serialize(TradeSignal tradeSignal) {
-            return Serializer.Algorithm.JSON.serialize(tradeSignal);
-        }
-    }
-}
-
-
-
-
-
-package com.helei.tradesignalprocess.stream;
-
-import com.helei.dto.trade.IndicatorSignal;
-import com.helei.dto.trade.SignalGroupKey;
-import com.helei.tradesignalprocess.stream.c_indicator_signal.IndicatorSignalService;
-import com.helei.tradesignalprocess.stream.d_decision.AbstractDecisionMaker;
-import com.helei.tradesignalprocess.stream.e_trade_signal.AbstractTradeSignalCommitter;
-import lombok.extern.slf4j.Slf4j;
-import org.apache.flink.api.connector.sink2.Sink;
-import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.streaming.api.datastream.DataStream;
-import org.apache.flink.streaming.api.datastream.KeyedStream;
-
-import java.util.List;
-
-@Slf4j
-public class TradeSignalBuildTask<T> {
-
-
-    /**
-     * 信号流服务
-     */
-    private final IndicatorSignalService indicatorSignalService;
-
-    /**
-     * 决策服务
-     */
-    private final AbstractDecisionMaker<T> decisionMaker;
-
-    /**
-     * 订单提交器
-     */
-    private final AbstractTradeSignalCommitter<T> orderCommitter;
-
-
-    public TradeSignalBuildTask(
-            IndicatorSignalService indicatorSignalService,
-            AbstractDecisionMaker<T> decisionMaker,
-            AbstractTradeSignalCommitter<T> orderCommitter
-    ) {
-        this.indicatorSignalService = indicatorSignalService;
-
-        this.decisionMaker = decisionMaker;
-
-        this.orderCommitter = orderCommitter;
-    }
-
-
-    public void execute(String name) throws Exception {
-
-        //1.信号服务
-        KeyedStream<Tuple2<SignalGroupKey, List<IndicatorSignal>>, String> symbolGroupSignalStream = indicatorSignalService.getSymbolGroupSignalStream();
-
-//        symbolGroupSignalStream.print();
-        //2.决策服务
-        DataStream<T> originOrderStream = symbolGroupSignalStream.process(decisionMaker);
-
-        originOrderStream.print();
-        //3订单提交服务
-        Sink<T> commitSink = orderCommitter.getCommitSink();
-        originOrderStream.sinkTo(commitSink).setParallelism(1);
-
-        indicatorSignalService.getEnv().execute(name);
-    }
-
-}
-
-
-package com.helei.tradesignalprocess.support;
-
-
-import com.helei.constants.trade.KLineInterval;
-import com.helei.constants.trade.TradeSide;
-import com.helei.dto.trade.*;
-import com.helei.dto.indicator.config.MACDConfig;
-import com.helei.tradesignalprocess.config.FlinkConfig;
-import com.helei.tradesignalprocess.stream.*;
-import com.helei.tradesignalprocess.stream.a_klinesource.LocalFileKLineSource;
-import com.helei.tradesignalprocess.stream.a_klinesource.RandomKLineSource;
-import com.helei.tradesignalprocess.stream.b_indicator.calculater.MACDCalculator;
-import com.helei.tradesignalprocess.stream.b_indicator.calculater.PSTCalculator;
-import com.helei.tradesignalprocess.stream.c_indicator_signal.IndicatorSignalService;
-import com.helei.tradesignalprocess.stream.c_indicator_signal.IndicatorSignalStreamProcessor;
-import com.helei.tradesignalprocess.stream.c_indicator_signal.maker.PSTSignalMaker;
-import com.helei.tradesignalprocess.stream.d_decision.AbstractDecisionMaker;
-import com.helei.tradesignalprocess.stream.b_indicator.calculater.BollCalculator;
-import com.helei.dto.indicator.config.BollConfig;
-import com.helei.dto.indicator.config.PSTConfig;
-import com.helei.tradesignalprocess.stream.c_indicator_signal.maker.AbstractSignalMaker;
-import com.helei.tradesignalprocess.stream.c_indicator_signal.maker.BollSignalMaker;
-import com.helei.tradesignalprocess.stream.d_decision.PSTBollDecisionMaker;
-import com.helei.tradesignalprocess.stream.d_decision.config.PSTBollDecisionConfig_v1;
-import com.helei.tradesignalprocess.stream.e_trade_signal.KafkaTradeSignalCommitter;
-import org.apache.flink.api.common.functions.OpenContext;
-import org.apache.flink.streaming.api.TimerService;
-import org.apache.flink.streaming.api.datastream.DataStreamSource;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.io.Serial;
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
 
-public class RandomKLineSourceTest {
-    private static final Logger log = LoggerFactory.getLogger(RandomKLineSourceTest.class);
-    private static String btcusdt = "btcusdt";
 
-    private static String ethusdt = "ethusdt";
+@Slf4j
+@Getter
+public abstract class BaseDepinWSClient<Req, Resp> extends AbstractWebsocketClient<Req, Resp> {
 
-    private static String kLineFileName = "";
 
-    private static StreamExecutionEnvironment env;
+    /**
+     * client对应的账号
+     */
+    private final AccountContext accountContext;
 
-    private static StreamExecutionEnvironment env2;
+    public BaseDepinWSClient(
+            AccountContext accountContext,
+            BaseDepinWSClientHandler<Req, Resp> handler
+    ) {
+        super(accountContext.getConnectUrl(), handler);
 
-    private static RandomKLineSource randomKLineSource;
+        DefaultHttpHeaders httpHeaders = new DefaultHttpHeaders();
+        accountContext.getWSHeaders().forEach(httpHeaders::add);
+        super.setHeaders(httpHeaders);
 
-    private static LocalFileKLineSource localFileKLineSource;
+        super.setName(accountContext.getClientAccount().getName());
+        super.setProxy(accountContext.getProxy());
+        super.setClientStatusChangeHandler(this::whenClientStatusChange);
 
-    @BeforeAll
-    public static void before() {
-        try {
-            env = FlinkConfig.streamExecutionEnvironment();
-            randomKLineSource = new RandomKLineSource(btcusdt, Set.of(KLineInterval.m_15),
-                    LocalDateTime.of(2020, 10, 29, 15, 38), 2000.0, 19000.0);
+        this.accountContext = accountContext;
 
-            localFileKLineSource = new LocalFileKLineSource(kLineFileName);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        updateClientStatus(WebsocketClientStatus.NEW);
     }
 
-    @Test
-    public void testRandomKLineSource() throws Exception {
-        DataStreamSource<KLine> streamSource = env.addSource(randomKLineSource);
 
-        streamSource.print();
+    public abstract Req getHeartbeatMessage(BaseDepinWSClient<Req, Resp> wsClient);
 
-        env.execute();
-        TimeUnit.MINUTES.sleep(1000);
-    }
+    public abstract void whenAccountReceiveResponse(BaseDepinWSClient<Req, Resp> wsClient, Object id, Resp response) ;
 
-    @Test
-    public void testAutoTradeV2() throws Exception {
-        PSTConfig pstConfig = new PSTConfig(60, 3, 3);
-        BollConfig bollConfig = new BollConfig(15);
+    public abstract void whenAccountReceiveMessage(BaseDepinWSClient<Req, Resp> wsClient, Resp message);
 
+    public abstract Object getRequestId(Req request);
 
-        IndicatorSignalService indicatorSignalService = buildTradeSignalService(pstConfig, bollConfig);
+    public abstract Object getResponseId(Resp response);
 
-
-        AbstractDecisionMaker<TradeSignal> abstractDecisionMaker = new AbstractDecisionMaker<>("测试用决策生成器") {
-            @Serial
-            private final static long serialVersionUID = 122142132145213L;
-
-            @Override
-            protected TradeSignal decisionAndBuilderOrder(String symbol, List<IndicatorSignal> windowSignal, IndicatorMap indicatorMap) {
-//                log.info("收到信号【{}】\n{}", symbol, windowSignal);
-                return TradeSignal
-                        .builder()
-                        .symbol(symbol)
-                        .tradeSide(TradeSide.BUY)
-                        .targetPrice(BigDecimal.valueOf(windowSignal.getFirst().getTargetPrice()))
-                        .stopPrice(BigDecimal.valueOf(windowSignal.getFirst().getStopPrice()))
-                        .build();
-            }
-        };
-
-        KafkaTradeSignalCommitter kafkaOriginOrderCommitter = new KafkaTradeSignalCommitter();
-
-
-        TradeSignalBuildTask<TradeSignal> tradeSignalBuildTask = new TradeSignalBuildTask<>(
-                indicatorSignalService,
-                new PSTBollDecisionMaker(new PSTBollDecisionConfig_v1(pstConfig, bollConfig)),
-                kafkaOriginOrderCommitter);
-
-        tradeSignalBuildTask.execute("test");
-    }
-
-    private IndicatorSignalService buildTradeSignalService(PSTConfig pstConfig, BollConfig bollConfig) {
-        return IndicatorSignalService
-                .builder(env)
-                .addIndicatorSignalProcessor(
-                        IndicatorSignalStreamProcessor
-                                .builder()
-                                .setWindowLengthRationOfKLine(1.0 / 60)
-//                                .addKLineSource(randomKLineSource)
-                                .addKLineSource(localFileKLineSource)
-                                .addIndicator(new PSTCalculator(pstConfig))
-                                .addIndicator(new MACDCalculator(new MACDConfig(12, 26, 9)))
-                                .addIndicator(new BollCalculator(bollConfig))
-
-                                .addSignalMaker(new BollSignalMaker(bollConfig))
-                                .addSignalMaker(new PSTSignalMaker(pstConfig))
-//                                .addSignalMaker(new AbstractSignalMaker(true) {
-//
-//                                    @Override
-//                                    public void onOpen(OpenContext openContext) throws Exception {
-//
-//                                    }
-//
-//                                    @Override
-//                                    protected IndicatorSignal resolveHistoryKLine(KLine kLine, TimerService timerService) throws Exception {
-////                        System.out.println(Instant.ofEpochMilli(kLine.getOpenTime()) + " - " + kLine.getIndicators());
-//                                        return IndicatorSignal.builder().description("这是一条测试信号1h").name("测试信号1h")
-//                                                .kLine(kLine).tradeSide(TradeSide.BUY).targetPrice(1111111111.0).stopPrice(1231231.0).build();
-//                                    }
-//
-//                                    @Override
-//                                    protected IndicatorSignal resolveRealTimeKLine(KLine kLine, TimerService timerService) throws Exception {
-//                                        return null;
-//                                    }
-//                                })
-                                .build()
-                )
-                .build();
+    /**
+     * ws客户端状态改变，同步更新账户状态
+     *
+     * @param newClientStatus 最新的客户端状态
+     */
+    public void whenClientStatusChange(WebsocketClientStatus newClientStatus) {
+        accountContext.getConnectStatusInfo().setConnectStatus(
+                switch (newClientStatus) {
+                    case NEW -> {
+                        accountContext.getConnectStatusInfo().setStartDateTime(LocalDateTime.now());
+                        accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
+                        yield ConnectStatus.NEW;
+                    }
+                    case STARTING -> {
+                        accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
+                        yield ConnectStatus.STARTING;
+                    }
+                    case RUNNING -> {
+                        accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
+                        yield ConnectStatus.RUNNING;
+                    }
+                    case STOP, SHUTDOWN -> {
+                        accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
+                        accountContext.setUsable(false);
+                        yield ConnectStatus.STOP;
+                    }
+                }
+        );
     }
 
 }
+package cn.com.helei.DepinBot.core;
+
+import cn.com.helei.DepinBot.core.dto.account.ConnectStatusInfo;
+import cn.com.helei.DepinBot.core.netty.base.AbstractWebSocketClientHandler;
+import io.netty.channel.ChannelHandlerContext;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+public abstract class BaseDepinWSClientHandler<Req, Resp> extends AbstractWebSocketClientHandler<Req, Resp> {
+
+    /**
+     * channel 空闲，向其发送心跳
+     * @param ctx ctx
+     */
+    @Override
+    protected void handleAllIdle(ChannelHandlerContext ctx) {
+        BaseDepinWSClient<Req, Resp> depinWSClient = getDepinWSClient();
+
+        depinWSClient
+                .sendMessage(depinWSClient.getHeartbeatMessage(depinWSClient))
+                .whenCompleteAsync((unused, throwable) -> {
+                    ConnectStatusInfo connectStatusInfo = depinWSClient
+                            .getAccountContext()
+                            .getConnectStatusInfo();
+
+                    if (throwable != null) {
+                        log.error("client[{}] 发送心跳异常", websocketClient.getName(), throwable);
+                        // 发送心跳失败，记录次数
+                        connectStatusInfo.getErrorHeartBeat().getAndIncrement();
+                    }
+
+                    // 心跳计数
+                    connectStatusInfo.getHeartBeat()
+                            .getAndIncrement();
+                }, depinWSClient.getCallbackInvoker());
+    }
+
+
+    @Override
+    public Object getRequestId(Req request) {
+        return getDepinWSClient().getRequestId(request);
+    }
+
+    @Override
+    public Object getResponseId(Resp response) {
+        return getDepinWSClient().getResponseId(response);
+    }
+
+
+    @Override
+    protected void handleResponseMessage(Object id, Resp response) {
+        BaseDepinWSClient<Req, Resp> depinWSClient = getDepinWSClient();
+
+        depinWSClient.whenAccountReceiveResponse(depinWSClient, id, response);
+    }
+
+    @Override
+    protected void handleOtherMessage(Resp message) {
+        BaseDepinWSClient<Req, Resp> depinWSClient = getDepinWSClient();
+
+        depinWSClient.whenAccountReceiveMessage(depinWSClient, message);
+    }
+
+    private BaseDepinWSClient<Req, Resp> getDepinWSClient() {
+        return (BaseDepinWSClient<Req, Resp>) websocketClient;
+    }
+}
+package cn.com.helei.DepinBot.core;
+
+import cn.com.helei.DepinBot.core.bot.WSMenuCMDLineDepinBot;
+import cn.com.helei.DepinBot.core.dto.account.AccountContext;
+import com.alibaba.fastjson.JSONObject;
+import lombok.Getter;
+import lombok.Setter;
+
+
+public class SimpleDepinWSClient extends BaseDepinWSClient<JSONObject, JSONObject> {
+
+    private final WSMenuCMDLineDepinBot<?, JSONObject, JSONObject> bot;
+
+    @Setter
+    private String idFieldName = "id";
+
+    public SimpleDepinWSClient(
+            WSMenuCMDLineDepinBot<? extends BaseDepinBotConfig, JSONObject, JSONObject> bot,
+            AccountContext accountContext
+    ) {
+        super(accountContext, new SimpleDepinWSClientHandler());
+        this.bot = bot;
+        ((SimpleDepinWSClient.SimpleDepinWSClientHandler) handler).setWsClient(this);
+    }
+
+    @Override
+    public JSONObject getHeartbeatMessage(BaseDepinWSClient<JSONObject, JSONObject> wsClient) {
+        return bot.getHeartbeatMessage(wsClient);
+    }
+
+    @Override
+    public void whenAccountReceiveResponse(BaseDepinWSClient<JSONObject, JSONObject> wsClient, Object id, JSONObject response) {
+        bot.whenAccountReceiveResponse(wsClient, id, response);
+    }
+
+    @Override
+    public void whenAccountReceiveMessage(BaseDepinWSClient<JSONObject, JSONObject> wsClient, JSONObject message) {
+        bot.whenAccountReceiveMessage(wsClient, message);
+    }
+
+    @Override
+    public Object getRequestId(JSONObject request) {
+        return request.getInteger(idFieldName);
+    }
+
+    @Override
+    public Object getResponseId(JSONObject response) {
+        return response.getIntValue(idFieldName);
+    }
+
+
+    @Setter
+    @Getter
+    private static class SimpleDepinWSClientHandler extends BaseDepinWSClientHandler<JSONObject, JSONObject> {
+
+        private SimpleDepinWSClient wsClient;
+
+        @Override
+        public JSONObject convertMessageToRespType(String message) {
+            return JSONObject.parseObject(message);
+        }
+    }
+}
+package cn.com.helei.DepinBot.core;
+
+import cn.com.helei.DepinBot.core.config.SystemConfig;
+import cn.com.helei.DepinBot.core.util.YamlConfigLoadUtil;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
+
+import java.util.List;
+
+@EqualsAndHashCode(callSuper = true)
+@Data
+public class WSDepinBotConfig extends BaseDepinBotConfig {
+
+    /**
+     * ws是否无限重试
+     */
+    private boolean wsUnlimitedRetry = false;
+
+    /**
+     * 连接url
+     */
+    private String wsBaseUrl;
+
+    /**
+     * 重连接慈湖减少的间隔
+     */
+    private int reconnectCountDownSecond = 180;
+
+
+    public static <T> T loadYamlConfig(
+            String path,
+            String name,
+            Class<T> tClass
+    ) {
+        return YamlConfigLoadUtil.load(SystemConfig.CONFIG_DIR_APP_PATH, name, List.of(path.split("\\.")), tClass);
+    }
+}
+<configuration>
+
+    <!-- 设置根日志级别 -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+    <!-- 配置 console appender 输出日志到控制台 -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} - %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- 设置 Netty 日志级别为 INFO -->
+    <logger name="io.netty" level="INFO"/>
+
+
+
+    <logger name="cn.com.helei.DepinBot.core.netty.base" level="on" />
+
+</configuration>
