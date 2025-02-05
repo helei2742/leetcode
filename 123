@@ -1,515 +1,1008 @@
-package cn.com.helei.DepinBot.core.netty.base;
+package cn.com.helei.bot.core.mvc.service;
 
-import cn.com.helei.DepinBot.core.netty.constants.NettyConstants;
+import cn.com.helei.bot.core.entity.AccountBaseInfo;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IAccountBaseInfoService extends IService<AccountBaseInfo> {
+
+}
+package cn.com.helei.bot.core.mvc.service;
+
+import cn.com.helei.bot.core.entity.BrowserEnv;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IBrowserEnvService extends IService<BrowserEnv> {
+
+}
+package cn.com.helei.bot.core.mvc.service;
+
+import cn.com.helei.bot.core.entity.DiscordAccount;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IDiscordAccountService extends IService<DiscordAccount> {
+
+}
+package cn.com.helei.bot.core.mvc.service;
+
+import cn.com.helei.bot.core.entity.AccountContext;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IProjectAccountContextService extends IService<AccountContext> {
+
+}
+package cn.com.helei.bot.core.mvc.service;
+
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IProxyInfoService extends IService<ProxyInfo> {
+
+}
+package cn.com.helei.bot.core.mvc.service;
+
+import cn.com.helei.bot.core.entity.RewordInfo;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IRewordInfoService extends IService<RewordInfo> {
+
+}
+package cn.com.helei.bot.core.mvc.service;
+
+import cn.com.helei.bot.core.entity.TwitterAccount;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface ITwitterAccountService extends IService<TwitterAccount> {
+
+}
+package cn.com.helei.bot.core.netty.base;
+
+
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import cn.com.helei.bot.core.netty.constants.NettyConstants;
+import cn.com.helei.bot.core.netty.constants.WebsocketClientStatus;
 import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson.JSON;
+import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.*;
-
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.codec.http.*;
+import io.netty.handler.codec.http.websocketx.*;
+import io.netty.handler.proxy.HttpProxyHandler;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import io.netty.handler.stream.ChunkedWriteHandler;
+import io.netty.handler.timeout.IdleStateHandler;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import javax.net.ssl.SSLException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
-
 /**
- * WebSocket客户端处理器抽象类
- * 能够处理请求响应类型的消息。
- * 其它类型的消息要通过handleOtherMessage()抽象方法处理
+ * Websocket客户端
  *
- * @param <Resp>
+ * @param <P> 请求体的类型
+ * @param <T> 返回值的类型
  */
 @Slf4j
-@ChannelHandler.Sharable
-public abstract class AbstractWebSocketClientHandler<Req, Resp> extends BaseWebSocketClientHandler<Req, Resp> {
+public abstract class AbstractWebsocketClient<P, T> {
+
+    private static final int MAX_FRAME_SIZE = 10 * 1024 * 1024;  // 10 MB or set to your desired size
 
     /**
-     * 存放请求响应的回调
+     * websocket的url字符串
      */
-    protected final ConcurrentMap<Object, HandlerEntity<Resp>> requestIdMap = new ConcurrentHashMap<>();
-
-
-    @Override
-    protected void whenReceiveMessage(String text) {
-        Resp message = convertMessageToRespType(text);
-
-        Object responseId = getResponseId(message);
-
-        if (responseId != null) {
-            //有id，是发送请求的响应
-            //提交response
-            handleResponseMessage(responseId, message);
-        } else {
-            //没有id，按其它格式处理
-            handleOtherMessage(message);
-        }
-    }
-
+    protected String url;
 
     /**
-     * 注册request
-     *
-     * @param request request
-     * @return 是否注册成功
+     * netty pipeline 最后一个执行的handler
      */
-    public boolean registryRequest(Req request, Consumer<Resp> callback) {
-        AtomicBoolean res = new AtomicBoolean(false);
-        Object requestId = getRequestId(request);
-
-        if (requestId == null) return false;
-
-        requestIdMap.compute(requestId, (k, v) -> {
-            if (v == null) {
-                res.set(true);
-                long expireTime = System.currentTimeMillis() + NettyConstants.REQUEST_WAITE_SECONDS * 1000;
-                v = new HandlerEntity<>(expireTime, callback);
-                log.debug("registry request id[{}] success, expire time [{}]", requestId, expireTime);
-            }
-            return v;
-        });
-
-        return res.get();
-    }
+    protected final AbstractWebSocketClientHandler<P, T> handler;
 
     /**
-     * 处理请求响应的消息
-     *
-     * @param id       id
-     * @param response 响应消息体
+     * 执行回调的线程池
      */
-    protected void handleResponseMessage(Object id, Resp response) {
-        HandlerEntity<Resp> handlerEntity = requestIdMap.get(id);
-
-        if (System.currentTimeMillis() > handlerEntity.getExpireTime()) {
-            log.warn("请求[{}]得到响应超时", id);
-        } else {
-            websocketClient.callbackInvoker.execute(() -> handlerEntity.getCallback().accept(response));
-        }
-    }
+    @Getter
+    protected final ExecutorService callbackInvoker;
 
     /**
-     * 处理其他类型消息
-     *
-     * @param message 消息
+     * 代理
      */
-    protected abstract void handleOtherMessage(Resp message);
+    @Setter
+    protected ProxyInfo proxy = null;
+
+    @Setter
+    protected HttpHeaders headers;
+
+    /**
+     * 空闲时间
+     */
+    @Setter
+    protected int allIdleTimeSecond = 10;
 
 
     /**
-     * 将websocket收到的文本消息转换为响应类型 Resp
-     *
-     * @param message websocket收到的原始消息
-     * @return typedMessage
+     * 重连次数减少的间隔
      */
-    public abstract Resp convertMessageToRespType(String message);
-
+    @Setter
+    private int reconnectCountDownSecond = 180;
 
     /**
-     * 获取请求id
-     *
-     * @param request request
-     * @return id
+     * 重链接次数
      */
-    public abstract Object getRequestId(Req request);
+    private final AtomicInteger reconnectTimes = new AtomicInteger(0);
 
     /**
-     * 获取响应id
-     *
-     * @param response 响应
-     * @return id
+     * 重连锁
      */
-    public abstract Object getResponseId(Resp response);
-}
-package cn.com.helei.DepinBot.core.netty.base;
-
-import cn.com.helei.DepinBot.core.netty.constants.NettyConstants;
-import io.netty.channel.*;
-        import io.netty.handler.codec.http.FullHttpResponse;
-import io.netty.handler.codec.http.websocketx.*;
-        import io.netty.handler.timeout.IdleStateEvent;
-import io.netty.util.CharsetUtil;
-import lombok.extern.slf4j.Slf4j;
-
-
-/**
- * WebSocket客户端处理器基础类
- * 处理连接握手
- *
- * @param <P>
- * @param <T>
- */
-@Slf4j
-@ChannelHandler.Sharable
-public abstract class BaseWebSocketClientHandler<P, T> extends SimpleChannelInboundHandler<Object> {
-    private WebSocketClientHandshaker handshaker;
-
-    private ChannelPromise handshakeFuture;
-
-    protected AbstractWebsocketClient<P, T> websocketClient;
+    private final ReentrantLock reconnectLock = new ReentrantLock();
 
     /**
-     * 收到消息处理
-     *
-     * @param text 消息字符串
+     * 启动中阻塞的condition
      */
-    protected abstract void whenReceiveMessage(String text);
-
-
-    public void init(WebSocketClientHandshaker handshaker) {
-        this.handshaker = handshaker;
-    }
-
-    @Override
-    public void handlerAdded(ChannelHandlerContext ctx) {
-        handshakeFuture = ctx.newPromise();
-    }
-
-    @Override
-    public void channelActive(ChannelHandlerContext ctx) {
-        Channel channel = ctx.channel();
-        log.info("WebSocket Client [{}] connected!", websocketClient.getName());
-        channel.attr(NettyConstants.CLIENT_NAME).set(websocketClient.getName());
-        handshaker.handshake(channel);
-    }
-
-    @Override
-    public void channelInactive(ChannelHandlerContext ctx) {
-        log.warn("WebSocket Client [{}] disconnected!, start reconnect", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
-//        websocketClient.reconnect();
-        websocketClient.close();
-    }
-
-    @Override
-    public void channelUnregistered(ChannelHandlerContext ctx) throws Exception {
-        log.warn("WebSocket Client [{}] unregistered!", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
-        websocketClient.close();
-        websocketClient.reconnect();
-    }
-
-    @Override
-    public void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
-        Channel ch = ctx.channel();
-        // 如果握手未完成，处理 FullHttpResponse
-        if (!handshaker.isHandshakeComplete()) {
-            if (msg instanceof FullHttpResponse response) {
-                try {
-                    handshaker.finishHandshake(ch, response);
-                    log.info("WebSocket client [{}] Handshake complete!", ch.attr(NettyConstants.CLIENT_NAME).get());
-                    handshakeFuture.setSuccess();
-
-                    connectCompleteHandler(ch);
-                } catch (WebSocketHandshakeException e) {
-                    log.info("WebSocket client [{}] Handshake failed!", ch.attr(NettyConstants.CLIENT_NAME).get());
-                    handshakeFuture.setFailure(e);
-                }
-                return;
-            }
-        }
-
-        if (msg instanceof FullHttpResponse response) {
-            if (response.status().code() / 100 > 3) {
-                throw new IllegalStateException(
-                        "Unexpected FullHttpResponse (getStatus=" + response.status() +
-                                ", content=" + response.content().toString(CharsetUtil.UTF_8) + ')');
-            }
-        } else if (msg instanceof WebSocketFrame frame) {
-            switch (frame) {
-                case TextWebSocketFrame textFrame -> {
-                    log.debug("websocket client [{}] 接收到的消息：{}", ch.attr(NettyConstants.CLIENT_NAME).get(), textFrame.text());
-                    whenReceiveMessage(textFrame.text());
-                }
-                case PongWebSocketFrame pongWebSocketFrame -> handlerPong(ch, pongWebSocketFrame);
-                case PingWebSocketFrame pingWebSocketFrame -> handlerPing(ch, pingWebSocketFrame);
-                case CloseWebSocketFrame closeWebSocketFrame -> handlerClose(ch, closeWebSocketFrame);
-                default -> {
-                    log.warn("channel[{}]收到位置类型的消息[{}]", ch.attr(NettyConstants.CLIENT_NAME).get(), frame.getClass().getName());
-                }
-            }
-        }
-    }
-
-
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        if (!handshakeFuture.isDone()) {
-            handshakeFuture.setFailure(cause);
-        }
-        ctx.close();
-        log.error("业务处理错误，websocket client关闭", cause);
-    }
-
-    @Override
-    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
-        // IdleStateHandler 所产生的 IdleStateEvent 的处理逻辑.
-        if (evt instanceof IdleStateEvent e) {
-            switch (e.state()) {
-                case READER_IDLE:
-                    handleReaderIdle(ctx);
-                    break;
-                case WRITER_IDLE:
-                    handleWriterIdle(ctx);
-                    break;
-                case ALL_IDLE:
-                    handleAllIdle(ctx);
-                    break;
-                default:
-                    break;
-            }
-        }
-    }
+    private final Condition startingWaitCondition = reconnectLock.newCondition();
 
     /**
-     * 连接完成
-     *
-     * @param ch ch
+     * 客户端当前状态
      */
-    protected void connectCompleteHandler(Channel ch) {
-        log.debug("websocket active");
-    }
+    @Getter
+    private volatile WebsocketClientStatus clientStatus = WebsocketClientStatus.NEW;
 
     /**
-     * 处理close消息
-     *
-     * @param ch                  Channel ch
-     * @param closeWebSocketFrame closeWebSocketFrame
+     * clientStatus更新的回调
      */
-    protected void handlerClose(Channel ch, CloseWebSocketFrame closeWebSocketFrame) {
-        log.warn("websocket client关闭");
-        ch.close();
-    }
+    @Setter
+    private Consumer<WebsocketClientStatus> clientStatusChangeHandler = socketCloseStatus -> {
+    };
 
-
-    /**
-     * 处理pong消息
-     *
-     * @param ch                 Channel ch
-     * @param pongWebSocketFrame pongWebSocketFrame
-     */
-    protected void handlerPong(Channel ch, PongWebSocketFrame pongWebSocketFrame) {
-        log.debug("WebSocket Client [{}] received pong", ch.attr(NettyConstants.CLIENT_NAME).get());
-
-    }
-
-
-    /**
-     * 处理ping消息
-     *
-     * @param ch                 ch
-     * @param pingWebSocketFrame pingWebSocketFrame
-     */
-    protected void handlerPing(Channel ch, PingWebSocketFrame pingWebSocketFrame) {
-        log.debug("WebSocket Client [{}] received ping", ch.attr(NettyConstants.CLIENT_NAME).get());
-        websocketClient.sendPong();
-    }
-
-    /**
-     * 超过限定时间channel没有读时触发
-     *
-     * @param ctx ctx
-     */
-    protected void handleReaderIdle(ChannelHandlerContext ctx) {
-    }
-
-    /**
-     * 超过限定时间channel没有写时触发
-     *
-     * @param ctx ctx
-     */
-    protected void handleWriterIdle(ChannelHandlerContext ctx) {
-    }
-
-    /**
-     * 超过限定时间channel没有读写时触发
-     *
-     * @param ctx ctx
-     */
-    protected void handleAllIdle(ChannelHandlerContext ctx) {
-        websocketClient.sendPing();
-    }
-
-    public ChannelFuture handshakeFuture() {
-        return handshakeFuture;
-    }
-}
-package cn.com.helei.DepinBot.core.netty.handler;
-
-public interface WSStatusHandler {
-
-    void onConnected();
-
-    void onClosed();
-}
-package cn.com.helei.DepinBot.core.pool.account;
-
-
-import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenClass;
-import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenField;
-import cn.com.helei.DepinBot.core.pool.AbstractYamlLineItem;
-import lombok.*;
-
-import java.util.HashMap;
-import java.util.Map;
-
-
-@Getter
-@Setter
-@AllArgsConstructor
-@NoArgsConstructor
-@PropertyChangeListenClass
-public class DepinClientAccount extends AbstractYamlLineItem {
-
-    /**
-     * 账户名
-     */
-    @PropertyChangeListenField
+    @Setter
+    @Getter
     private String name;
 
-    /**
-     * 邮箱
-     */
-    @PropertyChangeListenField
-    private String email;
+    private Bootstrap bootstrap;
 
-    /**
-     * 密码
-     */
-    @PropertyChangeListenField
-    private String password;
+    private final EventLoopGroup eventLoopGroup;
 
-    /**
-     * 是否注册过
-     */
-    @PropertyChangeListenField
-    private Boolean signUp;
-
-    /**
-     * 代理id
-     */
-    @PropertyChangeListenField
-    private Integer proxyId;
-
-
-    /**
-     * 浏览器环境id
-     */
-    @PropertyChangeListenField
-    private Integer browserEnvId;
-
-
-    public DepinClientAccount(Object originLine) {
-        String emailAndPassword = (String) originLine;
-
-        String[] split = emailAndPassword.split(", ");
-        email = split[0];
-
-        String[] emailSplit = email.split("@");
-        if (emailSplit.length != 2) {
-            throw new IllegalArgumentException("邮箱格式错误");
-        }
-        this.name = emailSplit[0];
-
-
-        password = split[1];
-
-        if (split.length == 3) {
-            this.proxyId = Integer.valueOf(split[2]);
-        }
-        if (split.length == 4) {
-            this.browserEnvId = Integer.valueOf(split[2]);
-        }
-    }
-
-    public Map<String, String> getWSHeaders() {
-        return new HashMap<>();
-    }
-
-    public Map<String, String> getRestHeaders() {
-        return new HashMap<>();
-    }
-
-}
-package cn.com.helei.DepinBot.core.pool.network;
-
-import cn.com.helei.DepinBot.core.pool.AbstractYamlLineItem;
-import lombok.*;
-
-import java.net.InetSocketAddress;
-import java.net.SocketAddress;
-
-@Getter
-@Setter
-@NoArgsConstructor
-public class NetworkProxy extends AbstractYamlLineItem {
-
-    private ProxyType proxyType;
+    private URI uri;
 
     private String host;
 
     private int port;
 
-    private String username;
+    private boolean useSSL;
 
-    private String password;
+    private Channel channel;
 
-    public NetworkProxy(Object originLine) {
-        String proxyUrl = (String) originLine;
+    public AbstractWebsocketClient(
+            String url,
+            AbstractWebSocketClientHandler<P, T> handler
+    ) {
+        this.url = url;
+        this.handler = handler;
+        this.handler.websocketClient = this;
 
-        String[] split = proxyUrl.split("://");
-        String protocol = split[0];
+        this.callbackInvoker = Executors.newVirtualThreadPerTaskExecutor();
 
-        proxyType = switch (protocol) {
-            case "http" -> ProxyType.HTTP;
-            case "sockt5" -> ProxyType.SOCKT5;
-            default -> throw new IllegalStateException("Unexpected value: " + protocol);
+        this.eventLoopGroup = new NioEventLoopGroup();
+    }
+
+    private void init() throws SSLException, URISyntaxException {
+
+        resolveParamFromUrl();
+
+        WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(
+                uri, WebSocketVersion.V13, null, true, headers, MAX_FRAME_SIZE
+        );
+        handler.init(handshaker);
+
+        final SslContext sslCtx;
+        if (useSSL) {
+            sslCtx = SslContextBuilder
+                    .forClient()
+                    .trustManager(InsecureTrustManagerFactory.INSTANCE)
+                    .build();
+        } else {
+            sslCtx = null;
+        }
+
+        bootstrap = new Bootstrap();
+
+        bootstrap.group(eventLoopGroup)
+                .channel(NioSocketChannel.class)
+                .option(ChannelOption.TCP_NODELAY, true)
+                .option(ChannelOption.SO_KEEPALIVE, true)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10000) // 设置连接超时为10秒
+                .handler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override
+                    protected void initChannel(NioSocketChannel ch) {
+                        ChannelPipeline p = ch.pipeline();
+                        if (proxy != null) {
+                            // 添加 HttpProxyHandler 作为代理
+                            if (StrUtil.isNotBlank(proxy.getUsername())) {
+                                p.addFirst(new HttpProxyHandler(proxy.getAddress(), proxy.getUsername(), proxy.getPassword()));
+                            } else {
+                                p.addFirst(new HttpProxyHandler(proxy.getAddress()));
+                            }
+                        }
+
+                        if (sslCtx != null) {
+                            p.addLast(sslCtx.newHandler(ch.alloc(), uri.getHost(), port));
+                        }
+
+                        p.addLast("http-chunked", new ChunkedWriteHandler()); // 支持大数据流
+
+
+                        p.addLast(new HttpClientCodec());
+                        p.addLast(new HttpObjectAggregator(81920));
+                        p.addLast(new IdleStateHandler(0, 0, allIdleTimeSecond, TimeUnit.SECONDS));
+                        p.addLast(new ChunkedWriteHandler());
+
+                        p.addLast(new WebSocketFrameAggregator(MAX_FRAME_SIZE));  // 设置聚合器的最大帧大小
+
+
+                        p.addLast(handler);
+                    }
+                });
+    }
+
+
+    /**
+     * 链接服务端
+     */
+    public CompletableFuture<Boolean> connect() {
+        return switch (clientStatus) {
+            case NEW, STOP -> reconnect();
+            case STARTING -> waitForStarting();
+            case RUNNING -> {
+                log.warn("WS客户端[{}}正在运行, clientStatus[{}]", url, clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN -> throw new RuntimeException("");
         };
-        String[] upAndAddress = split[1].split("@");
-
-        String[] up = upAndAddress[0].split(":");
-        this.username = up[0];
-        this.password = up[1];
-
-        String[] address = upAndAddress[1].split(":");
-        this.host = address[0];
-        this.port = Integer.parseInt(address[1]);
-
     }
 
-    public SocketAddress getAddress() {
-        return new InetSocketAddress(host, port);
+
+    /**
+     * 重链接
+     *
+     * @return CompletableFuture<Void>
+     */
+    public CompletableFuture<Boolean> reconnect() {
+        return switch (clientStatus) {
+            case NEW, STOP -> doReconnect();
+            case STARTING -> waitForStarting().thenApplyAsync(success -> {
+                if (success) return true;
+                try {
+                    return doReconnect().get();
+                } catch (InterruptedException | ExecutionException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            case RUNNING -> {
+                log.warn("WS客户端[{}}正在启动或运行, 不能reconnect. clientStatus[{}]", url, clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN -> CompletableFuture.supplyAsync(() -> {
+                log.error("client[{}] already shutdown", name);
+                return false;
+            });
+        };
     }
 
-    public String getAddressStr() {
-        return host + ":" + port;
+    /**
+     * 执行重连接，带重试逻辑
+     *
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Boolean> doReconnect() {
+        updateClientStatus(WebsocketClientStatus.STARTING);
+
+        return CompletableFuture.supplyAsync(() -> {
+            //Step 1 重连次数超过限制，关闭
+            if (reconnectTimes.get() >= NettyConstants.RECONNECT_LIMIT) {
+                log.error("reconnect times out of limit [{}], close websocket client", NettyConstants.RECONNECT_LIMIT);
+                close();
+                return false;
+            }
+
+            AtomicBoolean isSuccess = new AtomicBoolean(false);
+
+            //Step 2 重连逻辑
+            //Step 2.1 加锁保证只要一个线程进行重连
+            reconnectLock.lock();
+            try {
+
+                //Step 2.2 已经再running状态，直接返回true。变为shutdown、stop状态，直接返回false
+                if (clientStatus.equals(WebsocketClientStatus.RUNNING)) {
+                    log.info("client started by other thread");
+                    return true;
+                } else if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN) || clientStatus.equals(WebsocketClientStatus.STOP)) {
+                    log.error("clint stop/shutdown when client starting");
+                    return false;
+                }
+
+                //Step 3 初始化
+                log.info("开始初始化WS客户端");
+                try {
+                    init();
+                } catch (SSLException | URISyntaxException e) {
+                    throw new RuntimeException("初始化WS客户端发生错误", e);
+                }
+                log.info("初始化WS客户端完成，开始链接服务器 [{}]", url);
+
+
+                //Step 4 链接服务器
+                if (reconnectTimes.incrementAndGet() <= NettyConstants.RECONNECT_LIMIT) {
+
+                    //Step 4.1 每进行重连都会先将次数加1并设置定时任务将重连次数减1
+                    eventLoopGroup.schedule(() -> {
+                        reconnectTimes.decrementAndGet();
+                    }, reconnectCountDownSecond, TimeUnit.SECONDS);
+
+                    log.info("start connect client [{}], url[{}], current times [{}]", name, uri, reconnectTimes.get());
+
+                    //Step 4.2 latch用于同步等等链接完成
+                    CountDownLatch latch = new CountDownLatch(1);
+
+                    //Step 4.3 延迟再进行连接
+                    eventLoopGroup.schedule(() -> {
+                        try {
+                            channel = bootstrap.connect(host, port).sync().channel();
+
+                            handler.handshakeFuture().sync();
+
+                            channel.attr(NettyConstants.CLIENT_NAME).set(name);
+
+                            //Step 4.4 连接成功设置标识
+                            isSuccess.set(true);
+                        } catch (Exception e) {
+                            log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(), e);
+                            isSuccess.set(false);
+                        } finally {
+                            latch.countDown();
+                        }
+                    }, NettyConstants.RECONNECT_DELAY_SECONDS, TimeUnit.SECONDS);
+
+                    //Step 4.5 等待链接完成
+                    try {
+                        latch.await();
+                    } catch (InterruptedException e) {
+                        log.error("connect client [{}], url[{}] interrupted, times [{}]", name, url, reconnectTimes.get(), e);
+                    }
+
+
+                    //Step 6 未成功启动，关闭
+                    if (!isSuccess.get()) {
+                        log.info("connect client [{}], url[{}] fail, current times [{}]", name, url, reconnectTimes.get());
+
+                        close();
+                    } else {
+                        log.info("connect client [{}], url[{}] success, current times [{}]", name, url, reconnectTimes.get());
+
+                        updateClientStatus(WebsocketClientStatus.RUNNING);
+                        reconnectTimes.set(0);
+                    }
+                }
+            } catch (Exception e) {
+                //exception 遇到未处理异常，直接关闭
+                close();
+                throw new RuntimeException(String.format("connect client [%s] appear unknown error", name), e);
+            } finally {
+                //Step 5 释放等待启动的线程
+                startingWaitCondition.signalAll();
+                reconnectLock.unlock();
+            }
+
+            return isSuccess.get();
+        }, callbackInvoker);
+    }
+
+
+    /**
+     * 停止WebSocketClient
+     */
+    public void close() {
+        if (clientStatus.equals(WebsocketClientStatus.STOP)
+                || clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) return;
+
+        updateClientStatus(WebsocketClientStatus.STOP);
+
+        log.info("closing websocket client [{}], [{}]", name, channel == null ? "null" : channel.hashCode());
+        if (channel != null) {
+            channel.close();
+            channel = null;
+        }
+
+        log.warn("web socket client [{}] closed", name);
+    }
+
+    /**
+     * 彻底关闭客户端
+     */
+    public void shutdown() {
+        updateClientStatus(WebsocketClientStatus.SHUTDOWN);
+
+        if (channel != null) {
+            channel.close();
+            channel = null;
+        }
+
+        if (eventLoopGroup != null) {
+            eventLoopGroup.shutdownGracefully();
+        }
+
+        log.warn("web socket client [{}] already shutdown !", name);
+    }
+
+    /**
+     * 等待启动完成
+     *
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Boolean> waitForStarting() {
+        return CompletableFuture.supplyAsync(() -> {
+            log.warn("client [{}] is starting, waiting for complete", name);
+            reconnectLock.lock();
+            try {
+                while (clientStatus.equals(WebsocketClientStatus.STARTING)) {
+                    startingWaitCondition.await();
+                }
+
+                if (clientStatus.equals(WebsocketClientStatus.STOP) || clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+                    log.error("启动WS客户端[{}]失败, ClientStatus [{}}", name, clientStatus);
+                    return false;
+                }
+                return true;
+            } catch (InterruptedException e) {
+                log.error("waiting for start client [{}] error", name);
+                throw new RuntimeException(e);
+            } finally {
+                reconnectLock.unlock();
+            }
+        }, callbackInvoker);
+    }
+
+
+    /**
+     * 发送消息，没有回调
+     *
+     * @param message message
+     * @return CompletableFuture<Void>
+     */
+    public CompletableFuture<Void> sendMessage(P message) {
+        return CompletableFuture.runAsync(() -> {
+            if (message == null) {
+                throw new IllegalArgumentException("message is null");
+            }
+
+            try {
+                channel.writeAndFlush(new TextWebSocketFrame(JSON.toJSONString(message)));
+            } catch (Exception e) {
+                throw new RuntimeException("send message [" + message + "] error");
+            }
+        }, callbackInvoker);
+    }
+
+    ;
+
+    /**
+     * 发送请求, 注册响应监听
+     *
+     * @param request 请求体
+     */
+    public CompletableFuture<T> sendRequest(P request) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (request == null) {
+                log.error("request is null");
+                return null;
+            }
+
+            CountDownLatch latch = new CountDownLatch(1);
+            AtomicReference<T> jb = new AtomicReference<>(null);
+
+            boolean flag = handler.registryRequest(request, response -> {
+                latch.countDown();
+                jb.set(response);
+            });
+
+            if (flag) {
+                log.info("send request [{}]", request);
+                channel.writeAndFlush(new TextWebSocketFrame(JSON.toJSONString(request)));
+                log.debug("send request [{}] success", request);
+            } else {
+                log.error("request id registered");
+                return null;
+            }
+
+            try {
+                if (!latch.await(NettyConstants.REQUEST_WAITE_SECONDS, TimeUnit.SECONDS)) return null;
+
+                return jb.get();
+            } catch (InterruptedException e) {
+                log.error("send request interrupted", e);
+                return null;
+            }
+        }, callbackInvoker);
+    }
+
+    /**
+     * 发送ping
+     */
+    public void sendPing() {
+        log.debug("client [{}] send ping {}", name, url);
+        channel.writeAndFlush(new PingWebSocketFrame());
+    }
+
+    /**
+     * 发送pong
+     */
+    public void sendPong() {
+        log.debug("client [{}] send pong {}", name, url);
+        channel.writeAndFlush(new PongWebSocketFrame());
+    }
+
+
+    /**
+     * 更新status
+     *
+     * @param newStatus newStatus
+     */
+    public void updateClientStatus(WebsocketClientStatus newStatus) {
+        synchronized ("CLIENT_STATUS_LOCK") {
+            if (clientStatus.equals(newStatus)) return;
+
+            if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+                throw new IllegalArgumentException("client status is shutdown，new status can not be " + newStatus);
+            }
+
+            try {
+                if (newStatus != clientStatus && clientStatusChangeHandler != null) {
+                    clientStatusChangeHandler.accept(newStatus);
+                }
+            } finally {
+                log.info("client status [{}] -> [{}]", clientStatus, newStatus);
+                clientStatus = newStatus;
+            }
+        }
+    }
+
+    /**
+     * 解析参数
+     *
+     * @throws URISyntaxException url解析错误
+     */
+    private void resolveParamFromUrl() throws URISyntaxException {
+        uri = new URI(url);
+        String scheme = uri.getScheme() == null ? "ws" : uri.getScheme();
+        host = uri.getHost() == null ? "127.0.0.1" : uri.getHost();
+        if (uri.getPort() == -1) {
+            if ("ws".equalsIgnoreCase(scheme)) {
+                port = 80;
+            } else if ("wss".equalsIgnoreCase(scheme)) {
+                port = 443;
+            } else {
+                port = -1;
+            }
+        } else {
+            port = uri.getPort();
+        }
+
+        if (!"ws".equalsIgnoreCase(scheme) && !"wss".equalsIgnoreCase(scheme)) {
+            log.error("Only WS(S) is supported.");
+            throw new IllegalArgumentException("url error, Only WS(S) is supported.");
+        }
+
+        useSSL = "wss".equalsIgnoreCase(scheme);
     }
 }
-package cn.com.helei.DepinBot.core.supporter.persistence;
+package cn.com.helei.bot.core.pool;
 
-import cn.com.helei.DepinBot.core.dto.account.AccountContext;
-import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeInvocation;
-import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenClass;
-import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeListenField;
-import cn.com.helei.DepinBot.core.supporter.propertylisten.PropertyChangeProxy;
-import cn.com.helei.DepinBot.core.util.DiscardingBlockingQueue;
-import cn.com.helei.DepinBot.core.util.FileUtil;
+import cn.com.helei.bot.core.util.table.CommandLineTablePrintHelper;
+import lombok.Getter;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+
+@Getter
+public abstract class MemoryPool<T> {
+    private final Class<T> tClass;
+
+    private final ConcurrentMap<Integer, T> idMapItem = new ConcurrentHashMap<>();
+
+    /**
+     * 使用次数
+     */
+    private final Map<Integer, Integer> useCountMap = new HashMap<>();
+
+
+    protected MemoryPool(Class<T> tClass) {
+        this.tClass = tClass;
+
+        fillPool(idMapItem);
+    }
+
+    protected abstract void fillPool(ConcurrentMap<Integer, T> idMapItem);
+
+
+    /**
+     * 获取代理
+     *
+     * @param id id
+     * @return NetworkProxy
+     */
+    public synchronized T getItem(Integer id) {
+        T compute = idMapItem.compute(id, (k, v) -> {
+            if (v == null) return null;
+
+            useCountMap.compute(id, (k1, v1) -> {
+                if (v1 == null) v1 = 0;
+
+                return v1 + 1;
+            });
+
+            return v;
+        });
+        return (T) compute;
+    }
+
+
+    /**
+     * 获取最少使用的
+     *
+     * @param count 数量
+     * @return List<T>
+     */
+    public synchronized List<T> getLessUsedItem(int count) {
+        if (getIdMapItem().isEmpty()) return Collections.emptyList();
+
+        int batchSize = Math.min(count, getUseCountMap().size());
+
+        List<T> res = new ArrayList<>(count);
+
+        int needCount = count;
+        while (needCount > 0) {
+            int currentSize = Math.min(needCount, batchSize);
+
+            List<T> batch = getUseCountMap().entrySet().stream()
+                    .sorted((e1, e2) -> e1.getValue().compareTo(e2.getValue()))
+                    .limit(currentSize)
+                    .map(e -> {
+                        getUseCountMap().compute(e.getKey(), (k, v) -> v == null ? 0 : v + 1);
+                        return (T) getIdMapItem().get(e.getKey());
+                    }).toList();
+            res.addAll(batch);
+
+            needCount -= batch.size();
+        }
+
+        return res;
+    }
+
+    /**
+     * 查询未使用的id
+     *
+     * @return List<T>
+     */
+    public synchronized List<Integer> getUnUsedItemId() {
+        return getUseCountMap().entrySet().stream()
+                .filter(e -> e.getValue() == 0).map(Map.Entry::getKey).toList();
+    }
+
+    /**
+     * 获取全部
+     *
+     * @return List<T>
+     */
+    public List<T> getAllItem() {
+        return getIdMapItem().values().stream().map(e -> (T) e).toList();
+    }
+
+
+    /**
+     * 打印池
+     *
+     * @return String
+     */
+    public String printPool() {
+        return CommandLineTablePrintHelper.generateTableString(new ArrayList<>(idMapItem.values()), tClass);
+    }
+
+
+    public T buildTInstanceFromLineStr(Object originLine)
+            throws NoSuchMethodException, InvocationTargetException, InstantiationException, IllegalAccessException {
+        Constructor<T> constructor = getTClass().getConstructor(Object.class);
+        return constructor.newInstance(originLine);
+    }
+
+
+    public int size() {
+        return idMapItem.size();
+    }
+}
+package cn.com.helei.bot.core.pool;
+
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import cn.com.helei.bot.core.mvc.service.IProxyInfoService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.concurrent.ConcurrentMap;
+
+@Component
+public class ProxyPool extends MemoryPool<ProxyInfo> {
+
+    @Autowired
+    private IProxyInfoService proxyInfoService;
+
+    public ProxyPool(
+            IProxyInfoService proxyInfoService
+    ) {
+        super(ProxyInfo.class);
+    }
+
+    @Override
+    protected void fillPool(ConcurrentMap<Integer, ProxyInfo> idMapItem) {
+        List<ProxyInfo> all = proxyInfoService.query().list();
+
+        all.forEach(proxyInfo -> {
+            idMapItem.put(proxyInfo.getId(), proxyInfo);
+        });
+    }
+}
+package cn.com.helei.bot.core.supporter.persistence.impl;
+
+
+import cn.com.helei.bot.core.config.TypedAccountConfig;
+import cn.com.helei.bot.core.entity.AccountBaseInfo;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.mvc.service.*;
+import cn.com.helei.bot.core.supporter.persistence.AbstractPersistenceManager;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeInvocation;
+import cn.com.helei.bot.core.util.NamedThreadFactory;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
+
+@Slf4j
+@Service
+public class DBAccountPersistenceManager extends AbstractPersistenceManager {
+
+    private final ExecutorService executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("database-"));
+
+    @Autowired
+    private IAccountBaseInfoService accountBaseInfoService;
+
+    @Autowired
+    private ITwitterAccountService twitterAccountService;
+
+    @Autowired
+    private IProxyInfoService proxyInfoService;
+
+    @Autowired
+    private IBrowserEnvService browserEnvService;
+
+    @Autowired
+    private IDiscordAccountService discordAccountService;
+
+    @Autowired
+    private IProjectAccountContextService projectAccountContextService;
+
+    @Autowired
+    private IRewordInfoService rewordInfoService;
+
+    @Override
+    public void init() {
+
+    }
+
+    @Override
+    public void persistenceAccountContexts(Map<String, List<AccountContext>> typedAccountMap) {
+        for (List<AccountContext> values : typedAccountMap.values()) {
+            projectAccountContextService.saveBatch(values);
+        }
+    }
+
+    @Override
+    public Map<String, List<AccountContext>> createAccountContexts(Integer projectId, List<TypedAccountConfig> accountConfigs) {
+        // Step 1 按类型遍历
+        return accountConfigs.stream().collect(Collectors.toMap(TypedAccountConfig::getType, typedAccountConfig -> {
+            String type = typedAccountConfig.getType();
+
+            // Step 2 根据类型查询对应的AccountBaseInfo
+            AccountBaseInfo query = new AccountBaseInfo();
+            query.setType(type);
+
+            List<AccountBaseInfo> typeBaseInfos = accountBaseInfoService.list(new QueryWrapper<>(query));
+
+            // Step 3 创建AccountCount
+            return typeBaseInfos.stream()
+                    .map(accountBaseInfo -> AccountContext.builder().accountBaseInfo(accountBaseInfo).build())
+                    .toList();
+        }));
+    }
+
+    @Override
+    public Map<String, List<AccountContext>> loadAccountContexts(Integer projectId) {
+        // Step 1 加载 projectId 对应的账号
+        AccountContext query = new AccountContext();
+        query.setProjectId(projectId);
+        List<AccountContext> accountContexts = projectAccountContextService.list(new QueryWrapper<>(query));
+
+        // Step 2 遍历账号，补充对象
+        CompletableFuture<?>[] futures = accountContexts.stream().map(accountContext -> CompletableFuture.runAsync(() -> {
+            try {
+                fillAccountInfo(accountContext);
+            } catch (Exception e) {
+                log.error("{} 填充信息时发生异常", accountContext.getName(), e);
+            }
+        }, executorService)).toArray(CompletableFuture[]::new);
+
+        // Step 3 等待所有任务完成
+        CompletableFuture.allOf(futures).join();
+
+        // Step 4 按类型分类账号
+        return accountContexts.stream().collect(Collectors.groupingBy(AccountContext::getType));
+    }
+
+    @Override
+    protected void propertyChangeHandler(PropertyChangeInvocation invocation) {
+
+    }
+
+
+    /**
+     * 查询填充账户信息
+     *
+     * @param accountContext accountContext
+     */
+    private void fillAccountInfo(AccountContext accountContext) {
+
+        // Step 2.1 绑定基础账号信息
+        if (accountContext.getAccountBaseInfoId() != null) {
+            accountContext.setAccountBaseInfo(accountBaseInfoService.getById(accountContext.getAccountBaseInfoId()));
+        }
+        // Step 2,2 绑定推特
+        if (accountContext.getTwitterId() != null) {
+            accountContext.setTwitter(twitterAccountService.getById(accountContext.getTwitterId()));
+        }
+        // Step 2,3 绑定 discord
+        if (accountContext.getDiscordId() != null) {
+            accountContext.setDiscord(discordAccountService.getById(accountContext.getDiscordId()));
+        }
+        // Step 2.4 绑定代理
+        if (accountContext.getProxyId() != null) {
+            accountContext.setProxy(proxyInfoService.getById(accountContext.getProxyId()));
+        }
+        // Step 2.5 绑定浏览器环境
+        if (accountContext.getBrowserEnvId() != null) {
+            accountContext.setBrowserEnv(browserEnvService.getById(accountContext.getBrowserEnvId()));
+        }
+        // Step 2.6 绑定tg
+        if (accountContext.getTelegramId() != null) {
+
+        }
+        // Step 2.7 绑定钱包
+        if (accountContext.getWalletId() != null) {
+
+        }
+
+        // Step 2.8 绑定奖励信息
+        if (accountContext.getRewardId() != null) {
+            accountContext.setRewordInfo(rewordInfoService.getById(accountContext.getRewardId()));
+        }
+    }
+}
+package cn.com.helei.bot.core.supporter.persistence.impl;
+
+import cn.com.helei.bot.core.config.TypedAccountConfig;
+import cn.com.helei.bot.core.constants.ProxyType;
+import cn.com.helei.bot.core.entity.AccountBaseInfo;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.entity.BrowserEnv;
+import cn.com.helei.bot.core.supporter.persistence.AbstractPersistenceManager;
+import cn.com.helei.bot.core.supporter.persistence.FileDumpDataSupporter;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeInvocation;
+import cn.com.helei.bot.core.util.DiscardingBlockingQueue;
+import cn.com.helei.bot.core.util.FileUtil;
 import com.alibaba.fastjson.JSONObject;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.*;
-import java.lang.reflect.Field;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.function.Function;
 import java.util.stream.Stream;
 
 
 @Slf4j
-public class AccountPersistenceManager {
+public class FileAccountPersistenceManager extends AbstractPersistenceManager {
 
     private static final String PERSISTENCE_PATH = "accounts";
 
@@ -517,14 +1010,13 @@ public class AccountPersistenceManager {
 
     private static final int PERSISTENCE_CACHE_SIZE = 3;
 
-    private final String botName;
-
     /**
-     * 监听的对象 -》 该对象的root
+     * root -> dumpPath
      */
-    private final ConcurrentMap<Object, Object> listenedObjRootMap = new ConcurrentHashMap<>();
+    private final ConcurrentMap<Object, String> rootDumpPathMap = new ConcurrentHashMap<>();
 
-    private final ConcurrentMap<Object, Object> originRoot2ProxyMap = new ConcurrentHashMap<>();
+
+    private final String botName;
 
     /**
      * root更新队列
@@ -532,98 +1024,296 @@ public class AccountPersistenceManager {
     private final ConcurrentMap<Object, DiscardingBlockingQueue<String>> rootUpdateQueueMap = new ConcurrentHashMap<>();
 
     /**
-     * root -> dumpPath
-     */
-    private final ConcurrentMap<Object, String> rootDumpPathMap = new ConcurrentHashMap<>();
-
-    /**
      * dump数据
      */
-    private final DumpDataSupporter dumpDataSupporter = new DumpDataSupporter();
+    private final FileDumpDataSupporter fileDumpDataSupporter = new FileDumpDataSupporter();
 
-    public AccountPersistenceManager(String botName) {
+
+    public FileAccountPersistenceManager(String botName) {
         this.botName = botName;
     }
 
-
+    @Override
     public void init() {
-        dumpDataSupporter.startDumpTask();
+        fileDumpDataSupporter.startDumpTask();
     }
 
     /**
-     * 持久化保存accountContexts
+     * 持久化保存typedAccountMap
      *
-     * @param accountContexts accountContexts
+     * @param typedAccountMap typedAccountMap
      */
-    public synchronized void persistenceAccountContexts(List<AccountContext> accountContexts) throws IOException {
-        Path path = Paths.get(getPersistencePath(botName, PERSISTENCE_PATH));
-        if (!Files.exists(path)) Files.createDirectories(path);
+    @Override
+    public synchronized void persistenceAccountContexts(Map<String, List<AccountContext>> typedAccountMap) {
+        for (Map.Entry<String, List<AccountContext>> entry : typedAccountMap.entrySet()) {
+            String type = entry.getKey();
+            List<AccountContext> accountContexts = entry.getValue();
 
-        for (AccountContext accountContext : accountContexts) {
-            String fileName = String.format(PERSISTENCE_ACCOUNT_PATTERN, accountContext.getClientAccount().getId());
+            Path path = Paths.get(getPersistencePath(botName, PERSISTENCE_PATH + File.separator + type));
+            if (!Files.exists(path)) {
+                try {
+                    Files.createDirectories(path);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            }
 
-            saveAccountContext(accountContext, path, fileName);
+            for (AccountContext accountContext : accountContexts) {
+                String fileName = String.format(PERSISTENCE_ACCOUNT_PATTERN, accountContext.getAccountBaseInfo().getId());
+
+                saveAccountContext(accountContext, path, fileName);
+            }
         }
     }
 
+
+    @Override
+    public <T> T bindPersistenceAnnoListener(String type, T target) {
+        rootDumpPathMap.put(target, getPersistencePath(type, (AccountContext) target));
+        return super.bindPersistenceAnnoListener(type, target);
+    }
+
+
+    /**
+     * 加载新的账户上下文列表，从配置文件中
+     *
+     * @return Map<String, List < AccountContext>>
+     */
+    @Override
+    public Map<String, List<AccountContext>> createAccountContexts(Integer projectId, List<TypedAccountConfig> accountConfigs) {
+
+        Map<String, List<AccountContext>> typedAccountContextMap = new HashMap<>();
+
+        // 根据配置加载账号
+        for (TypedAccountConfig accountConfig : accountConfigs) {
+            String type = accountConfig.getType();
+
+            List<AccountBaseInfo> accountBaseInfos = loadBaseAccountInfoFromFile(type, accountConfig.getAccountFileUserDirPath());
+            // Step 1 初始化账号
+
+            // 加载账户配置文件中的主账户
+            List<AccountContext> mainAccounts = buildAccountContext(accountConfig.getProxyType(), accountBaseInfos);
+
+            typedAccountContextMap.put(type, mainAccounts);
+        }
+
+        return typedAccountContextMap;
+    }
 
     /**
      * 加载账户上下文
      *
      * @return PersistenceDto
      */
-    public synchronized Map<Integer, AccountContext> loadAccountContexts() {
+    @Override
+    public synchronized Map<String, List<AccountContext>> loadAccountContexts(Integer projectId) {
         Path path = Paths.get(getPersistencePath(botName, PERSISTENCE_PATH));
 
         if (!Files.exists(path)) return null;
 
-        Map<Integer, AccountContext> map = new HashMap<>();
+        Map<String, List<AccountContext>> typedAccountMap = new HashMap<>();
 
-        try (Stream<Path> walk = Files.walk(path);) {
+        // Step 1 遍历 accounts 目录x
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(path, Files::isDirectory)) {
+            stream.forEach(dirPath -> {
+                if (!Files.exists(dirPath)) return;
 
-            for (Path filePath : walk.filter(Files::isRegularFile)
-                    .filter(p -> p.toString().contains("account-")).toList()) {
+                // Step 2 遍历 accounts/xxx 目录里的账户持久化文件
+                try (Stream<Path> dirWalk = Files.walk(dirPath)) {
 
-                Integer idx = Integer.valueOf(filePath.toString()
-                        .split("account-")[1].split(".json")[0]);
+                    List<AccountContext> accountContexts = new ArrayList<>();
+                    for (Path filePath : dirWalk.filter(Files::isRegularFile)
+                            .filter(p -> p.toString().contains("account-")).toList()) {
 
-                try (BufferedReader reader = new BufferedReader(new FileReader(filePath.toFile()));) {
-                    String line = null;
-                    StringBuilder sb = new StringBuilder();
-                    while ((line = reader.readLine()) != null) {
-                        sb.append(line);
+                        // 便利解析文件
+                        Integer idx = Integer.valueOf(filePath.toString()
+                                .split("account-")[1].split(".json")[0]);
+
+                        try (BufferedReader reader = new BufferedReader(new FileReader(filePath.toFile()));) {
+                            String line = null;
+                            StringBuilder sb = new StringBuilder();
+                            while ((line = reader.readLine()) != null) {
+                                sb.append(line);
+                            }
+
+                            accountContexts.add(JSONObject.parseObject(sb.toString(), AccountContext.class));
+                        }
                     }
 
-                    map.put(idx, JSONObject.parseObject(sb.toString(), AccountContext.class));
+                    typedAccountMap.put(dirPath.getFileName().toString(), accountContexts);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
                 }
-            }
+            });
 
-            return map;
+            return typedAccountMap;
         } catch (Exception e) {
             throw new RuntimeException("读取账户文件失败", e);
         }
     }
 
+    /**
+     * 属性改变后触发
+     *
+     * @param invocation invocation
+     */
+    @Override
+    protected void propertyChangeHandler(PropertyChangeInvocation invocation) {
+        // 找到root，更新后的root放入队列
+        Object root = getListenedObjRootMap().get(invocation.getTarget());
+        Object rootProxy = getOriginRoot2ProxyMap().get(root);
+
+        rootUpdateQueueMap.compute(root, (k, v) -> {
+            log.debug("目标[{}] 属性改变了:{},{}->{} [{}]", root.hashCode(), invocation.getPropertyName(),
+                    invocation.getOldValue(), invocation.getNewValue(), invocation.getTimestamp());
+
+            if (v == null) {
+                v = new DiscardingBlockingQueue<>(PERSISTENCE_CACHE_SIZE);
+
+                fileDumpDataSupporter.bindUpdateQueue(rootDumpPathMap.get(root), v);
+            }
+
+            try {
+                v.put(JSONObject.toJSONString(rootProxy));
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+            return v;
+        });
+    }
+
+
+    /**
+     * 构建depinClientAccounts
+     *
+     * @param accountBaseInfos depinClientAccounts
+     * @return AccountContext
+     */
+    private List<AccountContext> buildAccountContext(ProxyType proxyType, List<AccountBaseInfo> accountBaseInfos) {
+        List<AccountContext> newAccountContexts = new ArrayList<>();
+        for (AccountBaseInfo accountBaseInfo : accountBaseInfos) {
+            AccountContext accountContext = new AccountContext();
+        }
+
+        return newAccountContexts;
+    }
+
+    /**
+     * 从文件加载账户基础信息
+     *
+     * @param type                   type
+     * @param accountFileUserDirPath accountFileUserDirPath
+     * @return List<AccountBaseInfo>
+     */
+    private List<AccountBaseInfo> loadBaseAccountInfoFromFile(String type, String accountFileUserDirPath) {
+        String resourcePath = FileUtil.getConfigDirResourcePath(List.of(), accountFileUserDirPath);
+
+        try (BufferedReader reader = new BufferedReader(new FileReader(resourcePath))) {
+            List<AccountBaseInfo> accountBaseInfos = new ArrayList<>();
+
+            String line;
+            int id = 0;
+            while ((line = reader.readLine()) != null) {
+                AccountBaseInfo baseInfo = new AccountBaseInfo(line);
+                baseInfo.setId(id++);
+                baseInfo.setType(type);
+                accountBaseInfos.add(baseInfo);
+            }
+
+            return accountBaseInfos;
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+
+    /**
+     * 保存账户
+     *
+     * @param accountContext accountContext
+     * @param path           accountContext
+     * @param fileName       fileName
+     */
+    private static void saveAccountContext(AccountContext accountContext, Path path, String fileName) {
+        FileUtil.saveJSONStringContext(Path.of(path.toString(), fileName), JSONObject.toJSONString(accountContext));
+    }
+
+
+    /**
+     * 获取账户持久化路径
+     *
+     * @param accountContext accountContext
+     * @return path
+     */
+    private String getPersistencePath(String type, AccountContext accountContext) {
+        Path path = Paths.get(getPersistencePath(botName, PERSISTENCE_PATH + File.separator + type));
+        String fileName = String.format(PERSISTENCE_ACCOUNT_PATTERN, accountContext.getAccountBaseInfo().getId());
+
+        return Paths.get(path.toString(), fileName).toString();
+    }
+
+
+    /**
+     * 获取持久化路径， 项目根目录开始
+     *
+     * @param botName botName
+     * @param subPath subPath
+     * @return String
+     */
+    private static String getPersistencePath(String botName, String subPath) {
+        return FileUtil.RESOURCE_ROOT_DIR + File.separator + "data" + File.separator + botName + File.separator + subPath;
+    }
+}
+package cn.com.helei.bot.core.supporter.persistence;
+
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeInvocation;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenClass;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenField;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeProxy;
+import lombok.Getter;
+
+import java.lang.reflect.Field;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+@Getter
+public abstract class AbstractPersistenceManager implements AccountPersistenceManager {
+
+
+    /**
+     * 监听的对象 -》 该对象的root
+     */
+    private final ConcurrentMap<Object, Object> listenedObjRootMap = new ConcurrentHashMap<>();
+
+    /**
+     * root target -> root proxy
+     */
+    private final ConcurrentMap<Object, Object> originRoot2ProxyMap = new ConcurrentHashMap<>();
+
 
     /**
      * 注册持久化监听
      *
-     * @param targetList targetList
-     * @param <T>        targetType
+     * @param type            type
+     * @param accountContexts accountContexts
      */
-    public <T> void registerPersistenceListener(List<T> targetList, Function<T, String> getSavePath) {
-        targetList.replaceAll(target -> bindPersistenceAnnoListener(target, getSavePath.apply(target)));
+    @Override
+    public void registerPersistenceListener(String type, List<AccountContext> accountContexts) {
+        accountContexts.replaceAll(accountContext -> bindPersistenceAnnoListener(type, accountContext));
     }
+
 
     /**
      * 对象属性添加变化监听
      *
+     * @param type   type
      * @param target target 目标对象
      * @param <T>    T
      * @return 添加监听后被动态代理的对象
      */
-    public <T> T bindPersistenceAnnoListener(T target, String savePath) {
-        rootDumpPathMap.put(target, savePath);
+    public <T> T bindPersistenceAnnoListener(String type, T target) {
         return doBindPersistenceAnnoListener(target, target);
     }
 
@@ -678,162 +1368,767 @@ public class AccountPersistenceManager {
         return proxy;
     }
 
-    /**
-     * 获取账户持久化路径
-     *
-     * @param botName        botName
-     * @param accountContext accountContext
-     * @return path
-     */
-    public static String getAccountContextPersistencePath(String botName, AccountContext accountContext) {
-        Path path = Paths.get(getPersistencePath(botName, PERSISTENCE_PATH));
-        String fileName = String.format(PERSISTENCE_ACCOUNT_PATTERN, accountContext.getClientAccount().getId());
-
-        return Paths.get(path.toString(), fileName).toString();
-    }
 
     /**
-     * 属性改变后触发
+     * 对象属性发生改变的回调
      *
      * @param invocation invocation
      */
-    private void propertyChangeHandler(PropertyChangeInvocation invocation) {
-        // 找到root，更新后的root放入队列
-        Object root = listenedObjRootMap.get(invocation.getTarget());
-        Object rootProxy = originRoot2ProxyMap.get(root);
+    protected abstract void propertyChangeHandler(PropertyChangeInvocation invocation);
+}
+package cn.com.helei.bot.core.supporter.persistence;
 
-        rootUpdateQueueMap.compute(root, (k, v) -> {
-            log.info("目标[{}] 属性改变了:{},{}->{} [{}]", root.hashCode(), invocation.getPropertyName(),
-                    invocation.getOldValue(), invocation.getNewValue(), invocation.getTimestamp());
+import cn.com.helei.bot.core.config.TypedAccountConfig;
+import cn.com.helei.bot.core.entity.AccountContext;
 
+import java.util.List;
+import java.util.Map;
+
+public interface AccountPersistenceManager {
+
+    void init();
+
+    void persistenceAccountContexts(Map<String, List<AccountContext>> typedAccountMap);
+
+    Map<String, List<AccountContext>> createAccountContexts(Integer projectId, List<TypedAccountConfig> accountConfigs);
+
+    Map<String, List<AccountContext>> loadAccountContexts(Integer projectId);
+
+   void registerPersistenceListener(String type, List<AccountContext> targetList);
+
+}
+package cn.com.helei.bot.core.supporter.persistence;
+
+import cn.com.helei.bot.core.util.DiscardingBlockingQueue;
+import cn.com.helei.bot.core.util.FileUtil;
+import cn.com.helei.bot.core.util.NamedThreadFactory;
+import lombok.extern.slf4j.Slf4j;
+
+import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+@Slf4j
+public class FileDumpDataSupporter {
+
+    private final ConcurrentMap<String, DiscardingBlockingQueue<String>> updateQueueDumpPathMap = new ConcurrentHashMap<>();
+
+    /**
+     * 执行的线程池
+     */
+    private final ExecutorService executorService;
+
+    private final AtomicBoolean running = new AtomicBoolean(false);
+
+    private final long intervalSecond = 10;
+
+    public FileDumpDataSupporter() {
+        this.executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("persistence-"));
+    }
+
+
+    /**
+     * 绑定更新队列
+     *
+     * @param dumpPath dumpPath
+     * @param queue    queue
+     */
+    public void bindUpdateQueue(String dumpPath, DiscardingBlockingQueue<String> queue) {
+        updateQueueDumpPathMap.compute(dumpPath, (k, v) -> {
             if (v == null) {
-                v = new DiscardingBlockingQueue<>(PERSISTENCE_CACHE_SIZE);
-
-                dumpDataSupporter.bindUpdateQueue(rootDumpPathMap.get(root), v);
+                v = queue;
             }
 
-            try {
-                v.put(JSONObject.toJSONString(rootProxy));
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
             return v;
         });
     }
 
-
     /**
-     * 保存账户
-     *
-     * @param accountContext accountContext
-     * @param path           accountContext
-     * @param fileName       fileName
+     * 开启dump任务
      */
-    private static void saveAccountContext(AccountContext accountContext, Path path, String fileName) {
-        FileUtil.saveJSONStringContext(Path.of(path.toString(), fileName), JSONObject.toJSONString(accountContext));
+    public void startDumpTask() {
+        if (running.compareAndSet(false, true)) {
+            executorService.execute(() -> {
+                while (running.get()) {
+                    try {
+                        TimeUnit.SECONDS.sleep(intervalSecond);
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+
+                    try {
+                        Integer successCount = dumpAllQueue().get();
+                        log.debug("dump执行完毕，成功[{}],共[{}]", successCount, updateQueueDumpPathMap.size());
+                    } catch (InterruptedException | ExecutionException e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+            });
+        } else {
+            log.warn("dump 线程已启动，无需程序开启");
+        }
     }
 
 
     /**
-     * 获取持久化路径， 项目根目录开始
+     * dumpAllQueue
      *
-     * @param botName botName
-     * @param subPath subPath
-     * @return String
+     * @return success count
      */
-    private static String getPersistencePath(String botName, String subPath) {
-        return FileUtil.RESOURCE_ROOT_DIR + File.separator + botName + File.separator + subPath;
+    private CompletableFuture<Integer> dumpAllQueue() {
+        log.debug("开始启动dump任务");
+
+        List<CompletableFuture<Boolean>> futures = updateQueueDumpPathMap
+                .entrySet()
+                .stream()
+                .map(e ->
+                        dumpQueue(e.getKey(), e.getValue())
+                                .exceptionallyAsync(throwable -> {
+                                    log.error("保存[{}]发生异常", e.getKey(), throwable);
+                                    return null;
+                                }, executorService)
+                )
+                .toList();
+
+        return CompletableFuture
+                .allOf(futures.toArray(new CompletableFuture[0]))
+                .thenApplyAsync(unused -> {
+                    int count = 0;
+                    for (CompletableFuture<Boolean> future : futures) {
+                        try {
+                            if (future.get()) {
+                                count++;
+                            }
+                        } catch (InterruptedException | ExecutionException e) {
+                            throw new RuntimeException(e);
+                        }
+                    }
+                    return count;
+                }, executorService);
     }
-}
-package cn.com.helei.DepinBot.core.util;
 
-import lombok.Getter;
-import lombok.Setter;
-
-@Setter
-@Getter
-public abstract class ClosableTimerTask {
-
-    private volatile boolean isRunning = true;
 
     /**
-     * Timer 任务，需要返回boolean，代表是否继续执行该任务，true继续，false跳出不执行
+     * dump
      *
-     * @return  是否继续执行
+     * @param dumpPath dumpPath
+     * @param queue    queue
+     * @return CompletableFuture<Boolean>
      */
-    public abstract boolean run();
+    public CompletableFuture<Boolean> dumpQueue(String dumpPath, DiscardingBlockingQueue<String> queue) {
+        return CompletableFuture.supplyAsync(() -> {
+            String dump = null;
+
+            // 循环取到最新的dump数据
+            while (!queue.isEmpty()) {
+                try {
+                    dump = queue.take();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException("take data from DiscardingBlockingQueue error", e);
+                }
+            }
+
+            if (dump != null) {
+                // 保存
+                try {
+                    FileUtil.saveJSONStringContext(Path.of(dumpPath), dump);
+                    return true;
+                } catch (Exception e) {
+                    log.error("保存[{}]发生异常", dumpPath, e);
+                }
+            }
+
+            return false;
+        }, executorService);
+    }
 }
-package cn.com.helei.DepinBot.core;
+package cn.com.helei.bot.core.supporter;
 
+import cn.com.helei.bot.core.dto.ConnectStatusInfo;
+import cn.com.helei.bot.core.dto.account.AccountPrintDto;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.entity.BrowserEnv;
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import cn.com.helei.bot.core.entity.RewordInfo;
+import cn.com.helei.bot.core.util.table.CommandLineTablePrintHelper;
 
-import lombok.Data;
-import lombok.ToString;
-
-import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
-@Data
-@ToString
-public class BaseDepinBotConfig {
+public class AccountInfoPrinter {
 
     /**
-     * 名字
+     * 打印账号列表
+     *
+     * @return String
      */
-    private String name;
+    public static String printAccountList(Map<String, List<AccountContext>> typedAccountMap) {
 
-    /**
-     * 并发数量
-     */
-    private int concurrentCount = 5;
+        StringBuilder sb = new StringBuilder();
 
-    /**
-     * 自动收获间隔
-     */
-    private int autoClaimIntervalSeconds = 60;
+        for (Map.Entry<String, List<AccountContext>> entry : typedAccountMap.entrySet()) {
+            String type = entry.getKey();
+            List<AccountContext> accountContexts = entry.getValue();
 
-    /**
-     * 是否开启账户收益自动刷新
-     */
-    private Boolean isAccountRewardAutoRefresh = false;
+            sb.append(type).append(" 账户列表\n");
 
-    /**
-     * 账户奖励刷新间隔
-     */
-    private long accountRewardRefreshIntervalSeconds = 600;
+            List<AccountPrintDto> list = accountContexts.stream().map(accountContext -> {
+                ProxyInfo proxy = accountContext.getProxy();
+                BrowserEnv browserEnv = accountContext.getBrowserEnv();
 
-    /**
-     * 网络代理池配置文件名
-     */
-    private String networkPoolConfig = "network-proxy.yaml";
+                return AccountPrintDto
+                        .builder()
+                        .id(accountContext.getAccountBaseInfo().getId())
+                        .name(accountContext.getName())
+                        .proxyInfo(proxy == null ? "NO_PROXY" : proxy.getId() + "-" + proxy.getAddressStr())
+                        .browserEnvInfo(String.valueOf(browserEnv == null ? "NO_ENV" : browserEnv.getId()))
+                        .signUp(accountContext.getSignUp())
+                        .build();
+            }).toList();
 
-    /**
-     * 浏览器环境池配置文件名
-     */
-    private String browserEnvPoolConfig = "browser-env.yaml";
+            sb.append(CommandLineTablePrintHelper.generateTableString(list, AccountPrintDto.class)).append("\n");
+        }
 
-    /**
-     * 账户配置文件名
-     */
-    private String accountPoolConfig = "account.yaml";
-
-
-    private Map<String, String> configMap = new HashMap<>();
-
-    public String getConfig(String key) {
-        return configMap.get(key);
+        return sb.toString();
     }
 
-    public void setConfig(String key, String value) {
-        this.configMap.put(key, value);
+    /**
+     * 打印账户连接情况
+     *
+     * @return String
+     */
+    public static String printAccountConnectStatusList(Map<String, List<AccountContext>> typedAccountMap) {
+        StringBuilder sb = new StringBuilder();
+
+        for (Map.Entry<String, List<AccountContext>> entry : typedAccountMap.entrySet()) {
+            String type = entry.getKey();
+            List<AccountContext> accountContexts = entry.getValue();
+
+            sb.append(type).append(" 账号链接状态列表:\n");
+
+            List<ConnectStatusInfo> list = accountContexts.stream()
+                    .map(AccountContext::getConnectStatusInfo).toList();
+
+            sb.append(CommandLineTablePrintHelper.generateTableString(list, ConnectStatusInfo.class)).append("\n");
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * 打印账号收益
+     *
+     * @return String
+     */
+    public static String printAccountReward(Map<String, List<AccountContext>> typedAccountMap) {
+        StringBuilder sb = new StringBuilder();
+
+        for (Map.Entry<String, List<AccountContext>> entry : typedAccountMap.entrySet()) {
+            String type = entry.getKey();
+            List<AccountContext> accountContexts = entry.getValue();
+
+            sb.append(type).append(" 收益列表:\n");
+
+            List<RewordInfo> list = accountContexts.stream()
+                    .map(accountContext -> accountContext.getRewordInfo().newInstance()).toList();
+
+            sb.append(CommandLineTablePrintHelper.generateTableString(list, RewordInfo.class)).append("\n");
+        }
+
+        return sb.toString();
+    }
+
+}
+package cn.com.helei.bot.core.util.captcha;
+
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import cn.com.helei.bot.core.util.RestApiClient;
+import cn.com.helei.bot.core.util.RestApiClientFactory;
+import com.twocaptcha.ApiClient;
+import com.twocaptcha.exceptions.ApiException;
+import com.twocaptcha.exceptions.NetworkException;
+import okhttp3.*;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Objects;
+
+public class ProxyApiClient extends ApiClient {
+
+    private final OkHttpClient proxyOkHttpClient;
+
+    public ProxyApiClient(ProxyInfo proxy) {
+        RestApiClient client = RestApiClientFactory.getClient(proxy);
+        this.proxyOkHttpClient = client == null ? new OkHttpClient() : client.getOkHttpClient();
+    }
+
+
+    public String in(Map<String, String> params, Map<String, File> files) throws Exception {
+        HttpUrl.Builder url = (new HttpUrl.Builder()).scheme("https").host(this.host).addPathSegment("in.php");
+        Object body;
+        if (files.size() == 0) {
+            FormBody.Builder form = new FormBody.Builder();
+            Objects.requireNonNull(form);
+            params.forEach(form::add);
+            body = form.build();
+        } else {
+            MultipartBody.Builder form = new MultipartBody.Builder();
+            form.setType(MultipartBody.FORM);
+            Objects.requireNonNull(form);
+            params.forEach(form::addFormDataPart);
+            Iterator var6 = files.entrySet().iterator();
+
+            while(var6.hasNext()) {
+                Map.Entry<String, File> entry = (Map.Entry)var6.next();
+                byte[] fileBytes = Files.readAllBytes(((File)entry.getValue()).toPath());
+                form.addFormDataPart((String)entry.getKey(), ((File)entry.getValue()).getName(), RequestBody.create(fileBytes));
+            }
+
+            body = form.build();
+        }
+
+        Request request = (new Request.Builder()).url(url.build()).post((RequestBody)body).build();
+        return this.proxyExecute(request);
+    }
+
+    public String res(Map<String, String> params) throws Exception {
+        HttpUrl.Builder url = (new HttpUrl.Builder()).scheme("https").host(this.host).addPathSegment("res.php");
+        Objects.requireNonNull(url);
+        params.forEach(url::addQueryParameter);
+        Request request = (new Request.Builder()).url(url.build()).build();
+        return this.proxyExecute(request);
+    }
+
+
+    private String proxyExecute(Request request) throws Exception {
+        Response response = this.proxyOkHttpClient.newCall(request).execute();
+
+        String var4;
+        try {
+            if (!response.isSuccessful()) {
+                throw new NetworkException("Unexpected code " + response);
+            }
+
+            String body = response.body().string();
+            if (body.startsWith("ERROR_")) {
+                throw new ApiException(body);
+            }
+
+            var4 = body;
+        } catch (Throwable var6) {
+            if (response != null) {
+                try {
+                    response.close();
+                } catch (Throwable var5) {
+                    var6.addSuppressed(var5);
+                }
+            }
+
+            throw var6;
+        }
+
+        if (response != null) {
+            response.close();
+        }
+
+        return var4;
     }
 }
-package cn.com.helei.DepinBot.core;
+package cn.com.helei.bot.core.util.captcha;
 
-import cn.com.helei.DepinBot.core.dto.account.AccountContext;
-import cn.com.helei.DepinBot.core.constants.ConnectStatus;
-import cn.com.helei.DepinBot.core.netty.base.AbstractWebsocketClient;
-import cn.com.helei.DepinBot.core.netty.constants.WebsocketClientStatus;
-import io.netty.handler.codec.http.DefaultHttpHeaders;
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import com.twocaptcha.TwoCaptcha;
+
+public class TwoCaptchaSolverFactory {
+
+    public static TwoCaptcha getTwoCaptchaSolver(String apiKey, ProxyInfo proxy) {
+        TwoCaptcha solver = new TwoCaptcha(apiKey);
+        solver.setHttpClient(new ProxyApiClient(proxy));
+        return solver;
+    }
+}
+package cn.com.helei.bot.core.util.typehandler;
+
+import com.alibaba.fastjson.JSONObject;
+import org.apache.ibatis.type.BaseTypeHandler;
+import org.apache.ibatis.type.JdbcType;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+
+public class JsonTypeHandler extends BaseTypeHandler<JSONObject> {
+
+    @Override
+    public void setNonNullParameter(PreparedStatement ps, int i, JSONObject parameter, JdbcType jdbcType) throws SQLException {
+        String jsonString = parameter.toJSONString();
+        ps.setString(i, jsonString);
+    }
+
+    @Override
+    public JSONObject getNullableResult(ResultSet rs, String columnName) throws SQLException {
+        String json = rs.getString(columnName);
+        return JSONObject.parseObject(json);
+    }
+
+    @Override
+    public JSONObject getNullableResult(ResultSet rs, int columnIndex) throws SQLException {
+        String json = rs.getString(columnIndex);
+        return JSONObject.parseObject(json);
+    }
+
+    @Override
+    public JSONObject getNullableResult(java.sql.CallableStatement cs, int columnIndex) throws SQLException {
+        String json = cs.getString(columnIndex);
+        return JSONObject.parseObject(json);
+    }
+}
+package cn.com.helei.bot.core.util.typehandler;
+
+import org.apache.ibatis.type.BaseTypeHandler;
+import org.apache.ibatis.type.JdbcType;
+
+import java.sql.CallableStatement;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+
+public class LocalDateTimeTYpeHandler extends BaseTypeHandler<LocalDateTime> {
+
+    private static final DateTimeFormatter formatter = DateTimeFormatter.ISO_DATE_TIME;
+
+    @Override
+    public void setNonNullParameter(PreparedStatement ps, int i, LocalDateTime parameter, JdbcType jdbcType) throws SQLException {
+        ps.setString(i, parameter.format(formatter));
+    }
+
+    @Override
+    public LocalDateTime getNullableResult(ResultSet rs, String columnName) throws SQLException {
+        String date = rs.getString(columnName);
+        if (date != null) {
+            return LocalDateTime.parse(date, formatter);
+        }
+        return null;
+    }
+
+    @Override
+    public LocalDateTime getNullableResult(ResultSet rs, int columnIndex) throws SQLException {
+        String date = rs.getString(columnIndex);
+        if (date != null) {
+            return LocalDateTime.parse(date, formatter);
+        }
+        return null;
+    }
+
+    @Override
+    public LocalDateTime getNullableResult(CallableStatement cs, int columnIndex) throws SQLException {
+        String date = cs.getString(columnIndex);
+        if (date != null) {
+            return LocalDateTime.parse(date, formatter);
+        }
+        return null;
+    }
+}
+package cn.com.helei.bot.core.util.typehandler;
+
+import com.alibaba.fastjson.JSONObject;
+import org.apache.ibatis.type.BaseTypeHandler;
+import org.apache.ibatis.type.JdbcType;
+
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.Map;
+
+public class MapTextTypeHandler extends BaseTypeHandler<Map<String, Object>> {
+
+
+    @Override
+    public void setNonNullParameter(PreparedStatement ps, int i, Map<String, Object> parameter, JdbcType jdbcType) throws SQLException {
+        String jsonString = JSONObject.toJSONString(parameter);
+        ps.setString(i, jsonString);
+    }
+
+    @Override
+    public Map<String, Object> getNullableResult(ResultSet rs, String columnName) throws SQLException {
+        String json = rs.getString(columnName);
+        return JSONObject.parseObject(json, Map.class);
+    }
+
+    @Override
+    public Map<String, Object> getNullableResult(ResultSet rs, int columnIndex) throws SQLException {
+        String json = rs.getString(columnIndex);
+        return JSONObject.parseObject(json, Map.class);
+    }
+
+    @Override
+    public Map<String, Object> getNullableResult(java.sql.CallableStatement cs, int columnIndex) throws SQLException {
+        String json = cs.getString(columnIndex);
+        return JSONObject.parseObject(json, Map.class);
+    }
+}
+package cn.com.helei.bot.core.util;
+
+import cn.com.helei.bot.core.config.SystemConfig;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import lombok.extern.slf4j.Slf4j;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+
+@Slf4j
+public class JDBCUtils {
+
+    private static final HikariDataSource dataSource;
+
+
+    static {
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl(SystemConfig.SQL_LITE_JDBC_URL);
+        config.setDriverClassName(SystemConfig.SQL_LITE_DRIVER);
+
+        // 连接池配置
+        config.setMaximumPoolSize(10);
+        config.setMinimumIdle(2);
+        config.setIdleTimeout(30000);
+        config.setConnectionTimeout(30000);
+        config.setMaxLifetime(1800000);
+
+        dataSource = new HikariDataSource(config);
+    }
+
+    /**
+     * 获取数据库连接
+     */
+    public static Connection getConnection() throws SQLException {
+        return dataSource.getConnection();
+    }
+
+    /**
+     * 释放资源
+     */
+    public static void close(Connection conn, PreparedStatement ps, ResultSet rs) throws SQLException {
+        if (rs != null) {
+            rs.close();
+        }
+        if (ps != null) {
+            ps.close();
+        }
+        if (conn != null) {
+            conn.close();
+        }
+    }
+
+    /**
+     * 关闭连接池
+     */
+    public static void shutdown() {
+        if (dataSource != null) {
+            dataSource.close();
+        }
+    }
+
+    public static void main(String[] args) {
+        try (Connection conn = JDBCUtils.getConnection()) {
+            System.out.println("连接成功: " + (conn != null));
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+}
+package cn.com.helei.bot.core.util;
+
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson.JSONObject;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import okhttp3.*;
+
+import java.io.IOException;
+import java.net.Proxy;
+import java.net.SocketTimeoutException;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+
+
+@Slf4j
+public class RestApiClient {
+
+    private static final int RETRY_TIMES = 1;
+
+    @Getter
+    private final OkHttpClient okHttpClient;
+
+    private final ExecutorService executorService;
+
+    public RestApiClient(
+            ProxyInfo proxy,
+            ExecutorService executorService
+    ) {
+        this.executorService = executorService;
+        OkHttpClient.Builder builder = new OkHttpClient.Builder();
+        builder
+                // 连接超时
+                .connectTimeout(30, TimeUnit.SECONDS)
+                // 读取超时
+                .readTimeout(30, TimeUnit.SECONDS)
+                // 写入超时
+                .writeTimeout(45, TimeUnit.SECONDS);
+
+        if (proxy != null) {
+            builder.proxy(new Proxy(Proxy.Type.HTTP, proxy.getAddress()));
+            if (StrUtil.isNotBlank(proxy.getUsername())) {
+                builder.proxyAuthenticator((route, response) -> {
+                    String credential = Credentials.basic(proxy.getUsername(), proxy.getPassword());
+                    return response.request().newBuilder()
+                            .header("Proxy-Authorization", credential)
+                            .build();
+                });
+            }
+        }
+        this.okHttpClient = builder.build();
+    }
+
+
+    /**
+     * 发送请求，如果有asKey参数不为null，则会鉴权
+     *
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<JSONObject>
+     */
+    public CompletableFuture<String> request(
+            String url,
+            String method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            // 创建表单数据
+            StringBuilder queryString = new StringBuilder();
+
+            String requestUrl = url;
+            if (params != null) {
+                params.keySet().forEach(key -> {
+                    queryString.append(key).append("=").append(params.get(key)).append("&");
+                });
+
+                if (!queryString.isEmpty()) {
+                    queryString.deleteCharAt(queryString.length() - 1);
+                }
+                requestUrl = url + "?" + queryString;
+            }
+
+
+            Request.Builder builder = new Request.Builder();
+
+
+            MediaType JSON = MediaType.get("application/json; charset=utf-8");
+
+            RequestBody requestBody = null;
+            if (body != null) {
+                requestBody = RequestBody.create(body.toJSONString(), JSON);
+            }
+
+
+            // 创建 POST 请求
+            builder.url(requestUrl);
+            String upperCase = method.toUpperCase();
+            if (upperCase.equals("GET")) {
+                builder.get();
+            } else {
+                builder.method(upperCase, requestBody);
+            }
+
+            if (headers != null) {
+                for (Map.Entry<String, String> header : headers.entrySet()) {
+                    builder.addHeader(header.getKey(), header.getValue());
+                }
+            }
+            Request request = builder
+
+                    .build();
+
+            log.debug("创建请求 url[{}], method[{}]成功，开始请求服务器", url, method);
+
+            for (int i = 0; i < RETRY_TIMES; i++) {
+
+                // 发送请求并获取响应
+                try (Response response = okHttpClient.newCall(request).execute()) {
+                    ResponseBody responseBody = response.body();
+                    if (response.isSuccessful()) {
+                        try {
+                            return responseBody == null ? null : responseBody.string();
+                        } catch (IOException e) {
+                            throw new RuntimeException(e);
+                        }
+                    } else {
+
+                        throw new RuntimeException("请求 " + url + "失败, " + (responseBody == null ? null : responseBody.string()));
+                    }
+                } catch (SocketTimeoutException e) {
+                    throw new RuntimeException(String.format("请求[%s]超时，尝试重新请求 [%s/%s],", url, i, RETRY_TIMES), e);
+                } catch (IOException e) {
+                    throw new RuntimeException("请求url [" + url + "] 失败", e);
+                }
+            }
+
+            return null;
+        }, executorService);
+    }
+}
+package cn.com.helei.bot.core.util;
+
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+@Slf4j
+public class RestApiClientFactory {
+
+    private static final ConcurrentHashMap<ProxyInfo, RestApiClient> CLIENTS = new ConcurrentHashMap<>();
+
+    private static final ExecutorService executor = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("rest-api-client"));
+
+    public static final RestApiClient DEFAULT = new RestApiClient(null, executor);
+
+    public static RestApiClient getClient(ProxyInfo proxy) {
+        if (proxy == null) {
+            return DEFAULT;
+        }
+
+        return CLIENTS.compute(proxy, (k, v)->{
+            if (v == null) {
+                v = new RestApiClient(proxy, executor);
+            }
+            return v;
+        });
+    }
+}
+package cn.com.helei.bot.core;
+
+import cn.com.helei.bot.core.dto.account.AccountContext;
+import cn.com.helei.bot.core.constants.ConnectStatus;
+import cn.com.helei.bot.core.netty.base.AbstractWebsocketClient;
+import cn.com.helei.bot.core.netty.constants.WebsocketClientStatus;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -842,7 +2137,7 @@ import java.time.LocalDateTime;
 
 @Slf4j
 @Getter
-public abstract class BaseDepinWSClient<Req, Resp> extends AbstractWebsocketClient<Req, Resp> {
+public abstract class BaseBotWSClient<Req, Resp> extends AbstractWebsocketClient<Req, Resp> {
 
 
     /**
@@ -850,17 +2145,13 @@ public abstract class BaseDepinWSClient<Req, Resp> extends AbstractWebsocketClie
      */
     private final AccountContext accountContext;
 
-    public BaseDepinWSClient(
+    public BaseBotWSClient(
             AccountContext accountContext,
-            BaseDepinWSClientHandler<Req, Resp> handler
+            BaseBotWSClientHandler<Req, Resp> handler
     ) {
         super(accountContext.getConnectUrl(), handler);
 
-        DefaultHttpHeaders httpHeaders = new DefaultHttpHeaders();
-        accountContext.getWSHeaders().forEach(httpHeaders::add);
-        super.setHeaders(httpHeaders);
-
-        super.setName(accountContext.getClientAccount().getName());
+        super.setName(accountContext.getName());
         super.setProxy(accountContext.getProxy());
         super.setClientStatusChangeHandler(this::whenClientStatusChange);
 
@@ -870,11 +2161,11 @@ public abstract class BaseDepinWSClient<Req, Resp> extends AbstractWebsocketClie
     }
 
 
-    public abstract Req getHeartbeatMessage(BaseDepinWSClient<Req, Resp> wsClient);
+    public abstract Req getHeartbeatMessage(BaseBotWSClient<Req, Resp> wsClient);
 
-    public abstract void whenAccountReceiveResponse(BaseDepinWSClient<Req, Resp> wsClient, Object id, Resp response) ;
+    public abstract void whenAccountReceiveResponse(BaseBotWSClient<Req, Resp> wsClient, Object id, Resp response) ;
 
-    public abstract void whenAccountReceiveMessage(BaseDepinWSClient<Req, Resp> wsClient, Resp message);
+    public abstract void whenAccountReceiveMessage(BaseBotWSClient<Req, Resp> wsClient, Resp message);
 
     public abstract Object getRequestId(Req request);
 
@@ -911,192 +2202,595 @@ public abstract class BaseDepinWSClient<Req, Resp> extends AbstractWebsocketClie
     }
 
 }
-package cn.com.helei.DepinBot.core;
+package cn.com.helei.bot.core;
 
-import cn.com.helei.DepinBot.core.dto.account.ConnectStatusInfo;
-import cn.com.helei.DepinBot.core.netty.base.AbstractWebSocketClientHandler;
-import io.netty.channel.ChannelHandlerContext;
-import lombok.extern.slf4j.Slf4j;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.generator.FastAutoGenerator;
+import com.baomidou.mybatisplus.generator.config.rules.NamingStrategy;
+import com.baomidou.mybatisplus.generator.engine.FreemarkerTemplateEngine;
 
-@Slf4j
-public abstract class BaseDepinWSClientHandler<Req, Resp> extends AbstractWebSocketClientHandler<Req, Resp> {
+public class Generator {
+    public static void main(String[] args) {
+        FastAutoGenerator
+                //数据库配置
+                .create("jdbc:sqlite:D:\\workspace\\DepinBot\\untitled\\botData\\db\\autobot.db"
+                        , ""
+                        , "")
+                //全局配置
+                .globalConfig(builder -> {
+                    //设置作者
+                    builder.author("com.helei")
+                            //开启swagger模式，这里就不开了
+//                        .enableSwagger()
+                            //设置最终的代码输出路径，这边是输出到D盘目录下
+                            .outputDir("D:\\workspace\\DepinBot\\untitled\\core\\src\\main\\java");
+                })
+                //包设置，也就是设置代码生成后的包名
+                .packageConfig(builder -> {
+                    //设置父包名
+                    builder.parent("cn.com.helei.bot")
+                            //设置模块名
+                            .moduleName("core");
+                })
+                //设置生成策略
+                .strategyConfig(builder -> {
+                    //设置要生成代码的表名，可以设置多个，这里设置一个
+                    builder.addInclude("t_reword_info")
+                            //设置要过滤的表前缀，在生成实体类的时候可以自动去除
+                            .addTablePrefix("t_")
+                            //设置要过滤的字段前缀
+                            .addFieldPrefix("t_")
 
-    /**
-     * channel 空闲，向其发送心跳
-     * @param ctx ctx
-     */
-    @Override
-    protected void handleAllIdle(ChannelHandlerContext ctx) {
-        BaseDepinWSClient<Req, Resp> depinWSClient = getDepinWSClient();
+                            /**
+                             * entityBuilder()
+                             * Entity策略配置
+                             */
 
-        depinWSClient
-                .sendMessage(depinWSClient.getHeartbeatMessage(depinWSClient))
-                .whenCompleteAsync((unused, throwable) -> {
-                    ConnectStatusInfo connectStatusInfo = depinWSClient
-                            .getAccountContext()
-                            .getConnectStatusInfo();
+                            .entityBuilder()
+                            //开启Lombok
+                            .enableLombok()
+                            //开启生成实体时生成字段注解
+                            .enableTableFieldAnnotation()
+                            //默认下划线转驼峰命名:NamingStrategy.underline_to_camel
+                            //数据库表映射到实体的命名策略
+                            .naming(NamingStrategy.underline_to_camel)
+                            //数据库表字段映射到实体的命名策略
+                            .columnNaming(NamingStrategy.underline_to_camel)
+                            //配置id生成策略,这里采用自增策略
+                            .idType(IdType.INPUT)
+                            //逻辑删除属性名（实体类）
+                            .logicDeletePropertyName("deleted")
+                            //乐观锁属性名(实体)
+                            .versionPropertyName("version")
+                            //开启覆盖已有文件策略
+                            .enableFileOverride()
 
-                    if (throwable != null) {
-                        log.error("client[{}] 发送心跳异常", websocketClient.getName(), throwable);
-                        // 发送心跳失败，记录次数
-                        connectStatusInfo.getErrorHeartBeat().getAndIncrement();
-                    }
+                            /**
+                             * controllerBuilder()
+                             * Controller生成策略
+                             */
 
-                    // 心跳计数
-                    connectStatusInfo.getHeartBeat()
-                            .getAndIncrement();
-                }, depinWSClient.getCallbackInvoker());
-    }
+                            .controllerBuilder()
+                            //开启Rest风格
+                            .enableRestStyle()
+                            //开启覆盖已有文件
+                            .enableFileOverride()
 
+                            /**
+                             * serviceBuilder()
+                             * Service生成策略
+                             */
 
-    @Override
-    public Object getRequestId(Req request) {
-        return getDepinWSClient().getRequestId(request);
-    }
+                            .serviceBuilder()
+                            //开启覆盖已有文件
+                            .enableFileOverride()
 
-    @Override
-    public Object getResponseId(Resp response) {
-        return getDepinWSClient().getResponseId(response);
-    }
+                            /**
+                             * mapperBuilder()
+                             * Mapper生成策略
+                             */
 
-
-    @Override
-    protected void handleResponseMessage(Object id, Resp response) {
-        BaseDepinWSClient<Req, Resp> depinWSClient = getDepinWSClient();
-
-        depinWSClient.whenAccountReceiveResponse(depinWSClient, id, response);
-    }
-
-    @Override
-    protected void handleOtherMessage(Resp message) {
-        BaseDepinWSClient<Req, Resp> depinWSClient = getDepinWSClient();
-
-        depinWSClient.whenAccountReceiveMessage(depinWSClient, message);
-    }
-
-    private BaseDepinWSClient<Req, Resp> getDepinWSClient() {
-        return (BaseDepinWSClient<Req, Resp>) websocketClient;
-    }
-}
-package cn.com.helei.DepinBot.core;
-
-import cn.com.helei.DepinBot.core.bot.WSMenuCMDLineDepinBot;
-import cn.com.helei.DepinBot.core.dto.account.AccountContext;
-import com.alibaba.fastjson.JSONObject;
-import lombok.Getter;
-import lombok.Setter;
-
-
-public class SimpleDepinWSClient extends BaseDepinWSClient<JSONObject, JSONObject> {
-
-    private final WSMenuCMDLineDepinBot<?, JSONObject, JSONObject> bot;
-
-    @Setter
-    private String idFieldName = "id";
-
-    public SimpleDepinWSClient(
-            WSMenuCMDLineDepinBot<? extends BaseDepinBotConfig, JSONObject, JSONObject> bot,
-            AccountContext accountContext
-    ) {
-        super(accountContext, new SimpleDepinWSClientHandler());
-        this.bot = bot;
-        ((SimpleDepinWSClient.SimpleDepinWSClientHandler) handler).setWsClient(this);
-    }
-
-    @Override
-    public JSONObject getHeartbeatMessage(BaseDepinWSClient<JSONObject, JSONObject> wsClient) {
-        return bot.getHeartbeatMessage(wsClient);
-    }
-
-    @Override
-    public void whenAccountReceiveResponse(BaseDepinWSClient<JSONObject, JSONObject> wsClient, Object id, JSONObject response) {
-        bot.whenAccountReceiveResponse(wsClient, id, response);
-    }
-
-    @Override
-    public void whenAccountReceiveMessage(BaseDepinWSClient<JSONObject, JSONObject> wsClient, JSONObject message) {
-        bot.whenAccountReceiveMessage(wsClient, message);
-    }
-
-    @Override
-    public Object getRequestId(JSONObject request) {
-        return request.getInteger(idFieldName);
-    }
-
-    @Override
-    public Object getResponseId(JSONObject response) {
-        return response.getIntValue(idFieldName);
-    }
-
-
-    @Setter
-    @Getter
-    private static class SimpleDepinWSClientHandler extends BaseDepinWSClientHandler<JSONObject, JSONObject> {
-
-        private SimpleDepinWSClient wsClient;
-
-        @Override
-        public JSONObject convertMessageToRespType(String message) {
-            return JSONObject.parseObject(message);
-        }
+                            .mapperBuilder()
+                            //启用 BaseResultMap 生成
+                            .enableBaseResultMap()
+                            //开启覆盖已有文件
+                            .enableFileOverride();
+                })
+                //设置引擎模板Freemarker，默认的是Velocity引擎模板
+                .templateEngine(new FreemarkerTemplateEngine())
+                .execute();
     }
 }
-package cn.com.helei.DepinBot.core;
+# 应用程序名称
+spring:
+  application:
+    name: my-spring-boot-app
+  datasource:
+    url: jdbc:sqllite://botData/db/auto_bot.db
+    driver-class-name: org.sqlite.JDBC
 
-import cn.com.helei.DepinBot.core.config.SystemConfig;
-import cn.com.helei.DepinBot.core.util.YamlConfigLoadUtil;
-import lombok.Data;
-import lombok.EqualsAndHashCode;
-
-import java.util.List;
-
-@EqualsAndHashCode(callSuper = true)
-@Data
-public class WSDepinBotConfig extends BaseDepinBotConfig {
-
-    /**
-     * ws是否无限重试
-     */
-    private boolean wsUnlimitedRetry = false;
-
-    /**
-     * 连接url
-     */
-    private String wsBaseUrl;
-
-    /**
-     * 重连接慈湖减少的间隔
-     */
-    private int reconnectCountDownSecond = 180;
+# HikariCP配置
+    type: com.zaxxer.hikari.HikariDataSource
+    hikari:
+      maximum-pool-size: 10
+      auto-commit: true
+      idle-timeout: 60000
+      max-lifetime: 1800000
+      pool-name: HikariPool
+      connection-test-query: SELECT 1
+      minimum-idle:
 
 
-    public static <T> T loadYamlConfig(
-            String path,
-            String name,
-            Class<T> tClass
-    ) {
-        return YamlConfigLoadUtil.load(SystemConfig.CONFIG_DIR_APP_PATH, name, List.of(path.split("\\.")), tClass);
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    cache-enabled: true
+    map-underscore-to-camel-case: false
+  global-config:
+    db-config:
+      logic-delete-field: isDeleted  # 全局逻辑删除的实体字段名(since 3.3.0,配置后可以忽略不配置步骤2)
+      logic-delete-value: 1 # 逻辑已删除值(默认为 1)
+
+
+# 其他配置
+logging:
+  level:
+    org.springframework: ERROR
+    com.example.demo: DEBUG
+
+package cn.com.helei.bot.core.supporter.persistence;
+
+import cn.com.helei.bot.core.entity.AccountBaseInfo;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.entity.RewordInfo;
+import cn.com.helei.bot.core.supporter.persistence.impl.FileAccountPersistenceManager;
+import org.junit.jupiter.api.Test;
+
+import java.util.HashMap;
+
+class AccountPersistenceManagerTest {
+    @Test
+    void bindPersistenceAnnoListener() {
+        FileAccountPersistenceManager accountPersistenceManager = new FileAccountPersistenceManager("test");
+
+        AccountBaseInfo clientAccount = new AccountBaseInfo("bawbidubaw awhd");
+        AccountContext accountContext = AccountContext.builder().accountBaseInfo(clientAccount).rewordInfo(new RewordInfo()).build();
+
+        accountContext.setParams(new HashMap<>());
+        AccountContext proxy = accountPersistenceManager.bindPersistenceAnnoListener("test", accountContext);
+
+        accountContext.setParam("2", "2");
+//        proxy.setParam("1", "a");
+//        proxy.setParam("1", "b");
+//        proxy.setParam("1", "c");
+//        proxy.setParam("1", "d");
+//
+        proxy.getRewordInfo().setTotalPoints(1.0);
+//        accountContext.setUsable(false);
+//        accountContext.getClientAccount().setName("123");
+
+        System.out.println(proxy.getRewordInfo().getTotalPoints());
     }
 }
-<configuration>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>cn.com.helei</groupId>
+        <artifactId>BotFramework</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
 
-    <!-- 设置根日志级别 -->
-    <root level="INFO">
-        <appender-ref ref="CONSOLE"/>
-    </root>
+    <artifactId>core</artifactId>
+    <packaging>jar</packaging>
 
-    <!-- 配置 console appender 输出日志到控制台 -->
-    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} - %-5level %logger{36} - %msg%n</pattern>
-        </encoder>
-    </appender>
+    <name>core</name>
+    <url>http://maven.apache.org</url>
 
-    <!-- 设置 Netty 日志级别为 INFO -->
-    <logger name="io.netty" level="INFO"/>
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <java.version>21</java.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-generator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+
+        <!--velocity模板引擎-->
+        <dependency>
+            <groupId>org.apache.velocity</groupId>
+            <artifactId>velocity-engine-core</artifactId>
+            <version>2.3</version>
+        </dependency>
+
+        <!--freemarker模板引擎-->
+        <dependency>
+            <groupId>org.freemarker</groupId>
+            <artifactId>freemarker</artifactId>
+        </dependency>
 
 
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>druid-spring-boot-starter</artifactId>
+        </dependency>
 
-    <logger name="cn.com.helei.DepinBot.core.netty.base" level="on" />
+        <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
+        </dependency>
 
-</configuration>
+
+        <dependency>
+            <groupId>com.sun.mail</groupId>
+            <artifactId>jakarta.mail</artifactId>
+            <version>${jakarta.mail.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>cglib</groupId>
+            <artifactId>cglib</artifactId>
+            <version>${cglib.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.jakewharton.fliptables</groupId>
+            <artifactId>fliptables</artifactId>
+            <version>${fliptables.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.jline</groupId>
+            <artifactId>jline</artifactId>
+            <version>${jline.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>fastjson</artifactId>
+            <version>${fastjson.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+            <version>${netty.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>${lombok.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.protostuff</groupId>
+            <artifactId>protostuff-core</artifactId>
+            <version>${protostuff.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.protostuff</groupId>
+            <artifactId>protostuff-runtime</artifactId>
+            <version>${protostuff.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>cn.hutool</groupId>
+            <artifactId>hutool-all</artifactId>
+            <version>${hutool.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <version>${snakeyaml.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct</artifactId>
+            <version>${mapstruct.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.9.1</version>
+            <scope>${junit.version}</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp</artifactId>
+            <version>${okhttp.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>${logback.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>easyexcel</artifactId>
+            <version>3.2.0</version>  <!-- 请根据需要选择最新版本 -->
+        </dependency>
+
+        <dependency>
+            <groupId>javax.mail</groupId>
+            <artifactId>javax.mail-api</artifactId>
+            <version>1.6.2</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+            <version>1.16.2</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.github.2captcha</groupId>
+            <artifactId>2captcha-java</artifactId>
+            <version>1.3.1</version>
+        </dependency>
+
+    </dependencies>
+
+
+    <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <includes>
+                    <include>**</include>
+                </includes>
+            </resource>
+        </resources>
+        <testResources>
+            <testResource>
+                <directory>src/main/resources</directory>
+                <includes>
+                    <include>**</include>
+                </includes>
+            </testResource>
+        </testResources>
+    </build>
+</project>
+
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>cn.com.helei</groupId>
+    <artifactId>BotFramework</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <name>BotFramework</name>
+    <url>http://maven.apache.org</url>
+    <modules>
+        <module>core</module>
+        <module>application</module>
+    </modules>
+
+    <properties>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <java.version>21</java.version>
+        <netty.version>4.1.95.Final</netty.version>
+        <gsonn.version>2.9.1</gsonn.version>
+        <guava.version>19.0</guava.version>
+        <lombok.version>1.18.30</lombok.version>
+        <protostuff.version>1.7.2</protostuff.version>
+        <hutool.version>5.8.21</hutool.version>
+        <mapstruct.version>1.6.0</mapstruct.version>
+        <slf4j.version>2.0.4</slf4j.version>
+        <springboot.version>3.2.0</springboot.version>
+        <snakeyaml.version>2.2</snakeyaml.version>
+        <mapstruct.version>1.6.0</mapstruct.version>
+        <junit.version>5.9.1</junit.version>
+        <okhttp.version>4.7.0</okhttp.version>
+        <logback.version>1.3.7</logback.version>
+        <fastjson.version>1.2.83</fastjson.version>
+        <jline.version>3.2.0</jline.version>
+        <fliptables.version>1.0.0</fliptables.version>
+        <cglib.version>3.3.0</cglib.version>
+        <jakarta.mail.version>2.0.1</jakarta.mail.version>
+        <sql.lite.version>3.34.0</sql.lite.version>
+        <mybatis_plus.version>3.5.5</mybatis_plus.version>
+        <mysql_connection.version>8.0.33</mysql_connection.version>
+        <druid.version>1.2.12</druid.version>
+    </properties>
+
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${springboot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>com.sun.mail</groupId>
+                <artifactId>jakarta.mail</artifactId>
+                <version>${jakarta.mail.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>cglib</groupId>
+                <artifactId>cglib</artifactId>
+                <version>${cglib.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.jakewharton.fliptables</groupId>
+                <artifactId>fliptables</artifactId>
+                <version>${fliptables.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.jline</groupId>
+                <artifactId>jline</artifactId>
+                <version>${jline.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.alibaba</groupId>
+                <artifactId>fastjson</artifactId>
+                <version>${fastjson.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-all</artifactId>
+                <version>${netty.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.projectlombok</groupId>
+                <artifactId>lombok</artifactId>
+                <version>${lombok.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.protostuff</groupId>
+                <artifactId>protostuff-core</artifactId>
+                <version>${protostuff.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.protostuff</groupId>
+                <artifactId>protostuff-runtime</artifactId>
+                <version>${protostuff.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>cn.hutool</groupId>
+                <artifactId>hutool-all</artifactId>
+                <version>${hutool.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.yaml</groupId>
+                <artifactId>snakeyaml</artifactId>
+                <version>${snakeyaml.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.mapstruct</groupId>
+                <artifactId>mapstruct</artifactId>
+                <version>${mapstruct.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter</artifactId>
+                <version>5.9.1</version>
+                <scope>${junit.version}</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>com.squareup.okhttp3</groupId>
+                <artifactId>okhttp</artifactId>
+                <version>${okhttp.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>ch.qos.logback</groupId>
+                <artifactId>logback-classic</artifactId>
+                <version>${logback.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.xerial</groupId>
+                <artifactId>sqlite-jdbc</artifactId>
+                <version>${sql.lite.version}</version> <!-- Use the latest version -->
+            </dependency>
+
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+                <version>${mybatis_plus.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-generator</artifactId>
+                <version>${mybatis_plus.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>mysql</groupId>
+                <artifactId>mysql-connector-java</artifactId>
+                <version>${mysql_connection.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.alibaba</groupId>
+                <artifactId>druid-spring-boot-starter</artifactId>
+                <version>${druid.version}</version>
+            </dependency>
+
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <plugins>
+            <!-- Maven Compiler Plugin (JDK 21) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <release>21</release>
+                </configuration>
+            </plugin>
+
+            <!-- Maven Shade Plugin -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.4.1</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <createDependencyReducedPom>true</createDependencyReducedPom>
+                            <transformers>
+                                <!-- 指定主类 -->
+                                <transformer
+                                        implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>cn.com.helei.DepinBot.DepinBotApp</mainClass> <!-- 替换为你的主类 -->
+                                </transformer>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
+
+
