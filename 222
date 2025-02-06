@@ -1,2 +1,1332 @@
-https://r.distribute.ai/285f4152d3bc8f3c
-id	邮箱	邮箱小写	密码	辅助邮箱	新密码	新辅助邮箱
+package cn.com.helei.bot.core.mvc.service.impl;
+
+import cn.com.helei.bot.core.entity.TelegramAccount;
+import cn.com.helei.bot.core.mvc.mapper.TelegramAccountMapper;
+import cn.com.helei.bot.core.mvc.service.ITelegramAccountService;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import org.springframework.stereotype.Service;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-06
+ */
+@Service
+public class TelegramAccountServiceImpl extends ServiceImpl<TelegramAccountMapper, TelegramAccount> implements ITelegramAccountService {
+
+}
+package cn.com.helei.bot.core.mvc.service;
+
+import cn.com.helei.bot.core.entity.AccountBaseInfo;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+import java.util.List;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IAccountBaseInfoService extends IService<AccountBaseInfo> {
+
+    Integer insertOrUpdateBatch(List<AccountBaseInfo> accountBaseInfos);
+}
+package cn.com.helei.bot.core.mvc.service;
+
+import cn.com.helei.bot.core.entity.TelegramAccount;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-06
+ */
+public interface ITelegramAccountService extends IService<TelegramAccount> {
+
+}
+package cn.com.helei.bot.core.supporter.botapi.impl;
+
+import cn.com.helei.bot.core.mvc.service.*;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import lombok.Getter;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+@Getter
+@Component
+public class DBBotApi implements BotApi {
+
+    @Autowired
+    private IAccountBaseInfoService accountBaseInfoService;
+
+    @Autowired
+    private ITwitterAccountService twitterAccountService;
+
+    @Autowired
+    private IProxyInfoService proxyInfoService;
+
+    @Autowired
+    private IBrowserEnvService browserEnvService;
+
+    @Autowired
+    private IDiscordAccountService discordAccountService;
+
+    @Autowired
+    private IProjectAccountContextService projectAccountContextService;
+
+    @Autowired
+    private IRewordInfoService rewordInfoService;
+
+    @Autowired
+    private DBImportService importService;
+}
+package cn.com.helei.bot.core.supporter.botapi.impl;
+
+import cn.com.helei.bot.core.config.SystemConfig;
+import cn.com.helei.bot.core.constants.ProxyType;
+import cn.com.helei.bot.core.entity.*;
+import cn.com.helei.bot.core.mvc.service.*;
+import cn.com.helei.bot.core.mvc.service.ITelegramAccountService;
+import cn.com.helei.bot.core.supporter.botapi.ImportService;
+import cn.com.helei.bot.core.util.excel.ExcelReadUtil;
+import cn.com.helei.bot.core.util.FileUtil;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+
+import static cn.com.helei.bot.core.constants.MapConfigKey.USER_AGENT_KEY;
+
+@Slf4j
+@Component
+public class DBImportService implements ImportService {
+
+    @Autowired
+    private IAccountBaseInfoService accountBaseInfoService;
+
+    @Autowired
+    private IProxyInfoService proxyInfoService;
+
+    @Autowired
+    private IBrowserEnvService browserEnvService;
+
+    @Autowired
+    private ITwitterAccountService twitterAccountService;
+
+    @Autowired
+    private IDiscordAccountService discordAccountService;
+
+    @Autowired
+    private ITelegramAccountService telegramAccountService;
+
+
+    @Override
+    public Integer importBrowserEnvFromExcel(String fileBotConfigPath) {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        List<Map<String, Object>> headerList = ExcelReadUtil.readExcelToMap(proxyFilePath);
+
+        List<BrowserEnv> list = headerList.stream().map(map -> {
+
+            Object userAgent = map.remove(USER_AGENT_KEY);
+            if (userAgent == null) return null;
+
+            BrowserEnv browserEnv = new BrowserEnv();
+            browserEnv.setUserAgent((String) userAgent);
+            browserEnv.setOtherHeader(map);
+            return browserEnv;
+        }).filter(Objects::nonNull).toList();
+
+        log.info("文件解析成功, 共[{}]个，过滤掉没有User-Agent头后共[{}}个", headerList.size(), list.size());
+
+        return browserEnvService.saveBatch(list) ? list.size() : 0;
+    }
+
+    @Override
+    public Integer importProxyFromExcel(String botConfigPath) {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, botConfigPath);
+
+        List<ProxyInfo> proxyInfos = new ArrayList<>();
+
+        try {
+            List<ProxyInfo> staticProxies = ExcelReadUtil.readXLSXConvertObjectList(proxyFilePath, "static", ProxyInfo.class);
+            staticProxies.forEach(proxyInfo -> {
+                proxyInfo.setProxyType(ProxyType.STATIC);
+                proxyInfos.add(proxyInfo);
+            });
+
+            List<ProxyInfo> dynamicProxies = ExcelReadUtil.readXLSXConvertObjectList(proxyFilePath, "dynamic", ProxyInfo.class);
+            dynamicProxies.forEach(proxyInfo -> {
+                proxyInfo.setProxyType(ProxyType.DYNAMIC);
+                proxyInfos.add(proxyInfo);
+            });
+
+            log.info("代理配置文件解析成功，static-proxy:[{}], dynamic-proxy:[{}]", staticProxies.size(), dynamicProxies.size());
+
+            return proxyInfoService.saveBatch(proxyInfos) ? proxyInfos.size() : 0;
+        } catch (IOException e) {
+            log.error("解析代理配置文件[{}]错误", proxyFilePath, e);
+
+            return 0;
+        }
+    }
+
+    @Override
+    public Map<String, Integer> importAccountBaseInfoFromExcel(String botConfigPath) {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, botConfigPath);
+        Map<String, Integer> result = new HashMap<>();
+
+        try {
+            ExcelReadUtil.readExcelAsMap(
+                    proxyFilePath,
+                    AccountBaseInfo.class,
+                    (type, accountBaseInfo) -> {
+                        accountBaseInfo.setType(type);
+                        return true;
+                    },
+                    (type, accountBaseInfos) -> CompletableFuture.runAsync(() -> {
+                        log.info("[{}] 账号基本信息读取完毕, 共[{}]", type, accountBaseInfos.size());
+                        Integer insertCount = accountBaseInfoService.insertOrUpdateBatch(accountBaseInfos);
+
+                        log.info("[{}] 账号基本信息保存成功, 新增[{}], 共[{}]", type, insertCount, accountBaseInfos.size());
+
+                        result.put(type, accountBaseInfos.size());
+                    })
+            );
+
+        } catch (IOException e) {
+            log.error("从文件导入账号基本信息出错", e);
+        }
+
+        return result;
+    }
+
+    @Override
+    public Integer importTwitterFromExcel(String fileBotConfigPath) {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        try {
+            List<TwitterAccount> twitterAccounts = ExcelReadUtil.readXLSXConvertObjectList(dirResourcePath, TwitterAccount.class);
+            return twitterAccountService.saveBatch(twitterAccounts) ? twitterAccounts.size() : 0;
+        } catch (IOException e) {
+            log.error("读取twitter account 文件[{}]发生异常", dirResourcePath, e);
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importDiscordFromExcel(String fileBotConfigPath) {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        try {
+            List<DiscordAccount> discordAccounts = ExcelReadUtil.readXLSXConvertObjectList(dirResourcePath, DiscordAccount.class);
+            return discordAccountService.saveBatch(discordAccounts) ? discordAccounts.size() : 0;
+        } catch (IOException e) {
+            log.error("读取discord account 文件[{}]发生异常", dirResourcePath, e);
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importTelegramFormExcel(String fileBotConfigPath) {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        try {
+            List<TelegramAccount> telegramAccounts = ExcelReadUtil.readXLSXConvertObjectList(dirResourcePath, TelegramAccount.class);
+            return telegramAccountService.saveBatch(telegramAccounts) ? telegramAccounts.size() : 0;
+        } catch (IOException e) {
+            log.error("读取telegram account 文件[{}]发生异常", dirResourcePath, e);
+            return 0;
+        }
+    }
+}
+
+package cn.com.helei.bot.core.supporter.botapi;
+
+
+import cn.com.helei.bot.core.mvc.service.*;
+
+public interface BotApi {
+
+    IAccountBaseInfoService getAccountBaseInfoService();
+
+    IBrowserEnvService getBrowserEnvService();
+
+    IDiscordAccountService getDiscordAccountService();
+
+    IProjectAccountContextService getProjectAccountContextService();
+
+    IProxyInfoService getProxyInfoService();
+
+    IRewordInfoService getRewordInfoService();
+
+    ITwitterAccountService getTwitterAccountService();
+
+    ImportService getImportService();
+}
+package cn.com.helei.bot.core.supporter.botapi;
+
+import java.util.Map;
+
+public interface ImportService {
+
+    Integer importBrowserEnvFromExcel(String fileBotConfigPath);
+
+
+    Integer importProxyFromExcel(String botConfigPath);
+
+
+    Map<String, Integer> importAccountBaseInfoFromExcel(String botConfigPath);
+
+
+    Integer importTwitterFromExcel(String fileBotConfigPath);
+
+
+    Integer importDiscordFromExcel(String fileBotConfigPath);
+
+
+    Integer importTelegramFormExcel(String fileBotConfigPath);
+}
+
+package cn.com.helei.bot.core.supporter.netty;
+
+import cn.com.helei.bot.core.config.SystemConfig;
+import cn.com.helei.bot.core.constants.ConnectStatus;
+import cn.com.helei.bot.core.constants.MapConfigKey;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.netty.base.AbstractWebsocketClient;
+import cn.com.helei.bot.core.supporter.netty.constants.WebsocketClientStatus;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.time.LocalDateTime;
+
+
+@Slf4j
+@Getter
+public abstract class BaseBotWSClient<Req, Resp> extends AbstractWebsocketClient<Req, Resp> {
+
+
+    /**
+     * client对应的账号
+     */
+    private final AccountContext accountContext;
+
+    public BaseBotWSClient(
+            AccountContext accountContext,
+            BaseBotWSClientHandler<Req, Resp> handler
+    ) {
+        super(accountContext.getParam(MapConfigKey.CONNECT_URL_KEY), handler);
+
+        super.setName(accountContext.getName());
+        super.setProxy(accountContext.getProxy());
+        super.setClientStatusChangeHandler(this::whenClientStatusChange);
+
+        this.accountContext = accountContext;
+
+        updateClientStatus(WebsocketClientStatus.NEW);
+    }
+
+
+    public abstract Req getHeartbeatMessage(BaseBotWSClient<Req, Resp> wsClient);
+
+    public abstract void whenAccountReceiveResponse(BaseBotWSClient<Req, Resp> wsClient, Object id, Resp response) ;
+
+    public abstract void whenAccountReceiveMessage(BaseBotWSClient<Req, Resp> wsClient, Resp message);
+
+    public abstract Object getRequestId(Req request);
+
+    public abstract Object getResponseId(Resp response);
+
+    /**
+     * ws客户端状态改变，同步更新账户状态
+     *
+     * @param newClientStatus 最新的客户端状态
+     */
+    public void whenClientStatusChange(WebsocketClientStatus newClientStatus) {
+        accountContext.getConnectStatusInfo().setConnectStatus(
+                switch (newClientStatus) {
+                    case NEW -> {
+                        accountContext.getConnectStatusInfo().setStartDateTime(LocalDateTime.now());
+                        accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
+                        yield ConnectStatus.NEW;
+                    }
+                    case STARTING -> {
+                        accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
+                        yield ConnectStatus.STARTING;
+                    }
+                    case RUNNING -> {
+                        accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
+                        yield ConnectStatus.RUNNING;
+                    }
+                    case STOP, SHUTDOWN -> {
+                        accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
+                        accountContext.setUsable(false);
+                        yield ConnectStatus.STOP;
+                    }
+                }
+        );
+    }
+
+}
+package cn.com.helei.bot.core.supporter.netty;
+
+import cn.com.helei.bot.core.bot.WSTaskAutoBot;
+import cn.com.helei.bot.core.config.BaseAutoBotConfig;
+import cn.com.helei.bot.core.entity.AccountContext;
+import com.alibaba.fastjson.JSONObject;
+import lombok.Getter;
+import lombok.Setter;
+
+
+public class SimpleBotWSClient extends BaseBotWSClient<JSONObject, JSONObject> {
+
+    private final WSTaskAutoBot<?, JSONObject, JSONObject> bot;
+
+    @Setter
+    private String idFieldName = "id";
+
+    public SimpleBotWSClient(
+            WSTaskAutoBot<? extends BaseAutoBotConfig, JSONObject, JSONObject> bot,
+            AccountContext accountContext
+    ) {
+        super(accountContext, new SimpleBotWSClientHandler());
+        this.bot = bot;
+        ((SimpleBotWSClientHandler) handler).setWsClient(this);
+    }
+
+    @Override
+    public JSONObject getHeartbeatMessage(BaseBotWSClient<JSONObject, JSONObject> wsClient) {
+        return bot.getHeartbeatMessage(wsClient);
+    }
+
+    @Override
+    public void whenAccountReceiveResponse(BaseBotWSClient<JSONObject, JSONObject> wsClient, Object id, JSONObject response) {
+        bot.whenAccountReceiveResponse(wsClient, id, response);
+    }
+
+    @Override
+    public void whenAccountReceiveMessage(BaseBotWSClient<JSONObject, JSONObject> wsClient, JSONObject message) {
+        bot.whenAccountReceiveMessage(wsClient, message);
+    }
+
+    @Override
+    public Object getRequestId(JSONObject request) {
+        return request.get(idFieldName);
+    }
+
+    @Override
+    public Object getResponseId(JSONObject response) {
+        return response.get(idFieldName);
+    }
+
+
+    @Setter
+    @Getter
+    private static class SimpleBotWSClientHandler extends BaseBotWSClientHandler<JSONObject, JSONObject> {
+
+        private SimpleBotWSClient wsClient;
+
+        @Override
+        public JSONObject convertMessageToRespType(String message) {
+            return JSONObject.parseObject(message);
+        }
+    }
+}
+package cn.com.helei.bot.core.supporter.persistence.impl;
+
+
+import cn.com.helei.bot.core.config.TypedAccountConfig;
+import cn.com.helei.bot.core.entity.AccountBaseInfo;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import cn.com.helei.bot.core.supporter.persistence.AbstractPersistenceManager;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeInvocation;
+import cn.com.helei.bot.core.util.NamedThreadFactory;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
+
+@Slf4j
+public class DBAccountPersistenceManager extends AbstractPersistenceManager {
+
+    private final ExecutorService executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("database-"));
+
+    private final BotApi botApi;;
+
+    public DBAccountPersistenceManager(BotApi botApi) {
+        this.botApi = botApi;
+    }
+
+    @Override
+    public void init() {
+
+    }
+
+    @Override
+    public void persistenceAccountContexts(Map<String, List<AccountContext>> typedAccountMap) {
+        for (List<AccountContext> values : typedAccountMap.values()) {
+            botApi.getProjectAccountContextService().saveBatch(values);
+        }
+    }
+
+    @Override
+    public Map<String, List<AccountContext>> createAccountContexts(Integer projectId, List<TypedAccountConfig> accountConfigs) {
+        if (accountConfigs == null || accountConfigs.isEmpty())
+            return new HashMap<>();
+
+        // Step 1 按类型遍历
+        return accountConfigs.stream().collect(Collectors.toMap(TypedAccountConfig::getType, typedAccountConfig -> {
+            String type = typedAccountConfig.getType();
+
+            // Step 2 根据类型查询对应的AccountBaseInfo
+            AccountBaseInfo query = new AccountBaseInfo();
+            query.setType(type);
+
+            List<AccountBaseInfo> typeBaseInfos = botApi.getAccountBaseInfoService().list(new QueryWrapper<>(query));
+
+            // Step 3 创建AccountCount
+            return typeBaseInfos.stream()
+                    .map(accountBaseInfo -> AccountContext.builder().accountBaseInfo(accountBaseInfo).build())
+                    .toList();
+        }));
+    }
+
+    @Override
+    public Map<String, List<AccountContext>> loadAccountContexts(Integer projectId) {
+        // Step 1 加载 projectId 对应的账号
+        AccountContext query = new AccountContext();
+        query.setProjectId(projectId);
+        List<AccountContext> accountContexts = botApi.getProjectAccountContextService().list(new QueryWrapper<>(query));
+
+        // Step 2 遍历账号，补充对象
+        CompletableFuture<?>[] futures = accountContexts.stream()
+                .map(accountContext -> CompletableFuture.runAsync(
+                        () -> fillAccountInfo(accountContext), executorService))
+                .toArray(CompletableFuture[]::new);
+
+        // Step 3 等待所有任务完成
+        for (int i = 0; i < futures.length; i++) {
+            try {
+                futures[i].get();
+            } catch (InterruptedException | ExecutionException e) {
+                log.error("{} fill account context info error", i, e);
+            }
+        }
+
+        // Step 4 按类型分类账号
+        return accountContexts.stream().collect(Collectors.groupingBy(AccountContext::getType));
+    }
+
+    @Override
+    protected void propertyChangeHandler(PropertyChangeInvocation invocation) {
+
+    }
+
+
+    /**
+     * 查询填充账户信息
+     *
+     * @param accountContext accountContext
+     */
+    private void fillAccountInfo(AccountContext accountContext) {
+
+        // Step 2.1 绑定基础账号信息
+        if (accountContext.getAccountBaseInfoId() != null) {
+            accountContext.setAccountBaseInfo(botApi.getAccountBaseInfoService().getById(accountContext.getAccountBaseInfoId()));
+        }
+        // Step 2,2 绑定推特
+        if (accountContext.getTwitterId() != null) {
+            accountContext.setTwitter(botApi.getTwitterAccountService().getById(accountContext.getTwitterId()));
+        }
+        // Step 2,3 绑定 discord
+        if (accountContext.getDiscordId() != null) {
+            accountContext.setDiscord(botApi.getDiscordAccountService().getById(accountContext.getDiscordId()));
+        }
+        // Step 2.4 绑定代理
+        if (accountContext.getProxyId() != null) {
+            accountContext.setProxy(botApi.getProxyInfoService().getById(accountContext.getProxyId()));
+        }
+        // Step 2.5 绑定浏览器环境
+        if (accountContext.getBrowserEnvId() != null) {
+            accountContext.setBrowserEnv(botApi.getBrowserEnvService().getById(accountContext.getBrowserEnvId()));
+        }
+        // Step 2.6 绑定tg
+        if (accountContext.getTelegramId() != null) {
+
+        }
+        // Step 2.7 绑定钱包
+        if (accountContext.getWalletId() != null) {
+
+        }
+
+        // Step 2.8 绑定奖励信息
+        if (accountContext.getRewardId() != null) {
+            accountContext.setRewordInfo(botApi.getRewordInfoService().getById(accountContext.getRewardId()));
+        }
+    }
+}
+package cn.com.helei.bot.core.supporter.persistence;
+
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeInvocation;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenClass;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenField;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeProxy;
+import lombok.Getter;
+
+import java.lang.reflect.Field;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+@Getter
+public abstract class AbstractPersistenceManager implements AccountPersistenceManager {
+
+
+    /**
+     * 监听的对象 -> 该对象的root
+     */
+    private final ConcurrentMap<Object, Object> listenedObjRootMap = new ConcurrentHashMap<>();
+
+    /**
+     * root target -> root proxy
+     */
+    private final ConcurrentMap<Object, Object> originRoot2ProxyMap = new ConcurrentHashMap<>();
+
+
+    /**
+     * 注册持久化监听
+     *
+     * @param type            type
+     * @param accountContexts accountContexts
+     */
+    @Override
+    public void registerPersistenceListener(String type, List<AccountContext> accountContexts) {
+        if (accountContexts == null || accountContexts.isEmpty()) return;
+        accountContexts.replaceAll(accountContext -> bindPersistenceAnnoListener(type, accountContext));
+    }
+
+
+    /**
+     * 对象属性添加变化监听
+     *
+     * @param type   type
+     * @param target target 目标对象
+     * @param <T>    T
+     * @return 添加监听后被动态代理的对象
+     */
+    public <T> T bindPersistenceAnnoListener(String type, T target) {
+        return doBindPersistenceAnnoListener(target, target);
+    }
+
+
+    /**
+     * 对象属性添加变化监听
+     *
+     * @param target target 目标对象
+     * @param <T>    T
+     * @return 添加监听后被动态代理的对象
+     */
+    private <T> T doBindPersistenceAnnoListener(T target, Object rootObj) {
+        if (target == null) return null;
+
+        Class<?> targetClass = target.getClass();
+
+        PropertyChangeListenClass propertyChangeListenClass = targetClass.getAnnotation(PropertyChangeListenClass.class);
+
+        // 类上带有PersistenceClass注解，表示可以的类
+        if (propertyChangeListenClass == null) {
+            return target;
+        }
+
+        T proxy = PropertyChangeProxy.createProxy(target, this::propertyChangeHandler);
+
+        // 深度监听，还要给监听的字段对象内的属性监听
+        if (propertyChangeListenClass.isDeep()) {
+
+            for (Field field : targetClass.getDeclaredFields()) {
+                field.setAccessible(true);
+                // 字段上带有PersistenceField注解，表示可以的字段， 字段类型上带有PersistenceClass，还要监听字段对象的属性
+                if (field.isAnnotationPresent(PropertyChangeListenField.class)
+                        && field.getType().isAnnotationPresent(PropertyChangeListenClass.class)) {
+                    try {
+                        Object fieldValue = field.get(target);
+                        Object filedProxy = doBindPersistenceAnnoListener(fieldValue, rootObj);
+
+                        field.set(target, filedProxy);
+                    } catch (IllegalAccessException e) {
+                        throw new RuntimeException("访问字段失败", e);
+                    }
+                }
+            }
+        }
+
+        listenedObjRootMap.put(target, rootObj);
+
+        if (target.equals(rootObj)) {
+            originRoot2ProxyMap.put(rootObj, proxy);
+        }
+
+        return proxy;
+    }
+
+
+    /**
+     * 对象属性发生改变的回调
+     *
+     * @param invocation invocation
+     */
+    protected abstract void propertyChangeHandler(PropertyChangeInvocation invocation);
+}
+package cn.com.helei.bot.core.util.excel;
+
+import cn.hutool.core.util.StrUtil;
+import com.alibaba.excel.EasyExcel;
+import com.alibaba.excel.ExcelReader;
+import com.alibaba.excel.context.AnalysisContext;
+import com.alibaba.excel.event.AnalysisEventListener;
+import com.alibaba.excel.read.builder.ExcelReaderBuilder;
+import com.alibaba.excel.read.metadata.ReadSheet;
+import com.alibaba.excel.support.ExcelTypeEnum;
+import io.micrometer.common.lang.Nullable;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+
+@Slf4j
+public class ExcelReadUtil {
+
+    public static <T> Map<String, List<T>> readExcelAsMap(String filePath, Class<T> tClass,
+                                                          BiFunction<String, T, Boolean> filter, BiConsumer<String, List<T>> sheetReadHandler) throws IOException {
+
+        Map<String, List<T>> sheetDataMap = new HashMap<>();
+
+        try (ExcelReader reader = EasyExcel.read(filePath).build()) {
+            List<ReadSheet> sheets = reader.excelExecutor().sheetList();
+
+            for (ReadSheet sheet : sheets) {
+                String sheetName = sheet.getSheetName();
+                List<T> list = readSingleSheet(filePath, sheetName, tClass, filter, sheetReadHandler);
+                sheetDataMap.put(sheetName, list);
+            }
+
+            return sheetDataMap;
+        }
+    }
+
+    private static <T> List<T> readSingleSheet(String filePath, String sheetName, Class<T> tClass,
+                                               BiFunction<String, T, Boolean> filter, BiConsumer<String, List<T>> sheetReadHandler) {
+        List<T> list = new ArrayList<>();
+
+        EasyExcel.read(filePath, tClass, new AnalysisEventListener<T>() {
+
+                    @Override
+                    public void invoke(T t, AnalysisContext analysisContext) {
+                        if (filter.apply(sheetName, t)) {
+                            list.add(t);
+                        }
+                    }
+
+                    @Override
+                    public void doAfterAllAnalysed(AnalysisContext analysisContext) {
+                        sheetReadHandler.accept(sheetName, list);
+                    }
+                })
+                .registerConverter(new StringConverter())
+                .sheet(sheetName).doRead();
+
+        return list;
+    }
+
+
+    /**
+     * 读取excel,放入List<Map<String, String>>
+     *
+     * @param fileName 读取excel的文件名称
+     * @return datalist
+     */
+    public static List<Map<String, Object>> readExcelToMap(String fileName) {
+        return readExcelToMap(fileName, null);
+    }
+
+    /**
+     * 读取excel,放入List<Map<String, String>>
+     *
+     * @param fileName  读取excel的文件名称
+     * @param sheetName sheetName
+     * @return datalist
+     */
+    public static List<Map<String, Object>> readExcelToMap(String fileName, String sheetName) {
+        List<Map<String, Object>> dataList = new ArrayList<>();
+        ExcelReaderBuilder builder = EasyExcel.read(fileName, new AnalysisEventListener<Map<String, Object>>() {
+            //用于存储表头的信息
+            private Map<Integer, String> headMap;
+
+            //读取excel表头信息
+            @Override
+            public void invokeHeadMap(Map<Integer, String> headMap, AnalysisContext context) {
+                this.headMap = headMap;
+            }
+
+            //直接使用Map来保存数据
+            @Override
+            public void invoke(Map<String, Object> valueData, AnalysisContext context) {
+                //把表头和值放入Map
+                HashMap<String, Object> paramsMap = new HashMap<>();
+                for (int i = 0; i < valueData.size(); i++) {
+                    String key = headMap.get(i);
+                    Object value = valueData.get(i);
+                    //将表头作为map的key，每行每个单元格的数据作为map的value
+                    paramsMap.put(key, value);
+                }
+                dataList.add(paramsMap);
+            }
+
+            @Override
+            public void doAfterAllAnalysed(AnalysisContext context) {
+                log.debug("Excel读取完成,文件名:" + fileName + ",sheet:" + sheetName + ",行数：" + dataList.size());
+            }
+        });
+
+        if (StrUtil.isBlank(sheetName)) {
+            builder.sheet().doRead();
+        } else {
+            builder.sheet(sheetName).doRead();
+        }
+
+        return dataList;
+    }
+
+    /**
+     * 使用Class来读取Excel
+     *
+     * @param path path
+     * @return 返回 ClassList 的列表
+     */
+    public static <T> List<T> readXLSXConvertObjectList(String path, Class<T> classT) throws IOException {
+        try (InputStream inputStream = new FileInputStream(new File(path))) {
+            return readExcelConvertObjectList(inputStream, ExcelTypeEnum.XLSX, classT);
+        }
+    }
+
+    /**
+     * 使用Class来读取Excel
+     *
+     * @param path path
+     * @return 返回 ClassList 的列表
+     */
+    public static <T> List<T> readXLSXConvertObjectList(String path, String sheetName, Class<T> classT) throws IOException {
+        try (InputStream inputStream = new FileInputStream(new File(path))) {
+            return readExcelConvertObjectList(inputStream, ExcelTypeEnum.XLSX, sheetName, classT);
+        }
+    }
+
+    /**
+     * 使用Class来读取Excel
+     *
+     * @param inputStream Excel的输入流
+     * @return 返回 ClassList 的列表
+     */
+    public static <T> List<T> readXLSXConvertObjectList(InputStream inputStream, Class<T> classT) {
+        return readExcelConvertObjectList(inputStream, ExcelTypeEnum.XLSX, classT);
+    }
+
+    /**
+     * 使用Class来读取Excel
+     *
+     * @param inputStream Excel的输入流
+     * @return 返回 ClassList 的列表
+     */
+    public static <T> List<T> readXLSXConvertObjectList(InputStream inputStream, String sheetName, Class<T> classT) {
+        return readExcelConvertObjectList(inputStream, ExcelTypeEnum.XLSX, sheetName, classT);
+    }
+
+
+    /**
+     * 使用Class来读取Excel
+     *
+     * @param inputStream   Excel的输入流
+     * @param excelTypeEnum Excel的格式(XLS或XLSX)
+     * @return 返回 ClassList 的列表
+     */
+    public static <T> List<T> readExcelConvertObjectList(InputStream inputStream, ExcelTypeEnum excelTypeEnum, Class<T> classT) {
+        return readExcelConvertObjectList(inputStream, excelTypeEnum, null, classT);
+    }
+
+    /**
+     * 使用Class来读取Excel
+     *
+     * @param inputStream   Excel的输入流
+     * @param excelTypeEnum Excel的格式(XLS或XLSX)
+     * @return 返回 ClassList 的列表
+     */
+    public static <T> List<T> readExcelConvertObjectList(InputStream inputStream, ExcelTypeEnum excelTypeEnum, String sheetName, Class<T> classT) {
+        return readExcelConvertObjectList(inputStream, excelTypeEnum, sheetName, 1, classT);
+    }
+
+
+    /**
+     * 读取excel数据到数据对象
+     *
+     * @param inputStream   文件流
+     * @param excelTypeEnum 文件类型Excel的格式(XLS或XLSX)
+     * @param sheetName     sheetName
+     * @param headLineNum   开始读取数据的行
+     * @param classT        转为对象的CLASS
+     * @param <T>           T
+     * @return list
+     */
+    public static <T> List<T> readExcelConvertObjectList(
+            InputStream inputStream,
+            ExcelTypeEnum excelTypeEnum,
+            String sheetName,
+            @Nullable Integer headLineNum,
+            Class<T> classT
+    ) {
+        if (headLineNum == null) {
+            headLineNum = 1;
+        }
+        ExcelReaderBuilder builder = EasyExcel
+                .read(inputStream)
+                .registerConverter(new StringConverter())
+                .excelType(excelTypeEnum)
+                .head(classT).headRowNumber(headLineNum);
+        if (StrUtil.isNotBlank(sheetName)) {
+            return builder.sheet(sheetName).doReadSync();
+        } else {
+            return builder.sheet(0).doReadSync();
+        }
+    }
+}
+package cn.com.helei.bot.core.util.excel;
+
+import cn.hutool.core.util.StrUtil;
+import com.alibaba.excel.converters.Converter;
+import com.alibaba.excel.enums.CellDataTypeEnum;
+import com.alibaba.excel.metadata.GlobalConfiguration;
+import com.alibaba.excel.metadata.data.ReadCellData;
+import com.alibaba.excel.metadata.property.ExcelContentProperty;
+
+public class IntegerStringConverter implements Converter<Integer> {
+    @Override
+    public Class<?> supportJavaTypeKey() {
+        return Integer.class;
+    }
+
+    @Override
+    public CellDataTypeEnum supportExcelTypeKey() {
+        return CellDataTypeEnum.STRING;
+    }
+
+
+    @Override
+    public Integer convertToJavaData(ReadCellData<?> cellData, ExcelContentProperty contentProperty, GlobalConfiguration globalConfiguration) throws Exception {
+        if (cellData.getType() == CellDataTypeEnum.NUMBER) {
+            return Integer.valueOf(String.valueOf(cellData.getNumberValue()));
+        }
+
+        String stringValue = cellData.getStringValue();
+        if (StrUtil.isBlank(stringValue)) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(stringValue);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+}
+package cn.com.helei.bot.core.util.excel;
+
+import cn.com.helei.bot.core.constants.ProxyProtocol;
+import com.alibaba.excel.converters.Converter;
+import com.alibaba.excel.enums.CellDataTypeEnum;
+import com.alibaba.excel.metadata.GlobalConfiguration;
+import com.alibaba.excel.metadata.data.ReadCellData;
+import com.alibaba.excel.metadata.property.ExcelContentProperty;
+
+public class ProxyProtocolConverter implements Converter<ProxyProtocol> {
+
+    @Override
+    public Class<?> supportJavaTypeKey() {
+        return ProxyProtocol.class;
+    }
+
+    @Override
+    public CellDataTypeEnum supportExcelTypeKey() {
+        return CellDataTypeEnum.STRING;
+    }
+
+    @Override
+    public ProxyProtocol convertToJavaData(ReadCellData<?> cellData, ExcelContentProperty contentProperty, GlobalConfiguration globalConfiguration) throws Exception {
+        return ProxyProtocol.valueOf(cellData.getStringValue().toUpperCase());
+    }
+}
+package cn.com.helei.bot.core.util.excel;
+
+import com.alibaba.excel.converters.Converter;
+import com.alibaba.excel.enums.CellDataTypeEnum;
+import com.alibaba.excel.metadata.GlobalConfiguration;
+import com.alibaba.excel.metadata.data.ReadCellData;
+import com.alibaba.excel.metadata.property.ExcelContentProperty;
+
+public class StringConverter implements Converter<String> {
+
+    @Override
+    public Class<?> supportJavaTypeKey() {
+        return String.class;
+    }
+
+    @Override
+    public CellDataTypeEnum supportExcelTypeKey() {
+        return CellDataTypeEnum.STRING;
+    }
+
+    @Override
+    public String convertToJavaData(ReadCellData<?> cellData, ExcelContentProperty contentProperty, GlobalConfiguration globalConfiguration) throws Exception {
+        return cellData.getStringValue();
+    }
+}
+package cn.com.helei.bot.core.util.typehandler;
+
+import org.apache.ibatis.type.BaseTypeHandler;
+import org.apache.ibatis.type.JdbcType;
+
+import java.sql.CallableStatement;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+
+public class LocalDateTimeTypeHandler extends BaseTypeHandler<LocalDateTime> {
+
+    private static final DateTimeFormatter formatter = DateTimeFormatter.ISO_DATE_TIME;
+
+    @Override
+    public void setNonNullParameter(PreparedStatement ps, int i, LocalDateTime parameter, JdbcType jdbcType) throws SQLException {
+        ps.setString(i, parameter.format(formatter));
+    }
+
+    @Override
+    public LocalDateTime getNullableResult(ResultSet rs, String columnName) throws SQLException {
+        String date = rs.getString(columnName);
+        if (date != null) {
+            return LocalDateTime.parse(date, formatter);
+        }
+        return null;
+    }
+
+    @Override
+    public LocalDateTime getNullableResult(ResultSet rs, int columnIndex) throws SQLException {
+        String date = rs.getString(columnIndex);
+        if (date != null) {
+            return LocalDateTime.parse(date, formatter);
+        }
+        return null;
+    }
+
+    @Override
+    public LocalDateTime getNullableResult(CallableStatement cs, int columnIndex) throws SQLException {
+        String date = cs.getString(columnIndex);
+        if (date != null) {
+            return LocalDateTime.parse(date, formatter);
+        }
+        return null;
+    }
+}
+package cn.com.helei.bot.core.util;
+
+import cn.com.helei.bot.core.config.SystemConfig;
+import org.apache.poi.ss.formula.functions.T;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.rmi.MarshalledObject;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+public class YamlConfigLoadUtil {
+
+    private static final ConcurrentHashMap<String, Object> LOADED_CONFIG_MAP = new ConcurrentHashMap<>();
+
+    public static <T> T load(
+            List<String> path,
+            String fileName,
+            List<String> prefixList,
+            Class<T> clazz
+    ) {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(path, fileName);
+
+        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
+            if (config == null) {
+                Yaml yaml = new Yaml();
+                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
+                    Map<String, Object> yamlData = yaml.load(inputStream);
+
+                    if (prefixList != null) {
+                        for (String prefix : prefixList) {
+                            yamlData = (Map<String, Object>) yamlData.get(prefix);
+                        }
+                    }
+
+                    config = yaml.loadAs(yaml.dump(yamlData), clazz);
+                } catch (IOException e) {
+                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
+                }
+            }
+
+            return config;
+        });
+
+        return (T) compute;
+    }
+
+    public static List<Object> load(List<String> configDirBotPath, String browserEnvPoolConfig, String prefix) {
+        return load(configDirBotPath, browserEnvPoolConfig, List.of(prefix.split("\\.")));
+    }
+
+    public static List<Object> load(
+            List<String> path,
+            String fileName,
+            List<String> prefixList
+    ) {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(path, fileName);
+
+        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
+            if (config == null) {
+                Yaml yaml = new Yaml();
+                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
+                    Map<String, Object> yamlData = yaml.load(inputStream);
+
+                    if (prefixList != null) {
+                        for (String prefix : prefixList) {
+                            yamlData = (Map<String, Object>) yamlData.get(prefix);
+                        }
+                    }
+                    return yamlData.get("list");
+                } catch (IOException e) {
+                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
+                }
+            }
+
+            return config;
+        });
+
+        return (List<Object>) compute;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(YamlConfigLoadUtil.load(SystemConfig.CONFIG_DIR_BOT_PATH, "browser-env.yaml", List.of("bot", "browser")));
+    }
+
+}
+package cn.com.helei.bot.core;
+
+import org.mybatis.spring.annotation.MapperScan;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+@MapperScan(basePackages = "cn.com.helei.bot.core.mvc.mapper")
+public class AutoBotApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(AutoBotApplication.class, args);
+    }
+}
+# 应用程序名称
+spring:
+  application:
+    name: my-spring-boot-app
+  datasource:
+    url: "jdbc:sqlite://D:\\workspace\\DepinBot\\untitled\\botData\\db\\autobot.db"
+    driver-class-name: org.sqlite.JDBC
+
+    # HikariCP配置
+    type: com.zaxxer.hikari.HikariDataSource
+    hikari:
+      maximum-pool-size: 10
+      auto-commit: true
+      idle-timeout: 60000
+      max-lifetime: 1800000
+      pool-name: HikariPool
+      connection-test-query: SELECT 1
+      minimum-idle: 10
+
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    cache-enabled: true
+    map-underscore-to-camel-case: false
+  global-config:
+    db-config:
+      logic-delete-field: isValid  # 全局逻辑删除的实体字段名(since 3.3.0,配置后可以忽略不配置步骤2)
+      logic-delete-value: 0 # 逻辑已删除值(默认为 1)
+  mapper-locations: classpath:/mapper/xml/*.xml
+
+
+# 其他配置
+logging:
+  level:
+    org.springframework: ERROR
+#    cn.com.helei.bot.core: DEBUG
+package cn.com.helei.bot.core.bot.view;
+
+import cn.com.helei.bot.core.AutoBotApplication;
+import cn.com.helei.bot.core.bot.RestTaskAutoBot;
+import cn.com.helei.bot.core.config.BaseAutoBotConfig;
+import cn.com.helei.bot.core.config.TypedAccountConfig;
+import cn.com.helei.bot.core.constants.ProxyType;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import cn.com.helei.bot.core.supporter.commandMenu.DefaultMenuType;
+import cn.com.helei.bot.core.util.exception.DepinBotStartException;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+
+import javax.mail.Message;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+
+
+@SpringBootTest(classes = AutoBotApplication.class)
+class MenuCMDLineAutoBotTest {
+
+    private TestRestAutoBot autoBot;
+
+    private MenuCMDLineAutoBot<BaseAutoBotConfig> menuCMDLineAutoBot;
+
+    @Autowired
+    public BotApi botApi;
+
+    @BeforeEach
+    public  void setUp() throws DepinBotStartException {
+        BaseAutoBotConfig baseAutoBotConfig = new BaseAutoBotConfig();
+        baseAutoBotConfig.setName("test-bot");
+
+        TypedAccountConfig typedAccountConfig = new TypedAccountConfig();
+        typedAccountConfig.setType("goggle");
+        typedAccountConfig.setProxyType(ProxyType.STATIC);
+
+        baseAutoBotConfig.setAccountConfigs(List.of(typedAccountConfig));
+
+        autoBot = new TestRestAutoBot(baseAutoBotConfig, botApi);
+
+        menuCMDLineAutoBot = new MenuCMDLineAutoBot<>(autoBot, List.of(DefaultMenuType.IMPORT));
+
+    }
+
+    @Test
+    public void test() throws DepinBotStartException {
+        menuCMDLineAutoBot.start();
+    }
+
+
+    static class TestRestAutoBot extends RestTaskAutoBot {
+
+        public TestRestAutoBot(BaseAutoBotConfig baseAutoBotConfig, BotApi botApi) {
+            super(baseAutoBotConfig, botApi);
+        }
+
+        @Override
+        public CompletableFuture<Boolean> registerAccount(AccountContext accountContext, String inviteCode) {
+            return null;
+        }
+
+        @Override
+        public CompletableFuture<Boolean> verifierAccountEmail(AccountContext accountContext, Message message) {
+            return null;
+        }
+
+        @Override
+        public CompletableFuture<String> requestTokenOfAccount(AccountContext accountContext) {
+            return null;
+        }
+
+        @Override
+        public boolean doAccountClaim(AccountContext accountContext) {
+            return false;
+        }
+
+        @Override
+        public CompletableFuture<Boolean> updateAccountRewordInfo(AccountContext accountContext) {
+            return null;
+        }
+    }
+}
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+        </dependency>
+
+
+base_account.xlsx
+name,email,password,params
+awd,test@qq.com,aibniuawhdui,{}
+
+browser_env.xlsx
+user_agent,context_type,lang,auth,origin,reffer
+test_useragent1,,,123,,123
+test_useragent2,,awd,,awd,
+test_useragent3,awd,,,awd,
+
+discord_account.xlsx
+email,password ,username,bind_email,bind_email_password,token
+914577981@qq3com,wadwa,test,test,wadwafd,aisuhdiuaw
+
+proxy.xlsx
+proxy_protocol,host,port,username,password
+http,127.0.0.1,1234,haha,123
+http,127.0.0.1,1235,haha,123
+http,127.0.0.1,1236,haha,123
+http,127.0.0.1,1237,haha,123
+http,127.0.0.1,1238,haha,123
+http,127.0.0.1,1239,haha,123
+
+telegram_account.xlsx
+username,password,phonePrefix,phone,token
+test_user,12312,86,19141273392,s
+
+twitter_accoint.xlsx
+username,password,email,emailPassword,token,f2aKey
+1,2,3,4,5,6
+2,3,3,4,5,6
+3,4,3,4,5,6
+4,5,3,4,5,6
+5,6,3,4,5,6
