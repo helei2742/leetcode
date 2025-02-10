@@ -1,593 +1,846 @@
-<template>
-  <div>
+package cn.com.helei.bot.core.supporter.botapi.impl;
 
-    <!--    头部搜索、添加、上传 bar-->
-    <div class="filter-container">
-      <el-select v-for="headerName in headers"
-                 v-model="headerFilterFieldValues[headerName]"
-                 @clear="headerFilterFieldValues[headerName] = undefined"
-                 :placeholder="headerName" clearable style="width: 90px" class="filter-item">
-        <el-option v-for="item in getFieldOptions(headerName)" :key="item" :label="item" :value="item"/>
-      </el-select>
+import cn.com.helei.bot.core.mvc.service.*;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import cn.com.helei.bot.core.supporter.botapi.BotJobService;
+import lombok.Getter;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
 
-      <el-button v-waves class="filter-item" type="primary" icon="el-icon-search" @click="handleFilter">
-        Search
-      </el-button>
-      <el-button class="filter-item" style="margin-left: 10px;" type="primary" icon="el-icon-edit"
-                 @click="addBatchRowData">
-        Add
-      </el-button>
-      <el-button v-waves class="filter-item" type="success" icon="el-icon-upload" @click="handleUpload">
-        Upload
-      </el-button>
-    </div>
 
-    <!--    表格-->
-    <el-table
-      :data="filteredTableData()"
-      border
-      stripe
-      fit
-      highlight-current-row
-      style="width: 100%;"
-      @selection-change="handleSelectionChange"
-    >
-      <el-table-column type="selection" width="55"/>
+@Getter
+@Component
+public class DBBotApi implements BotApi {
 
-      <el-table-column type="index" class-name="status-col" min-width="75">
-      </el-table-column>
+    @Autowired
+    private IAccountBaseInfoService accountBaseInfoService;
 
-      <el-table-column v-for="headName in fullHeaders" :label="headName" class-name="status-col" min-width="100">
-        <template slot-scope="{row}">
-          <el-tag v-if="'email' === headName">{{ row[headName] }}</el-tag>
-          <el-tag v-else-if="'type' === headName" type="success">
-            {{ row[headName] }}
-          </el-tag>
-          <div v-else>{{ row[headName] }}</div>
-        </template>
-      </el-table-column>
+    @Autowired
+    private ITwitterAccountService twitterAccountService;
 
-      <el-table-column align="right" width="200">
-        <template #header>
-          <el-input v-model="newHeaderName" size="small" placeholder="输入新列名"
-                    style="display: inline-block;width: 60%"/>
-          <el-button type="primary" size="small" @click="addNewHeaderField">
-            Add
-          </el-button>
-        </template>
+    @Autowired
+    private IProxyInfoService proxyInfoService;
 
-        <template #default="scope">
-          <el-button size="small" @click="handleEdit(scope.$index, scope.row)">
-            Edit
-          </el-button>
-          <el-button
-            size="small"
-            type="danger"
-            @click="handleDelete(scope.$index, scope.row)"
-          >
-            Delete
-          </el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+    @Autowired
+    private IBrowserEnvService browserEnvService;
 
-    <!--分页条-->
-    <pagination v-show="data !== null && data.length >0"
-                :total="data.length"
-                :page.sync="listQuery.page"
-                :limit.sync="listQuery.limit"
-    />
+    @Autowired
+    private IDiscordAccountService discordAccountService;
 
-    <!--    表格单行编辑弹框-->
-    <el-dialog :title="'编辑第 ' + editRowIndex + '行数据'" :visible.sync="editRowFromVisible">
+    @Autowired
+    private IBotAccountContextService botAccountContextService;
 
-      <el-form ref="dataForm" :rules="rules" :model="editRowData" label-position="left"
-               style="width: 400px; margin-left:50px;">
-        <el-form-item v-for="headName in fullHeaders" :label="headName" prop="headName">
-          <el-input v-if="editRowData !== null" v-model="editRowData[headName]"/>
-        </el-form-item>
-      </el-form>
+    @Autowired
+    private IRewordInfoService rewordInfoService;
 
-      <div slot="footer" class="dialog-footer">
-        <el-button @click="editRowFromVisible = false">
-          Cancel
-        </el-button>
-        <el-button type="primary" @click="confirmEditRow">
-          Confirm
-        </el-button>
-      </div>
-    </el-dialog>
+    @Autowired
+    private DBImportService importService;
 
-    <!--    添加界面-->
-    <dynamic-field-load-from
-      :ref="fieldLoadFromRef"
-      :field-names="fullHeaders"
-      :visible="addRowDataFromVisible"
-      @batch-data-import="batchDataImportHandler"
-    />
-  </div>
-</template>
+    @Autowired
+    private IProjectInfoService projectInfoService;
 
-<script>
-import waves from '@/directive/waves' // waves directive
-import Pagination from '@/components/Pagination'
-import DynamicFieldLoadFrom from '@/views/custom/import/components/dynamic-field-load-from'
+    @Autowired
+    private IBotInfoService botInfoService;
 
-export default {
-  name: 'DynamicAddColTable',
-  components: {Pagination, DynamicFieldLoadFrom},
-  directives: {waves},
-  filters: {},
-  props: {
-    title: {
-      type: String,
-      default() {
-        return ''
-      }
-    },
-    headers: {
-      type: Array,
-      default() {
-        return []
-      }
-    },
-    customHeaders: {
-      type: Array,
-      default() {
-        return []
-      }
-    },
-    data: {
-      type: Array,
-      default() {
-        return []
-      }
-    },
-
-  },
-  data() {
-    return {
-      newHeaderName: '',
-      editRowIndex: null,
-      editRowData: null,
-      editRowFromVisible: false,
-      addRowDataFromVisible: false,
-      listQuery: {
-        page: 1,
-        limit: 20
-      },
-      headerFilterFieldValues: {},
-      rules: {
-        type: [{required: true, message: 'type is required', trigger: 'change'}],
-        timestamp: [{type: 'date', required: true, message: 'timestamp is required', trigger: 'change'}],
-        title: [{required: true, message: 'title is required', trigger: 'blur'}]
-      },
-      filteredTableDataIdxes: new Set(),
-      selectedDataList: []
-    }
-  },
-  created() {
-  },
-  computed: {
-    fullHeaders() {
-      return this.headers.concat(this.customHeaders)
-    },
-    fieldLoadFromRef() {
-      return 'dynamicFieldLoadFrom[' + this.headers + ']'
-    }
-  },
-  methods: {
-    handleDelete(idx, row) {
-      this.data.splice(idx, 1)
-    },
-    handleEdit(idx, row) {
-      this.editRowIndex = idx
-      this.editRowData = JSON.parse(JSON.stringify(row))
-
-      this.editRowFromVisible = true
-    },
-    handleSelectionChange(rows) {
-      this.selectedDataList = rows
-    },
-    handleFilter() {
-      this.filteredTableDataIdxes.clear()
-
-      console.log(this.headerFilterFieldValues)
-      for (let i = 0; i < this.data.length; i++) {
-        let line = this.data[i]
-        let flag = true
-        for (let headName of this.fullHeaders) {
-          let targetValue = this.headerFilterFieldValues[headName];
-          let currentValue = line[headName]
-
-          if (targetValue !== undefined && targetValue !== currentValue) {
-            flag = false
-            break;
-          }
-        }
-
-        if (!flag) this.filteredTableDataIdxes.add(i)
-      }
-
-      this.$forceUpdate()
-      console.log(this.filteredTableDataIdxes)
-    },
-    addBatchRowData() {
-      this.$refs[this.fieldLoadFromRef].toggleVisible()
-    },
-    handleUpload() {
-      let emitData = this.data
-      if (this.selectedDataList !== null && this.selectedDataList.length > 0) {
-        emitData = this.selectedDataList
-      }
-      this.$emit("upload-data-list", emitData)
-    },
-    confirmEditRow() {
-      this.$set(this.data, this.editRowIndex, this.editRowData)
-
-      this.editRowIndex = null
-      this.editRowData = null
-
-      this.editRowFromVisible = false
-    },
-    addNewHeaderField() {
-      if (this.newHeaderName === null
-        || this.newHeaderName === undefined
-        || this.newHeaderName === ''
-      ) {
-        return
-      }
-
-      this.customHeaders.push(this.newHeaderName)
-      this.newHeaderName = ''
-    },
-    /**
-     * 批量添加数据
-     * @param newDataArray
-     */
-    batchDataImportHandler(newDataArray) {
-      this.data.push(...newDataArray)
-    },
-    getFieldOptions(headerName) {
-      let set = new Set()
-
-      if (this.data === undefined || this.data === null) return {}
-
-      for (let line of this.data) {
-        let fieldValue = line[headerName];
-
-        if (fieldValue !== undefined) {
-          set.add(fieldValue == null ? 'null' : fieldValue)
-        }
-      }
-
-      return set
-    },
-    filteredTableData() {
-      let res = []
-      for (let i = 0; i < this.data.length; i++) {
-        if (!this.filteredTableDataIdxes.has(i)) {
-          res.push(this.data[i])
-        }
-      }
-      return res
-    }
-  }
+    @Autowired
+    private BotJobService botJobService;
 }
-</script>
-<template>
-  <el-dialog :close-on-click-modal="false"
-             :visible.sync="isVisible">
+package cn.com.helei.bot.core.supporter.botapi.impl;
 
-    <div class="components-container" slot="title">
 
-      <h3>请按照下方输入框中模板填入需导入的数据</h3>
+import cn.com.helei.bot.core.bot.job.AutoBotJob;
+import cn.com.helei.bot.core.dto.BotACJobResult;
+import cn.com.helei.bot.core.supporter.botapi.BotJobService;
+import org.quartz.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
 
-      <el-switch
-        style="display: block;float: right"
-        v-model="isJsonType"
-        active-color="#13ce66"
-        inactive-color="#ff4949"
-        active-text="JSON格式"
-        :active-value="true"
-        inactive-text="Excel格式"
-        :inactive-value="false">
-      </el-switch>
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 
-    </div>
+@Component
+public class QuartzBotJobService implements BotJobService {
 
-    <div v-if="isJsonType" class="components-container">
-      <aside>
-        注意, 格式为一个JSON数组, 数组里的元素为每一条数据
-        <br/>
-        需包含 {{ fieldNames }} 字段
-      </aside>
+    private static final Logger log = LoggerFactory.getLogger(QuartzBotJobService.class);
 
-      <div class="editor-container">
-        <json-editor ref="jsonEditor" v-model="jsonValue"/>
-      </div>
-    </div>
-    <div v-else class="components-container">
-      <upload-excel-component :on-success="handleExcelUploadSuccess" :before-upload="beforeExcelUpload" />
-      <el-table :data="excelValue" border highlight-current-row style="width: 100%;margin-top:20px;">
-        <el-table-column v-for="item of []" :key="item" :prop="item" :label="item" />
-      </el-table>
-    </div>
+    @Autowired
+    private Scheduler scheduler;
 
-    <div slot="footer" class="dialog-footer">
-      <el-button @click="isVisible = false">
-        Cancel
-      </el-button>
-      <el-button type="primary" @click="addBatchData">
-        Confirm
-      </el-button>
-    </div>
-  </el-dialog>
-</template>
+    @Override
+    public List<BotACJobResult> registerJobList(Collection<AutoBotJob> autoBotJobList) {
 
-<script>
-import JsonEditor from "@/components/JsonEditor/index.vue";
-import ElMessageBox from "dropzone";
-import UploadExcelComponent from "@/components/UploadExcel/index.vue";
+        List<BotACJobResult> resultList = new ArrayList<>(autoBotJobList.size());
 
-export default {
-  name: "DynamicFieldLoadFrom",
-  components: {UploadExcelComponent, JsonEditor, ElMessageBox},
-  props: {
-    fieldNames: {
-      type: Array,
-      default() {
-        return []
-      }
-    },
-    fieldExamples: {
-      type: Array,
-      default() {
-        return []
-      }
-    },
-    visible: {
-      type: Boolean,
-      default() {
-        return false
-      }
+        for (AutoBotJob autoBotJob : autoBotJobList) {
+            resultList.add(registerJob(autoBotJob));
+        }
+
+        return resultList;
     }
-  },
-  data() {
-    return {
-      jsonValue: [],
-      excelValue: [],
-      isVisible: this.visible,
-      isJsonType: true
-    }
-  },
-  created() {
-    let template = {}
 
-    this.fieldNames.forEach(name => {
-      let fieldExample = this.fieldExamples[name];
-      template[name] = fieldExample === undefined ? null : fieldExample
-    })
 
-    this.jsonValue.push(template)
-  },
-  methods: {
-    toggleVisible() {
-      // 修改 data 属性
-      this.isVisible = !this.isVisible;
-    },
-    addBatchData() {
-      if (this.isJsonType) {
-        this.jsonTypeAddBatchData()
-      } else {
+    @Override
+    public BotACJobResult registerJob(AutoBotJob autoBotJob) {
+        BotACJobResult result = BotACJobResult.builder()
+                .botId(autoBotJob.getBotId())
+                .group(autoBotJob.getGroup())
+                .jobName(autoBotJob.getName())
+                .success(true)
+                .build();
 
-      }
-    },
-    beforeExcelUpload(file) {
-      const isLt1M = file.size / 1024 / 1024 < 1
-      console.log(file)
-      if (isLt1M) {
-        return true
-      }
+        JobKey jobKey = new JobKey(autoBotJob.getName(), autoBotJob.getGroup());
 
-      this.$message({
-        message: 'Please do not upload files larger than 1m in size.',
-        type: 'warning'
-      })
-      return false
-    },
-    handleExcelUploadSuccess({ results, header }) {
-      this.tableData = results
-      this.tableHeader = header
-    },
-    jsonTypeAddBatchData() {
-      let isError = false
-      let errorMsg = ''
-
-      if (this.jsonValue instanceof Array) {
-        isError = true
-        errorMsg = '你还未输入内容'
-      }
-
-      if (!isError) {
         try {
-          let jsonArray = JSON.parse(this.jsonValue);
+            // 存在这个job
+            if (scheduler.checkExists(jobKey)) {
+                result.setSuccess(false);
+                result.setErrorMsg("job exist");
+            } else {
+                // 不存在，创建并运行
+                JobDetail jobDetail = JobBuilder.newJob(AutoBotJob.class)
+                        .withIdentity(jobKey)
+                        .withDescription(autoBotJob.getDescription())
+                        .storeDurably()
+                        .build();
 
-          if (jsonArray instanceof Array) {
-            //逐条检查数据格式对不对
-            for (let item of jsonArray) {
-              if (isError) break
+                CronTrigger trigger = TriggerBuilder.newTrigger()
+                        .withIdentity(autoBotJob.getName(), autoBotJob.getGroup())
+                        .withSchedule(CronScheduleBuilder.cronSchedule(autoBotJob.getCronExpression()))
+                        .build();
 
-              for (let fieldName of this.fieldNames) {
-                var itemElement = item[fieldName];
+                scheduler.scheduleJob(jobDetail, trigger);
+            }
+        } catch (Exception e) {
+            result.setSuccess(false);
+            result.setErrorMsg(e.getMessage());
 
-                if (itemElement === undefined) {
-                  isError = true
-                  errorMsg = '元素没有包含所有需要的字段 <' + fieldName + '>'
+            log.error("注册[{}]job发生异常", jobKey, e);
+        }
+
+        return result;
+    }
+
+}
+package cn.com.helei.bot.core.supporter.botapi;
+
+
+import cn.com.helei.bot.core.mvc.service.*;
+
+public interface BotApi {
+
+    IProjectInfoService getProjectInfoService();
+
+    IBotInfoService getBotInfoService();
+
+    IAccountBaseInfoService getAccountBaseInfoService();
+
+    IBrowserEnvService getBrowserEnvService();
+
+    IDiscordAccountService getDiscordAccountService();
+
+    IBotAccountContextService getBotAccountContextService();
+
+    IProxyInfoService getProxyInfoService();
+
+    IRewordInfoService getRewordInfoService();
+
+    ITwitterAccountService getTwitterAccountService();
+
+    ImportService getImportService();
+
+    BotJobService getBotJobService();
+}
+package cn.com.helei.bot.core.supporter.botapi;
+
+import cn.com.helei.bot.core.bot.job.AutoBotJob;
+import cn.com.helei.bot.core.dto.BotACJobResult;
+
+import java.util.Collection;
+import java.util.List;
+
+public interface BotJobService {
+
+    /**
+     * 批量注册job
+     *
+     * @param autoBotJobList BotACJobResult
+     * @return Result
+     */
+    List<BotACJobResult> registerJobList(Collection<AutoBotJob> autoBotJobList);
+
+    /**
+     * 注册job，开始定时执行
+     *
+     * @param autoBotJob autoBotJob
+     * @return BotACJobResult
+     */
+    BotACJobResult registerJob(AutoBotJob autoBotJob);
+
+}
+package cn.com.helei.bot.core.supporter.persistence.impl;
+
+
+import cn.com.helei.bot.core.config.TypedAccountConfig;
+import cn.com.helei.bot.core.entity.AccountBaseInfo;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import cn.com.helei.bot.core.supporter.persistence.AbstractPersistenceManager;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeInvocation;
+import cn.com.helei.bot.core.util.NamedThreadFactory;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
+
+@Slf4j
+public class DBAccountPersistenceManager extends AbstractPersistenceManager {
+
+    private final ExecutorService executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("database-"));
+
+    private final BotApi botApi;;
+
+    public DBAccountPersistenceManager(BotApi botApi) {
+        this.botApi = botApi;
+    }
+
+    @Override
+    public void init() {
+
+    }
+
+    @Override
+    public void persistenceAccountContexts(Map<String, List<AccountContext>> typedAccountMap) {
+        for (List<AccountContext> values : typedAccountMap.values()) {
+            botApi.getBotAccountContextService().saveBatch(values);
+        }
+    }
+
+    public Map<String, List<AccountContext>> createAccountContexts(Integer projectId, List<TypedAccountConfig> accountConfigs) {
+        if (accountConfigs == null || accountConfigs.isEmpty())
+            return new HashMap<>();
+
+        // Step 1 按类型遍历
+        return accountConfigs.stream().collect(Collectors.toMap(TypedAccountConfig::getType, typedAccountConfig -> {
+            String type = typedAccountConfig.getType();
+
+            // Step 2 根据类型查询对应的AccountBaseInfo
+            AccountBaseInfo query = new AccountBaseInfo();
+            query.setType(type);
+
+            List<AccountBaseInfo> typeBaseInfos = botApi.getAccountBaseInfoService().list(new QueryWrapper<>(query));
+
+            // Step 3 创建AccountCount
+            return typeBaseInfos.stream()
+                    .map(accountBaseInfo -> AccountContext.builder().accountBaseInfo(accountBaseInfo).build())
+                    .toList();
+        }));
+    }
+
+    @Override
+    public List<AccountContext> loadAccountContexts(Integer botId) {
+        // Step 1 加载 projectId 对应的账号
+        AccountContext query = new AccountContext();
+        query.setBotId(botId);
+        query.setParams(null);
+
+        List<AccountContext> accountContexts = botApi
+                .getBotAccountContextService().
+                list(new QueryWrapper<>(query));
+
+        // Step 2 遍历账号，补充对象
+        CompletableFuture<?>[] futures = accountContexts.stream()
+                .map(accountContext -> CompletableFuture.runAsync(
+                        () -> fillAccountInfo(accountContext), executorService))
+                .toArray(CompletableFuture[]::new);
+
+        // Step 3 等待所有任务完成
+        for (int i = 0; i < futures.length; i++) {
+            try {
+                futures[i].get();
+            } catch (InterruptedException | ExecutionException e) {
+                log.error("{} fill account context info error", i, e);
+            }
+        }
+
+        // Step 4 按类型分类账号
+        return accountContexts;
+    }
+
+    @Override
+    protected void propertyChangeHandler(PropertyChangeInvocation invocation) {
+        log.info("对象属性改变了{} {}->{}", invocation.getPropertyName(), invocation.getOldValue(), invocation.getNewValue());
+    }
+
+
+    /**
+     * 查询填充账户信息
+     *
+     * @param accountContext accountContext
+     */
+    private void fillAccountInfo(AccountContext accountContext) {
+
+        // Step 2.1 绑定基础账号信息
+        if (accountContext.getAccountBaseInfoId() != null) {
+            accountContext.setAccountBaseInfo(botApi.getAccountBaseInfoService().getById(accountContext.getAccountBaseInfoId()));
+        }
+        // Step 2,2 绑定推特
+        if (accountContext.getTwitterId() != null) {
+            accountContext.setTwitter(botApi.getTwitterAccountService().getById(accountContext.getTwitterId()));
+        }
+        // Step 2,3 绑定 discord
+        if (accountContext.getDiscordId() != null) {
+            accountContext.setDiscord(botApi.getDiscordAccountService().getById(accountContext.getDiscordId()));
+        }
+        // Step 2.4 绑定代理
+        if (accountContext.getProxyId() != null) {
+            accountContext.setProxy(botApi.getProxyInfoService().getById(accountContext.getProxyId()));
+        }
+        // Step 2.5 绑定浏览器环境
+        if (accountContext.getBrowserEnvId() != null) {
+            accountContext.setBrowserEnv(botApi.getBrowserEnvService().getById(accountContext.getBrowserEnvId()));
+        }
+        // Step 2.6 绑定tg
+        if (accountContext.getTelegramId() != null) {
+
+        }
+        // Step 2.7 绑定钱包
+        if (accountContext.getWalletId() != null) {
+
+        }
+
+        // Step 2.8 绑定奖励信息
+        if (accountContext.getRewardId() != null) {
+            accountContext.setRewordInfo(botApi.getRewordInfoService().getById(accountContext.getRewardId()));
+        }
+    }
+}
+package cn.com.helei.bot.core.supporter.persistence;
+
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeInvocation;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenClass;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenField;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeProxy;
+import lombok.Getter;
+
+import java.lang.reflect.Field;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+@Getter
+public abstract class AbstractPersistenceManager implements AccountPersistenceManager {
+
+
+    /**
+     * 监听的对象 -> 该对象的root
+     */
+    private final ConcurrentMap<Object, Object> listenedObjRootMap = new ConcurrentHashMap<>();
+
+    /**
+     * root target -> root proxy
+     */
+    private final ConcurrentMap<Object, Object> originRoot2ProxyMap = new ConcurrentHashMap<>();
+
+
+    /**
+     * 注册持久化监听
+     *
+     * @param accountContexts accountContexts
+     */
+    @Override
+    public void registerPersistenceListener(List<AccountContext> accountContexts) {
+        if (accountContexts == null || accountContexts.isEmpty()) return;
+        accountContexts.replaceAll(this::bindPersistenceAnnoListener);
+    }
+
+
+    /**
+     * 对象属性添加变化监听
+     *
+     * @param target target 目标对象
+     * @param <T>    T
+     * @return 添加监听后被动态代理的对象
+     */
+    public <T> T bindPersistenceAnnoListener(T target) {
+        return doBindPersistenceAnnoListener(target, target);
+    }
+
+
+    /**
+     * 对象属性添加变化监听
+     *
+     * @param target target 目标对象
+     * @param <T>    T
+     * @return 添加监听后被动态代理的对象
+     */
+    private <T> T doBindPersistenceAnnoListener(T target, Object rootObj) {
+        if (target == null) return null;
+
+        Class<?> targetClass = target.getClass();
+
+        PropertyChangeListenClass propertyChangeListenClass = targetClass.getAnnotation(PropertyChangeListenClass.class);
+
+        // 类上带有PersistenceClass注解，表示可以的类
+        if (propertyChangeListenClass == null) {
+            return target;
+        }
+
+        T proxy = PropertyChangeProxy.createProxy(target, this::propertyChangeHandler);
+
+        // 深度监听，还要给监听的字段对象内的属性监听
+        if (propertyChangeListenClass.isDeep()) {
+
+            for (Field field : targetClass.getDeclaredFields()) {
+                field.setAccessible(true);
+                // 字段上带有PersistenceField注解，表示可以的字段， 字段类型上带有PersistenceClass，还要监听字段对象的属性
+                if (field.isAnnotationPresent(PropertyChangeListenField.class)
+                        && field.getType().isAnnotationPresent(PropertyChangeListenClass.class)) {
+                    try {
+                        Object fieldValue = field.get(target);
+                        Object filedProxy = doBindPersistenceAnnoListener(fieldValue, rootObj);
+
+                        field.set(target, filedProxy);
+                    } catch (IllegalAccessException e) {
+                        throw new RuntimeException("访问字段失败", e);
+                    }
                 }
-              }
+            }
+        }
+
+        listenedObjRootMap.put(target, rootObj);
+
+        if (target.equals(rootObj)) {
+            originRoot2ProxyMap.put(rootObj, proxy);
+        }
+
+        return proxy;
+    }
+
+
+    /**
+     * 对象属性发生改变的回调
+     *
+     * @param invocation invocation
+     */
+    protected abstract void propertyChangeHandler(PropertyChangeInvocation invocation);
+}
+package cn.com.helei.bot.core.supporter.persistence;
+
+import cn.com.helei.bot.core.entity.AccountContext;
+
+import java.util.List;
+import java.util.Map;
+
+public interface AccountPersistenceManager {
+
+    void init();
+
+    void persistenceAccountContexts(Map<String, List<AccountContext>> typedAccountMap);
+
+    List<AccountContext> loadAccountContexts(Integer botId);
+
+    void registerPersistenceListener(List<AccountContext> targetList);
+
+}
+package cn.com.helei.bot.core.supporter;
+
+import cn.com.helei.bot.core.dto.ConnectStatusInfo;
+import cn.com.helei.bot.core.dto.account.AccountPrintDto;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.entity.BrowserEnv;
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import cn.com.helei.bot.core.entity.RewordInfo;
+import cn.com.helei.bot.core.util.tableprinter.CommandLineTablePrintHelper;
+
+import java.util.List;
+import java.util.Map;
+
+public class AccountInfoPrinter {
+
+    /**
+     * 打印账号列表
+     *
+     * @return String
+     */
+    public static String printAccountList(List<AccountContext> accountContexts) {
+
+        StringBuilder sb = new StringBuilder();
+
+        sb.append(" 账户列表\n");
+
+        List<AccountPrintDto> list = accountContexts.stream().map(accountContext -> {
+            ProxyInfo proxy = accountContext.getProxy();
+            BrowserEnv browserEnv = accountContext.getBrowserEnv();
+
+            return AccountPrintDto
+                    .builder()
+                    .id(accountContext.getAccountBaseInfo().getId())
+                    .name(accountContext.getName())
+                    .proxyInfo(proxy == null ? "NO_PROXY" : proxy.getId() + "-" + proxy.getAddressStr())
+                    .browserEnvInfo(String.valueOf(browserEnv == null ? "NO_ENV" : browserEnv.getId()))
+                    .signUp(accountContext.getSignUp())
+                    .build();
+        }).toList();
+
+        sb.append(CommandLineTablePrintHelper.generateTableString(list, AccountPrintDto.class)).append("\n");
+
+        return sb.toString();
+    }
+
+    /**
+     * 打印账户连接情况
+     *
+     * @return String
+     */
+    public static String printAccountConnectStatusList(List<AccountContext> accountContexts) {
+        StringBuilder sb = new StringBuilder();
+
+        sb.append(" 账号链接状态列表:\n");
+
+        List<ConnectStatusInfo> list = accountContexts.stream()
+                .map(AccountContext::getConnectStatusInfo).toList();
+
+        sb.append(CommandLineTablePrintHelper.generateTableString(list, ConnectStatusInfo.class)).append("\n");
+
+        return sb.toString();
+    }
+
+    /**
+     * 打印账号收益
+     *
+     * @return String
+     */
+    public static String printAccountReward(List<AccountContext> accountContexts) {
+        StringBuilder sb = new StringBuilder();
+
+        sb.append(" 收益列表:\n");
+
+        List<RewordInfo> list = accountContexts.stream()
+                .map(accountContext -> accountContext.getRewordInfo().newInstance()).toList();
+
+        sb.append(CommandLineTablePrintHelper.generateTableString(list, RewordInfo.class)).append("\n");
+
+        return sb.toString();
+    }
+
+}
+package cn.com.helei.bot.core.util.exception;
+
+public class BotMethodFormatException extends RuntimeException{
+
+    // 默认构造函数
+    public BotMethodFormatException() {
+        super("error bot method format.");
+    }
+
+    // 传入错误信息的构造函数
+    public BotMethodFormatException(String message) {
+        super(message);
+    }
+
+    // 传入错误信息和异常原因的构造函数
+    public BotMethodFormatException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
+    // 传入异常原因的构造函数
+    public BotMethodFormatException(Throwable cause) {
+        super(cause);
+    }
+}
+package cn.com.helei.bot.core.util.exception;
+
+public class BotMethodInvokeException extends RuntimeException{
+
+    // 默认构造函数
+    public BotMethodInvokeException() {
+        super("invoke bot method failed.");
+    }
+
+    // 传入错误信息的构造函数
+    public BotMethodInvokeException(String message) {
+        super(message);
+    }
+
+    // 传入错误信息和异常原因的构造函数
+    public BotMethodInvokeException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
+    // 传入异常原因的构造函数
+    public BotMethodInvokeException(Throwable cause) {
+        super(cause);
+    }
+}
+package cn.com.helei.bot.core.util;
+
+
+import cn.com.helei.bot.core.config.SystemConfig;
+
+import java.io.*;
+import java.nio.file.Path;
+import java.util.List;
+
+public class FileUtil {
+
+
+    public static final String RESOURCE_ROOT_DIR = System.getProperty("user.dir") + File.separator + "botData";
+
+    public static String getConfigDirResourcePath(List<String> path, String fileName) {
+        StringBuilder sb = new StringBuilder(RESOURCE_ROOT_DIR);
+
+        for (String p : path) {
+            sb.append(File.separator).append(p);
+        }
+        return sb.append(File.separator).append(fileName).toString();
+    }
+
+    public static String getBotAppConfigPath() {
+        return RESOURCE_ROOT_DIR +File.separator + String.join(File.separator, SystemConfig.CONFIG_DIR_APP_PATH);
+    }
+
+    /**
+     * 保存账户
+     */
+    public static void saveJSONStringContext(Path filePath, String jsonContext) {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(filePath.toFile()))) {
+            writer.write(jsonContext);
+            writer.flush();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public static void main(String[] args) {
+        System.out.println(getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, "account.yaml"));
+    }
+}
+package cn.com.helei.bot.core.util;
+
+import cn.com.helei.bot.core.config.SystemConfig;
+import org.yaml.snakeyaml.Yaml;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+public class YamlConfigLoadUtil {
+
+    private static final ConcurrentHashMap<String, Object> LOADED_CONFIG_MAP = new ConcurrentHashMap<>();
+
+    public static <T> T load(
+            String path,
+            String fileName,
+            String prefix,
+            Class<T> clazz
+    ) {
+        return load(
+                Arrays.asList(path.split("\\.")),
+                fileName,
+                Arrays.asList(prefix.split("\\.")),
+                clazz
+        );
+    }
+
+
+    public static <T> T load(
+            List<String> path,
+            String fileName,
+            List<String> prefixList,
+            Class<T> clazz
+    ) {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(path, fileName);
+
+        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
+            if (config == null) {
+                Yaml yaml = new Yaml();
+                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
+                    Map<String, Object> yamlData = yaml.load(inputStream);
+
+                    if (prefixList != null) {
+                        for (String prefix : prefixList) {
+                            yamlData = (Map<String, Object>) yamlData.get(prefix);
+                        }
+                    }
+
+                    config = yaml.loadAs(yaml.dump(yamlData), clazz);
+                } catch (IOException e) {
+                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
+                }
             }
 
-            // 数据正确
-          } else {
-            // 警告数据格式不对
-            errorMsg = 'json 格式错误'
-            isError = true
-          }
+            return config;
+        });
 
-          if (!isError) {
-            console.log('success', jsonArray)
-            this.$emit('batch-data-import', jsonArray)
-            this.isVisible = false
-          }
-        } catch (e) {
-          errorMsg = '系统异常'
-          isError = true
+        return (T) compute;
+    }
+
+    public static List<Object> load(List<String> configDirBotPath, String fileName, String prefix) {
+        return load(configDirBotPath, fileName, List.of(prefix.split("\\.")));
+    }
+
+    public static List<Object> load(
+            List<String> path,
+            String fileName,
+            List<String> prefixList
+    ) {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(path, fileName);
+
+        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
+            if (config == null) {
+                Yaml yaml = new Yaml();
+                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
+                    Map<String, Object> yamlData = yaml.load(inputStream);
+
+                    if (prefixList != null) {
+                        for (String prefix : prefixList) {
+                            yamlData = (Map<String, Object>) yamlData.get(prefix);
+                        }
+                    }
+                    return yamlData.get("list");
+                } catch (IOException e) {
+                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
+                }
+            }
+
+            return config;
+        });
+
+        return (List<Object>) compute;
+    }
+
+
+    public static <T> T load(File path, List<String> prefixList, Class<T> tClass) {
+        Object compute = LOADED_CONFIG_MAP.compute(path.getAbsolutePath(), (k, config) -> {
+            if (config == null) {
+                Yaml yaml = new Yaml();
+                try (InputStream inputStream = new FileInputStream(path)) {
+                    Map<String, Object> yamlData = yaml.load(inputStream);
+
+                    if (prefixList != null) {
+                        for (String prefix : prefixList) {
+                            yamlData = (Map<String, Object>) yamlData.get(prefix);
+                        }
+                    }
+
+                    return yaml.loadAs(yaml.dump(yamlData), tClass);
+                } catch (IOException e) {
+                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", path), e);
+                }
+            }
+            return config;
+        });
+
+        return (T) compute;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(YamlConfigLoadUtil.load(SystemConfig.CONFIG_DIR_BOT_PATH, "browser-env.yaml", List.of("bot", "browser")));
+    }
+
+}
+package cn.com.helei.bot.view;
+
+import cn.com.helei.bot.core.AutoBotApplication;
+import cn.com.helei.bot.core.bot.RestTaskAutoBot;
+import cn.com.helei.bot.core.bot.anno.BotApplication;
+import cn.com.helei.bot.core.bot.anno.BotMethod;
+import cn.com.helei.bot.core.bot.constants.BotJobType;
+import cn.com.helei.bot.core.bot.view.MenuCMDLineAutoBot;
+import cn.com.helei.bot.core.config.AutoBotConfig;
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import cn.com.helei.bot.core.supporter.commandMenu.DefaultMenuType;
+import cn.com.helei.bot.core.supporter.commandMenu.MenuNodeMethod;
+import cn.com.helei.bot.core.util.YamlConfigLoadUtil;
+import cn.com.helei.bot.core.util.exception.DepinBotStartException;
+import cn.hutool.core.util.RandomUtil;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+
+import java.util.List;
+
+
+@SpringBootTest(classes = AutoBotApplication.class)
+class MenuCMDLineAutoBotTest {
+
+    private static final Logger log = LoggerFactory.getLogger(MenuCMDLineAutoBotTest.class);
+
+    private TestRestAutoBot autoBot;
+
+    private MenuCMDLineAutoBot<AutoBotConfig> menuCMDLineAutoBot;
+
+    @Autowired
+    public BotApi botApi;
+
+    @BeforeEach
+    public  void setUp() throws DepinBotStartException {
+        AutoBotConfig load = YamlConfigLoadUtil.load("config.app", "example.yaml", "bot.app", AutoBotConfig.class);
+
+        autoBot = new TestRestAutoBot(load, botApi);
+
+        menuCMDLineAutoBot = new MenuCMDLineAutoBot<>(autoBot, List.of(DefaultMenuType.IMPORT));
+
+    }
+
+    @Test
+    public void test() throws DepinBotStartException {
+        menuCMDLineAutoBot.start();
+    }
+
+
+    @BotApplication(name = "test", describe = "dwadwa")
+    static class TestRestAutoBot extends RestTaskAutoBot {
+
+        public TestRestAutoBot(AutoBotConfig autoBotConfig, BotApi botApi) {
+            super(autoBotConfig, botApi);
         }
-      }
 
-      if (isError) {
-        // 弹框提示，
-        this.$msgbox(
-          '导入数据发生错误,' + errorMsg + ', 请检查输入内容再点击确定',
-          '提示',
-          {
-            confirmButtonText: '确定',
-            type: 'error'
-          }
-        )
-      }
+        @BotMethod(jobType = BotJobType.REGISTER)
+        public Result register(AccountContext accountContext, String inviteCode) {
+            return Result.ok("success");
+        }
+
+        @BotMethod(jobType = BotJobType.LOGIN)
+        public Result login(AccountContext accountContext) {
+            return Result.ok();
+        }
+
+        @BotMethod(jobType = BotJobType.TIMED_TASK, cronExpression = "*/10 * * * * ?")
+        public Result dailyCheckIn(AccountContext accountContext) {
+            return Result.ok("签到成功");
+        }
+
+        @MenuNodeMethod(title = "测试", description = "账户1，param -> 随机数")
+        public String test() {
+            getAccountContexts().getFirst().setParam("test", String.valueOf(RandomUtil.randomInt()));
+            return "";
+        }
     }
-  }
 }
-</script>
 
-<style scoped lang="scss">
-
-</style>
-<template>
-  <div class="app-container">
-    <DynamicAddColTable
-      :headers="accountBaseInfoFields"
-      :data="accountBaseInfoList"
-      @upload-data-list="uploadDataListHandler"
-    />
-  </div>
-</template>
-
-<script>
-import waves from '@/directive/waves' // waves directive
-import Pagination from '@/components/Pagination' // secondary package based on el-pagination
-import DynamicAddColTable from "@/views/custom/import/components/dynamic-add-col-table.vue";
-
-export default {
-  name: 'ImportAccountBaseInfo',
-  components: {DynamicAddColTable, Pagination},
-  directives: {waves},
-  filters: {},
-  data() {
-    return {
-      accountBaseInfoFields: [
-        'type', 'username', 'email', 'password'
-      ],
-      accountBaseInfoList: [
-        {id: 1, type: 'google', username: 'test1', email: 'test1231awnkj3@qq.com', password: '12321312312'},
-        {id: 2, type: 'google', username: 'test0', email: 'test12wanjd123@qq.com', password: '12321312312'},
-        {id: 3, type: 'google', username: 'test2', email: 'test123asjd@qq.com', password: '12321312312'},
-        {id: 4, type: 'google', username: 'test3', email: 'test1awdwa123@qq.com', password: '12321312312'},
-        {type: 'google', username: 'test4', email: 'test123wad123@qq.com', password: '12321312312'},
-        {type: 'google', username: 'test5', email: 'test123123awdwa@qq.com', password: '12321312312'}
-      ]
-    }
-  },
-  created() {
-  },
-  methods: {
-    uploadDataListHandler(uploadAccountBaseInfoDataList) {
-      console.log(uploadAccountBaseInfoDataList)
-      this.$message('保存账户基本信息...' + uploadAccountBaseInfoDataList)
-    }
-  }
-}
-</script>
-<template>
-  <li :class="{ completed: todo.done, editing: editing }" class="todo">
-    <div class="view">
-      <input
-        :checked="todo.done"
-        class="toggle"
-        type="checkbox"
-        @change="toggleTodo( todo)"
-      >
-      <label @dblclick="editing = true" v-text="todo.text" />
-      <button class="destroy" @click="deleteTodo( todo )" />
-    </div>
-    <input
-      v-show="editing"
-      v-focus="editing"
-      :value="todo.text"
-      class="edit"
-      @keyup.enter="doneEdit"
-      @keyup.esc="cancelEdit"
-      @blur="doneEdit"
-    >
-  </li>
-</template>
-
-<script>
-export default {
-  name: 'Todo',
-  directives: {
-    focus(el, { value }, { context }) {
-      if (value) {
-        context.$nextTick(() => {
-          el.focus()
-        })
-      }
-    }
-  },
-  props: {
-    todo: {
-      type: Object,
-      default: function() {
-        return {}
-      }
-    }
-  },
-  data() {
-    return {
-      editing: false
-    }
-  },
-  methods: {
-    deleteTodo(todo) {
-      this.$emit('deleteTodo', todo)
-    },
-    editTodo({ todo, value }) {
-      this.$emit('editTodo', { todo, value })
-    },
-    toggleTodo(todo) {
-      this.$emit('toggleTodo', todo)
-    },
-    doneEdit(e) {
-      const value = e.target.value.trim()
-      const { todo } = this
-      if (!value) {
-        this.deleteTodo({
-          todo
-        })
-      } else if (this.editing) {
-        this.editTodo({
-          todo,
-          value: jsonValue
-        })
-        this.editing = false
-      }
-    },
-    cancelEdit(e) {
-      e.target.value = this.todo.text
-      this.editing = false
-    }
-  }
-}
-</script>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-quartz</artifactId>
+        </dependency>
