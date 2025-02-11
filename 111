@@ -1,846 +1,2193 @@
-package cn.com.helei.bot.core.supporter.botapi.impl;
+package cn.com.helei.bot.core.bot.anno;
 
-import cn.com.helei.bot.core.mvc.service.*;
-import cn.com.helei.bot.core.supporter.botapi.BotApi;
-import cn.com.helei.bot.core.supporter.botapi.BotJobService;
-import lombok.Getter;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
+import cn.com.helei.bot.core.bot.constants.BotJobType;
 
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 
-@Getter
-@Component
-public class DBBotApi implements BotApi {
-
-    @Autowired
-    private IAccountBaseInfoService accountBaseInfoService;
-
-    @Autowired
-    private ITwitterAccountService twitterAccountService;
-
-    @Autowired
-    private IProxyInfoService proxyInfoService;
-
-    @Autowired
-    private IBrowserEnvService browserEnvService;
-
-    @Autowired
-    private IDiscordAccountService discordAccountService;
-
-    @Autowired
-    private IBotAccountContextService botAccountContextService;
-
-    @Autowired
-    private IRewordInfoService rewordInfoService;
-
-    @Autowired
-    private DBImportService importService;
-
-    @Autowired
-    private IProjectInfoService projectInfoService;
-
-    @Autowired
-    private IBotInfoService botInfoService;
-
-    @Autowired
-    private BotJobService botJobService;
-}
-package cn.com.helei.bot.core.supporter.botapi.impl;
-
-
-import cn.com.helei.bot.core.bot.job.AutoBotJob;
-import cn.com.helei.bot.core.dto.BotACJobResult;
-import cn.com.helei.bot.core.supporter.botapi.BotJobService;
-import org.quartz.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
-
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-
-@Component
-public class QuartzBotJobService implements BotJobService {
-
-    private static final Logger log = LoggerFactory.getLogger(QuartzBotJobService.class);
-
-    @Autowired
-    private Scheduler scheduler;
-
-    @Override
-    public List<BotACJobResult> registerJobList(Collection<AutoBotJob> autoBotJobList) {
-
-        List<BotACJobResult> resultList = new ArrayList<>(autoBotJobList.size());
-
-        for (AutoBotJob autoBotJob : autoBotJobList) {
-            resultList.add(registerJob(autoBotJob));
-        }
-
-        return resultList;
-    }
-
-
-    @Override
-    public BotACJobResult registerJob(AutoBotJob autoBotJob) {
-        BotACJobResult result = BotACJobResult.builder()
-                .botId(autoBotJob.getBotId())
-                .group(autoBotJob.getGroup())
-                .jobName(autoBotJob.getName())
-                .success(true)
-                .build();
-
-        JobKey jobKey = new JobKey(autoBotJob.getName(), autoBotJob.getGroup());
-
-        try {
-            // 存在这个job
-            if (scheduler.checkExists(jobKey)) {
-                result.setSuccess(false);
-                result.setErrorMsg("job exist");
-            } else {
-                // 不存在，创建并运行
-                JobDetail jobDetail = JobBuilder.newJob(AutoBotJob.class)
-                        .withIdentity(jobKey)
-                        .withDescription(autoBotJob.getDescription())
-                        .storeDurably()
-                        .build();
-
-                CronTrigger trigger = TriggerBuilder.newTrigger()
-                        .withIdentity(autoBotJob.getName(), autoBotJob.getGroup())
-                        .withSchedule(CronScheduleBuilder.cronSchedule(autoBotJob.getCronExpression()))
-                        .build();
-
-                scheduler.scheduleJob(jobDetail, trigger);
-            }
-        } catch (Exception e) {
-            result.setSuccess(false);
-            result.setErrorMsg(e.getMessage());
-
-            log.error("注册[{}]job发生异常", jobKey, e);
-        }
-
-        return result;
-    }
-
-}
-package cn.com.helei.bot.core.supporter.botapi;
-
-
-import cn.com.helei.bot.core.mvc.service.*;
-
-public interface BotApi {
-
-    IProjectInfoService getProjectInfoService();
-
-    IBotInfoService getBotInfoService();
-
-    IAccountBaseInfoService getAccountBaseInfoService();
-
-    IBrowserEnvService getBrowserEnvService();
-
-    IDiscordAccountService getDiscordAccountService();
-
-    IBotAccountContextService getBotAccountContextService();
-
-    IProxyInfoService getProxyInfoService();
-
-    IRewordInfoService getRewordInfoService();
-
-    ITwitterAccountService getTwitterAccountService();
-
-    ImportService getImportService();
-
-    BotJobService getBotJobService();
-}
-package cn.com.helei.bot.core.supporter.botapi;
-
-import cn.com.helei.bot.core.bot.job.AutoBotJob;
-import cn.com.helei.bot.core.dto.BotACJobResult;
-
-import java.util.Collection;
-import java.util.List;
-
-public interface BotJobService {
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface BotMethod {
 
     /**
-     * 批量注册job
+     * job类型
      *
-     * @param autoBotJobList BotACJobResult
-     * @return Result
+     * @return BotJobType
      */
-    List<BotACJobResult> registerJobList(Collection<AutoBotJob> autoBotJobList);
+    BotJobType jobType();
 
     /**
-     * 注册job，开始定时执行
+     * jobName
      *
-     * @param autoBotJob autoBotJob
-     * @return BotACJobResult
+     * @return string
      */
-    BotACJobResult registerJob(AutoBotJob autoBotJob);
+    String jobName() default "";
 
+    /**
+     * 描述
+     *
+     * @return String
+     */
+    String description() default "";
+
+    /**
+     * 时间表达式
+     *
+     * @return String
+     */
+    String cronExpression() default "";
+
+
+
+    BotWSMethodConfig bowWsConfig() default @BotWSMethodConfig();
 }
-package cn.com.helei.bot.core.supporter.persistence.impl;
+
+package cn.com.helei.bot.core.bot.anno;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface BotWSMethodConfig {
+    /**
+     * 是否刷新ws连
+     *
+     * @return boolean
+     */
+    boolean isRefreshWSConnection() default false;
 
 
-import cn.com.helei.bot.core.config.TypedAccountConfig;
-import cn.com.helei.bot.core.entity.AccountBaseInfo;
-import cn.com.helei.bot.core.entity.AccountContext;
+    boolean wsUnlimitedRetry() default false;
+
+    /**
+     * 重连次数
+     */
+    int reconnectLimit() default 3;
+
+    /**
+     * 心跳间隔
+     */
+    int heartBeatIntervalSecond() default  30;
+
+    /**
+     * websocket 并发数量
+     */
+    int wsConnectCount() default 50;
+
+    /**
+     * 重连减少的间隔
+     */
+    int reconnectCountDownSecond() default 180;
+}
+package cn.com.helei.bot.core.bot.base;
+
+import cn.com.helei.bot.core.config.AutoBotConfig;
+import cn.com.helei.bot.core.config.SystemConfig;
+import cn.com.helei.bot.core.bot.constants.BotStatus;
+import cn.com.helei.bot.core.dto.AutoBotRuntimeInfo;
+import cn.com.helei.bot.core.entity.BotInfo;
+import cn.com.helei.bot.core.entity.ProxyInfo;
 import cn.com.helei.bot.core.supporter.botapi.BotApi;
-import cn.com.helei.bot.core.supporter.persistence.AbstractPersistenceManager;
-import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeInvocation;
+import cn.com.helei.bot.core.util.exception.DepinBotInitException;
+import cn.com.helei.bot.core.util.exception.DepinBotStatusException;
+import cn.com.helei.bot.core.util.FileUtil;
 import cn.com.helei.bot.core.util.NamedThreadFactory;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import cn.com.helei.bot.core.util.RestApiClientFactory;
+import cn.hutool.core.util.RandomUtil;
+import com.alibaba.fastjson.JSONObject;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.HashMap;
-import java.util.List;
+import java.io.File;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.stream.Collectors;
+import java.util.concurrent.*;
+import java.util.function.Supplier;
 
 @Slf4j
-public class DBAccountPersistenceManager extends AbstractPersistenceManager {
+@Getter
+public abstract class AbstractAutoBot {
 
-    private final ExecutorService executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("database-"));
+    private static final ProxyInfo DEFAULT_PROXY = new ProxyInfo();
 
-    private final BotApi botApi;;
+    /**
+     * 执行异步任务的线程池
+     */
+    private final ExecutorService executorService;
 
-    public DBAccountPersistenceManager(BotApi botApi) {
+    /**
+     * 配置
+     */
+    private final AutoBotConfig autoBotConfig;
+
+    /**
+     * 状态
+     */
+    private BotStatus status = BotStatus.NEW;
+
+    /**
+     * 代理并发控制
+     */
+    private final Map<ProxyInfo, Semaphore> networkSyncControllerMap;
+
+    /**
+     * bot运行时信息
+     */
+    private final AutoBotRuntimeInfo autoBotRuntimeInfo;
+
+    /**
+     * bot api
+     */
+    @Getter
+    private final BotApi botApi;
+
+    /**
+     * bot信息
+     */
+    @Getter
+    private final BotInfo botInfo;
+
+    public AbstractAutoBot(
+            AutoBotConfig autoBotConfig,
+            BotApi botApi
+    ) {
+        this.autoBotConfig = autoBotConfig;
         this.botApi = botApi;
+        this.botInfo = buildBotInfo();
+
+        this.networkSyncControllerMap = new ConcurrentHashMap<>();
+        this.autoBotRuntimeInfo = new AutoBotRuntimeInfo();
+
+        this.executorService = Executors.newThreadPerTaskExecutor(
+                new NamedThreadFactory(botInfo.getName() + "-executor"));
     }
 
-    @Override
+
+
     public void init() {
+        updateState(BotStatus.INIT);
+        try {
+            doInit();
 
-    }
-
-    @Override
-    public void persistenceAccountContexts(Map<String, List<AccountContext>> typedAccountMap) {
-        for (List<AccountContext> values : typedAccountMap.values()) {
-            botApi.getBotAccountContextService().saveBatch(values);
+            //更新状态
+            updateState(BotStatus.INIT_FINISH);
+        } catch (Exception e) {
+            log.error("初始化Bot[{}]发生错误", botInfo.getName(), e);
+            updateState(BotStatus.INIT_ERROR);
         }
-    }
-
-    public Map<String, List<AccountContext>> createAccountContexts(Integer projectId, List<TypedAccountConfig> accountConfigs) {
-        if (accountConfigs == null || accountConfigs.isEmpty())
-            return new HashMap<>();
-
-        // Step 1 按类型遍历
-        return accountConfigs.stream().collect(Collectors.toMap(TypedAccountConfig::getType, typedAccountConfig -> {
-            String type = typedAccountConfig.getType();
-
-            // Step 2 根据类型查询对应的AccountBaseInfo
-            AccountBaseInfo query = new AccountBaseInfo();
-            query.setType(type);
-
-            List<AccountBaseInfo> typeBaseInfos = botApi.getAccountBaseInfoService().list(new QueryWrapper<>(query));
-
-            // Step 3 创建AccountCount
-            return typeBaseInfos.stream()
-                    .map(accountBaseInfo -> AccountContext.builder().accountBaseInfo(accountBaseInfo).build())
-                    .toList();
-        }));
-    }
-
-    @Override
-    public List<AccountContext> loadAccountContexts(Integer botId) {
-        // Step 1 加载 projectId 对应的账号
-        AccountContext query = new AccountContext();
-        query.setBotId(botId);
-        query.setParams(null);
-
-        List<AccountContext> accountContexts = botApi
-                .getBotAccountContextService().
-                list(new QueryWrapper<>(query));
-
-        // Step 2 遍历账号，补充对象
-        CompletableFuture<?>[] futures = accountContexts.stream()
-                .map(accountContext -> CompletableFuture.runAsync(
-                        () -> fillAccountInfo(accountContext), executorService))
-                .toArray(CompletableFuture[]::new);
-
-        // Step 3 等待所有任务完成
-        for (int i = 0; i < futures.length; i++) {
-            try {
-                futures[i].get();
-            } catch (InterruptedException | ExecutionException e) {
-                log.error("{} fill account context info error", i, e);
-            }
-        }
-
-        // Step 4 按类型分类账号
-        return accountContexts;
-    }
-
-    @Override
-    protected void propertyChangeHandler(PropertyChangeInvocation invocation) {
-        log.info("对象属性改变了{} {}->{}", invocation.getPropertyName(), invocation.getOldValue(), invocation.getNewValue());
     }
 
 
     /**
-     * 查询填充账户信息
-     *
-     * @param accountContext accountContext
+     * 初始化方法
      */
-    private void fillAccountInfo(AccountContext accountContext) {
+    protected abstract void doInit() throws DepinBotInitException;
 
-        // Step 2.1 绑定基础账号信息
-        if (accountContext.getAccountBaseInfoId() != null) {
-            accountContext.setAccountBaseInfo(botApi.getAccountBaseInfoService().getById(accountContext.getAccountBaseInfoId()));
-        }
-        // Step 2,2 绑定推特
-        if (accountContext.getTwitterId() != null) {
-            accountContext.setTwitter(botApi.getTwitterAccountService().getById(accountContext.getTwitterId()));
-        }
-        // Step 2,3 绑定 discord
-        if (accountContext.getDiscordId() != null) {
-            accountContext.setDiscord(botApi.getDiscordAccountService().getById(accountContext.getDiscordId()));
-        }
-        // Step 2.4 绑定代理
-        if (accountContext.getProxyId() != null) {
-            accountContext.setProxy(botApi.getProxyInfoService().getById(accountContext.getProxyId()));
-        }
-        // Step 2.5 绑定浏览器环境
-        if (accountContext.getBrowserEnvId() != null) {
-            accountContext.setBrowserEnv(botApi.getBrowserEnvService().getById(accountContext.getBrowserEnvId()));
-        }
-        // Step 2.6 绑定tg
-        if (accountContext.getTelegramId() != null) {
 
-        }
-        // Step 2.7 绑定钱包
-        if (accountContext.getWalletId() != null) {
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<String> response str
+     */
+    public CompletableFuture<String> syncRequest(
+            ProxyInfo proxy,
+            String url,
+            String method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body
+    ) {
+        return syncRequest(proxy, url, method, headers, params, body, null);
+    }
 
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<Response> String
+     */
+    public CompletableFuture<String> syncRequest(
+            ProxyInfo proxy,
+            String url,
+            String method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            Supplier<String> requestStart
+    ) {
+
+        Semaphore networkController = networkSyncControllerMap
+                .compute(proxy == null ? DEFAULT_PROXY : proxy, (k, v) -> {
+                    if (v == null) {
+                        v = new Semaphore(autoBotConfig.getRuntime().getConcurrentCount());
+                    }
+                    return v;
+                });
+
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                networkController.acquire();
+                // 随机延迟
+                TimeUnit.MILLISECONDS.sleep(RandomUtil.randomLong(1000, 3000));
+
+                String str = "开始";
+                if (requestStart != null) {
+                    str = requestStart.get();
+                }
+                log.info("同步器允许发送请求-{}", str);
+
+                return RestApiClientFactory.getClient(proxy).request(
+                        url,
+                        method,
+                        headers,
+                        params,
+                        body
+                ).get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            } finally {
+                networkController.release();
+            }
+        }, executorService);
+    }
+
+    /**
+     * 打印BotRuntimeInfo
+     *
+     * @return string
+     */
+    public String printBotRuntimeInfo() {
+        StringBuilder sb = new StringBuilder();
+        getAutoBotRuntimeInfo().getKeyValueInfoMap().forEach((k, v) -> {
+            sb.append(k).append(": ").append(v).append("\n");
+        });
+        return sb.toString();
+    }
+
+    /**
+     * 获取app的配置目录
+     *
+     * @return String
+     */
+    public String getAppConfigDir() {
+        return FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_APP_PATH, botInfo.getName());
+    }
+
+
+    /**
+     * 更新BotStatus
+     *
+     * @param newStatus 新状态
+     */
+    public synchronized void updateState(BotStatus newStatus) throws DepinBotStatusException {
+        boolean b = true;
+        if (newStatus.equals(BotStatus.SHUTDOWN)) {
+            status = BotStatus.SHUTDOWN;
+            b = false;
+        } else {
+            b = switch (status) {
+                //当前为NEW，新状态才能为NEW,SHUTDOWN
+                case NEW -> BotStatus.INIT.equals(newStatus);
+                //当前为INIT，新状态只能为INIT_FINISH、INIT_ERROR,SHUTDOWN
+                case INIT -> newStatus.equals(BotStatus.INIT_FINISH)
+                        || newStatus.equals(BotStatus.INIT_ERROR);
+                //当前为INIT_ERROR,新状态只能为ACCOUNT_LOADING, SHUTDOWN
+                case INIT_ERROR -> newStatus.equals(BotStatus.INIT);
+                //当前状态为INIT_FINISH，新状态只能为ACCOUNT_LIST_CONNECT, SHUTDOWN
+                case INIT_FINISH -> newStatus.equals(BotStatus.STARTING);
+                //当前状态为STARING，新状态只能为RUNNING,SHUTDOWN
+                case STARTING -> newStatus.equals(BotStatus.RUNNING);
+                //RUNNING，新状态只能为 SHUTDOWN
+                case RUNNING -> false;
+                case SHUTDOWN -> false;
+            };
         }
 
-        // Step 2.8 绑定奖励信息
-        if (accountContext.getRewardId() != null) {
-            accountContext.setRewordInfo(botApi.getRewordInfoService().getById(accountContext.getRewardId()));
+
+        if (b) {
+            log.info("CommandLineDepinBot Status change [{}] => [{}]", status, newStatus);
+            this.status = newStatus;
+        } else {
+            throw new DepinBotStatusException(String.format("Depin Bot Status不能从[%s]->[%s]", status, newStatus));
         }
     }
+
+
+
+    protected abstract BotInfo buildBotInfo();
 }
-package cn.com.helei.bot.core.supporter.persistence;
+package cn.com.helei.bot.core.bot.base;
+
 
 import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeInvocation;
-import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenClass;
-import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenField;
-import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeProxy;
+
+import java.util.concurrent.CompletableFuture;
+
+public interface AccountAutoBot {
+
+    /**
+     * 注册账户
+     *
+     * @param accountContext accountContext
+     * @param inviteCode     inviteCode
+     * @return CompletableFuture<Boolean> 是否注册成功
+     */
+    CompletableFuture<Boolean> registerAccount(AccountContext accountContext, String inviteCode);
+
+    /**
+     * 登录获取账户token
+     *
+     * @param accountContext accountContext
+     * @return CompletableFuture<String> token
+     */
+    CompletableFuture<String> loginAndTakeTokenAccount(AccountContext accountContext);
+
+    /**
+     * 更新账户奖励信息
+     *
+     * @param accountContext accountContext
+     * @return CompletableFuture<Boolean>
+     */
+    CompletableFuture<Boolean> updateAccountRewordInfo(AccountContext accountContext);
+
+}
+package cn.com.helei.bot.core.bot.base;
+
+import cn.com.helei.bot.core.config.AutoBotConfig;
+import cn.com.helei.bot.core.dto.ACListOptResult;
+import cn.com.helei.bot.core.dto.BotACJobResult;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import cn.com.helei.bot.core.supporter.persistence.impl.DBAccountPersistenceManager;
+import cn.com.helei.bot.core.util.exception.DepinBotInitException;
+import cn.com.helei.bot.core.supporter.persistence.AccountPersistenceManager;
 import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 
-import java.lang.reflect.Field;
-import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.*;
+import java.util.concurrent.*;
 
-@Getter
-public abstract class AbstractPersistenceManager implements AccountPersistenceManager {
 
+@Slf4j
+public abstract class AccountManageAutoBot extends AbstractAutoBot {
+
+    @Getter
+    private final List<AccountContext> accountContexts = new ArrayList<>();
 
     /**
-     * 监听的对象 -> 该对象的root
+     * 并发控制
      */
-    private final ConcurrentMap<Object, Object> listenedObjRootMap = new ConcurrentHashMap<>();
+    @Getter
+    private final Semaphore ccSemaphore;
 
     /**
-     * root target -> root proxy
+     * 持久化管理器
      */
-    private final ConcurrentMap<Object, Object> originRoot2ProxyMap = new ConcurrentHashMap<>();
+    private final AccountPersistenceManager persistenceManager;
+
+
+    public AccountManageAutoBot(AutoBotConfig autoBotConfig, BotApi botApi) {
+        super(autoBotConfig, botApi);
+
+        this.persistenceManager = new DBAccountPersistenceManager(botApi);
+        this.ccSemaphore = new Semaphore(getAutoBotConfig().getRuntime().getConcurrentCount());
+    }
+
+
+    @Override
+    protected void doInit() throws DepinBotInitException {
+        // Step 1 初始化保存的线程
+        persistenceManager.init();
+
+        // Step 2 初始化账户
+        initAccounts();
+    }
+
+    /**
+     * 注册账户
+     *
+     * @return CompletableFuture<Result>
+     */
+    public abstract CompletableFuture<ACListOptResult> registerAccount();
+
+    /**
+     * 登录并获取token
+     *
+     * @return CompletableFuture<Result>
+     */
+    public abstract CompletableFuture<ACListOptResult> loginAndTakeTokenAccount();
 
 
     /**
-     * 注册持久化监听
+     * 更新账户奖励信息
+     *
+     * @return CompletableFuture<Result>
+     */
+    public abstract CompletableFuture<ACListOptResult> updateAccountRewordInfo();
+
+
+    /**
+     * 获取jb name列表
+     *
+     * @return List<String>
+     */
+    public abstract Set<String> getBotJobNameList();
+
+    /**
+     * 运行指定job
+     *
+     * @param jobName jobName
+     * @return CompletableFuture<Result>
+     */
+    public abstract BotACJobResult startBotJob(String jobName);
+
+
+    /**
+     * 账号被加载后调用
      *
      * @param accountContexts accountContexts
      */
-    @Override
-    public void registerPersistenceListener(List<AccountContext> accountContexts) {
-        if (accountContexts == null || accountContexts.isEmpty()) return;
-        accountContexts.replaceAll(this::bindPersistenceAnnoListener);
+    protected void accountsLoadedHandler(List<AccountContext> accountContexts) {
     }
 
-
     /**
-     * 对象属性添加变化监听
-     *
-     * @param target target 目标对象
-     * @param <T>    T
-     * @return 添加监听后被动态代理的对象
+     * 初始化账号方法
      */
-    public <T> T bindPersistenceAnnoListener(T target) {
-        return doBindPersistenceAnnoListener(target, target);
-    }
+    private void initAccounts() throws DepinBotInitException {
+        Integer botId = getBotInfo().getId();
 
+        String name = getBotInfo().getName();
 
-    /**
-     * 对象属性添加变化监听
-     *
-     * @param target target 目标对象
-     * @param <T>    T
-     * @return 添加监听后被动态代理的对象
-     */
-    private <T> T doBindPersistenceAnnoListener(T target, Object rootObj) {
-        if (target == null) return null;
+        try {
+            // Step 1 获取持久化的
+            List<AccountContext> accountContexts = persistenceManager.loadAccountContexts(botId);
 
-        Class<?> targetClass = target.getClass();
+            // Step 2 没有保存的数据，加载新的
+            if (accountContexts == null || accountContexts.isEmpty()) {
+                log.warn("bot[{}]没有账户数据", name);
+            } else {
+                log.info("bot[{}]使用历史账户数据, 共[{}]", name, accountContexts.size());
 
-        PropertyChangeListenClass propertyChangeListenClass = targetClass.getAnnotation(PropertyChangeListenClass.class);
+                // Step 3 加载到bot
+                registerAccountsInBot(accountContexts);
 
-        // 类上带有PersistenceClass注解，表示可以的类
-        if (propertyChangeListenClass == null) {
-            return target;
-        }
+                accountsLoadedHandler(accountContexts);
 
-        T proxy = PropertyChangeProxy.createProxy(target, this::propertyChangeHandler);
-
-        // 深度监听，还要给监听的字段对象内的属性监听
-        if (propertyChangeListenClass.isDeep()) {
-
-            for (Field field : targetClass.getDeclaredFields()) {
-                field.setAccessible(true);
-                // 字段上带有PersistenceField注解，表示可以的字段， 字段类型上带有PersistenceClass，还要监听字段对象的属性
-                if (field.isAnnotationPresent(PropertyChangeListenField.class)
-                        && field.getType().isAnnotationPresent(PropertyChangeListenClass.class)) {
-                    try {
-                        Object fieldValue = field.get(target);
-                        Object filedProxy = doBindPersistenceAnnoListener(fieldValue, rootObj);
-
-                        field.set(target, filedProxy);
-                    } catch (IllegalAccessException e) {
-                        throw new RuntimeException("访问字段失败", e);
-                    }
-                }
+                this.accountContexts.addAll(accountContexts);
             }
-        }
-
-        listenedObjRootMap.put(target, rootObj);
-
-        if (target.equals(rootObj)) {
-            originRoot2ProxyMap.put(rootObj, proxy);
-        }
-
-        return proxy;
-    }
-
-
-    /**
-     * 对象属性发生改变的回调
-     *
-     * @param invocation invocation
-     */
-    protected abstract void propertyChangeHandler(PropertyChangeInvocation invocation);
-}
-package cn.com.helei.bot.core.supporter.persistence;
-
-import cn.com.helei.bot.core.entity.AccountContext;
-
-import java.util.List;
-import java.util.Map;
-
-public interface AccountPersistenceManager {
-
-    void init();
-
-    void persistenceAccountContexts(Map<String, List<AccountContext>> typedAccountMap);
-
-    List<AccountContext> loadAccountContexts(Integer botId);
-
-    void registerPersistenceListener(List<AccountContext> targetList);
-
-}
-package cn.com.helei.bot.core.supporter;
-
-import cn.com.helei.bot.core.dto.ConnectStatusInfo;
-import cn.com.helei.bot.core.dto.account.AccountPrintDto;
-import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.entity.BrowserEnv;
-import cn.com.helei.bot.core.entity.ProxyInfo;
-import cn.com.helei.bot.core.entity.RewordInfo;
-import cn.com.helei.bot.core.util.tableprinter.CommandLineTablePrintHelper;
-
-import java.util.List;
-import java.util.Map;
-
-public class AccountInfoPrinter {
-
-    /**
-     * 打印账号列表
-     *
-     * @return String
-     */
-    public static String printAccountList(List<AccountContext> accountContexts) {
-
-        StringBuilder sb = new StringBuilder();
-
-        sb.append(" 账户列表\n");
-
-        List<AccountPrintDto> list = accountContexts.stream().map(accountContext -> {
-            ProxyInfo proxy = accountContext.getProxy();
-            BrowserEnv browserEnv = accountContext.getBrowserEnv();
-
-            return AccountPrintDto
-                    .builder()
-                    .id(accountContext.getAccountBaseInfo().getId())
-                    .name(accountContext.getName())
-                    .proxyInfo(proxy == null ? "NO_PROXY" : proxy.getId() + "-" + proxy.getAddressStr())
-                    .browserEnvInfo(String.valueOf(browserEnv == null ? "NO_ENV" : browserEnv.getId()))
-                    .signUp(accountContext.getSignUp())
-                    .build();
-        }).toList();
-
-        sb.append(CommandLineTablePrintHelper.generateTableString(list, AccountPrintDto.class)).append("\n");
-
-        return sb.toString();
-    }
-
-    /**
-     * 打印账户连接情况
-     *
-     * @return String
-     */
-    public static String printAccountConnectStatusList(List<AccountContext> accountContexts) {
-        StringBuilder sb = new StringBuilder();
-
-        sb.append(" 账号链接状态列表:\n");
-
-        List<ConnectStatusInfo> list = accountContexts.stream()
-                .map(AccountContext::getConnectStatusInfo).toList();
-
-        sb.append(CommandLineTablePrintHelper.generateTableString(list, ConnectStatusInfo.class)).append("\n");
-
-        return sb.toString();
-    }
-
-    /**
-     * 打印账号收益
-     *
-     * @return String
-     */
-    public static String printAccountReward(List<AccountContext> accountContexts) {
-        StringBuilder sb = new StringBuilder();
-
-        sb.append(" 收益列表:\n");
-
-        List<RewordInfo> list = accountContexts.stream()
-                .map(accountContext -> accountContext.getRewordInfo().newInstance()).toList();
-
-        sb.append(CommandLineTablePrintHelper.generateTableString(list, RewordInfo.class)).append("\n");
-
-        return sb.toString();
-    }
-
-}
-package cn.com.helei.bot.core.util.exception;
-
-public class BotMethodFormatException extends RuntimeException{
-
-    // 默认构造函数
-    public BotMethodFormatException() {
-        super("error bot method format.");
-    }
-
-    // 传入错误信息的构造函数
-    public BotMethodFormatException(String message) {
-        super(message);
-    }
-
-    // 传入错误信息和异常原因的构造函数
-    public BotMethodFormatException(String message, Throwable cause) {
-        super(message, cause);
-    }
-
-    // 传入异常原因的构造函数
-    public BotMethodFormatException(Throwable cause) {
-        super(cause);
-    }
-}
-package cn.com.helei.bot.core.util.exception;
-
-public class BotMethodInvokeException extends RuntimeException{
-
-    // 默认构造函数
-    public BotMethodInvokeException() {
-        super("invoke bot method failed.");
-    }
-
-    // 传入错误信息的构造函数
-    public BotMethodInvokeException(String message) {
-        super(message);
-    }
-
-    // 传入错误信息和异常原因的构造函数
-    public BotMethodInvokeException(String message, Throwable cause) {
-        super(message, cause);
-    }
-
-    // 传入异常原因的构造函数
-    public BotMethodInvokeException(Throwable cause) {
-        super(cause);
-    }
-}
-package cn.com.helei.bot.core.util;
-
-
-import cn.com.helei.bot.core.config.SystemConfig;
-
-import java.io.*;
-import java.nio.file.Path;
-import java.util.List;
-
-public class FileUtil {
-
-
-    public static final String RESOURCE_ROOT_DIR = System.getProperty("user.dir") + File.separator + "botData";
-
-    public static String getConfigDirResourcePath(List<String> path, String fileName) {
-        StringBuilder sb = new StringBuilder(RESOURCE_ROOT_DIR);
-
-        for (String p : path) {
-            sb.append(File.separator).append(p);
-        }
-        return sb.append(File.separator).append(fileName).toString();
-    }
-
-    public static String getBotAppConfigPath() {
-        return RESOURCE_ROOT_DIR +File.separator + String.join(File.separator, SystemConfig.CONFIG_DIR_APP_PATH);
-    }
-
-    /**
-     * 保存账户
-     */
-    public static void saveJSONStringContext(Path filePath, String jsonContext) {
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(filePath.toFile()))) {
-            writer.write(jsonContext);
-            writer.flush();
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            throw new DepinBotInitException("初始化账户发生错误", e);
         }
     }
 
-    public static void main(String[] args) {
-        System.out.println(getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, "account.yaml"));
+
+    /**
+     * 将账户加载到bot， 会注册监听，当属性发生改变时自动刷入磁盘
+     *
+     * @param accountContexts accountContexts
+     */
+    private void registerAccountsInBot(List<AccountContext> accountContexts) {
+        persistenceManager.registerPersistenceListener(accountContexts);
     }
 }
-package cn.com.helei.bot.core.util;
+package cn.com.helei.bot.core.bot.base;
 
-import cn.com.helei.bot.core.config.SystemConfig;
-import org.yaml.snakeyaml.Yaml;
+import cn.com.helei.bot.core.bot.AccountWSClientBuilder;
+import cn.com.helei.bot.core.bot.WebSocketClientLauncher;
+import cn.com.helei.bot.core.bot.anno.BotApplication;
+import cn.com.helei.bot.core.bot.anno.BotMethod;
+import cn.com.helei.bot.core.bot.constants.BotJobType;
+import cn.com.helei.bot.core.bot.job.AutoBotJobParam;
+import cn.com.helei.bot.core.config.AutoBotConfig;
+import cn.com.helei.bot.core.constants.MapConfigKey;
+import cn.com.helei.bot.core.dto.ACListOptResult;
+import cn.com.helei.bot.core.dto.BotACJobResult;
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.entity.BotInfo;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import cn.com.helei.bot.core.supporter.netty.BaseBotWSClient;
+import cn.com.helei.bot.core.util.exception.BotMethodFormatException;
+import cn.com.helei.bot.core.util.exception.BotMethodInvokeException;
+import cn.hutool.core.util.BooleanUtil;
+import cn.hutool.core.util.StrUtil;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
+import org.quartz.CronExpression;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.text.ParseException;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
-public class YamlConfigLoadUtil {
+import static cn.com.helei.bot.core.constants.MapConfigKey.INVITE_CODE_KEY;
 
-    private static final ConcurrentHashMap<String, Object> LOADED_CONFIG_MAP = new ConcurrentHashMap<>();
+@Slf4j
+public abstract class AnnoDriveAutoBot<T> extends AccountManageAutoBot {
 
-    public static <T> T load(
-            String path,
-            String fileName,
-            String prefix,
-            Class<T> clazz
+    private final Map<String, AutoBotJobParam> autoBotJobMap;
+
+    private final WebSocketClientLauncher webSocketClientLauncher;
+
+    @Getter
+    private Method registerMethod;
+
+    @Getter
+    private Method loginMethod;
+
+    @Getter
+    private Method updateRewordMethod;
+
+
+    public AnnoDriveAutoBot(
+            AutoBotConfig autoBotConfig,
+            BotApi botApi
     ) {
-        return load(
-                Arrays.asList(path.split("\\.")),
-                fileName,
-                Arrays.asList(prefix.split("\\.")),
-                clazz
+        super(autoBotConfig, botApi);
+
+        this.webSocketClientLauncher = new WebSocketClientLauncher(this);
+
+        this.autoBotJobMap = resolveBotMethodAnno();
+    }
+
+    @Override
+    protected BotInfo buildBotInfo() {
+        return resolveAnnoBotInfo(getBotApi());
+    }
+
+    /**
+     * 注册type账号
+     *
+     * @return String
+     */
+    @Override
+    public CompletableFuture<ACListOptResult> registerAccount() {
+        if (registerMethod == null) {
+            return CompletableFuture.completedFuture(ACListOptResult.fail(
+                    getBotInfo().getId(),
+                    getBotInfo().getName(),
+                    BotJobType.REGISTER.name(),
+                    "未找到注册方法"
+            ));
+        }
+
+        return asyncForACList(
+                accountContext -> {
+                    if (BooleanUtil.isTrue(accountContext.getSignUp())) {
+                        // 账户注册过，
+                        String errorMsg = String.format("[%s]账户[%s]-email[%s]注册过", accountContext.getId(), accountContext.getName(),
+                                accountContext.getAccountBaseInfo().getEmail());
+
+                        log.warn(errorMsg);
+
+                        return CompletableFuture.completedFuture(Result.fail(errorMsg));
+                    } else if (registerMethod != null) {
+                        // 调用注册方法注册
+                        return invokeBotMethod(registerMethod, accountContext, getAutoBotConfig().getConfig(INVITE_CODE_KEY));
+                    } else {
+                        return CompletableFuture.completedFuture(Result.fail("未知错误"));
+                    }
+                },
+                (accountContext, result) -> {
+                    // 登录成功
+                    if (BooleanUtil.isTrue(result.getSuccess())) {
+                        //注册成功
+                        accountContext.setSignUp(true);
+                    }
+                    return result;
+                },
+                BotJobType.REGISTER.name()
         );
     }
 
 
-    public static <T> T load(
-            List<String> path,
-            String fileName,
-            List<String> prefixList,
-            Class<T> clazz
+    /**
+     * 获取账号的token
+     *
+     * @return String
+     */
+    @Override
+    public CompletableFuture<ACListOptResult> loginAndTakeTokenAccount() {
+        if (registerMethod == null) {
+            return CompletableFuture.completedFuture(ACListOptResult.fail(
+                    getBotInfo().getId(),
+                    getBotInfo().getName(),
+                    BotJobType.LOGIN.name(),
+                    "未找到登录方法"
+            ));
+        }
+
+        return asyncForACList(
+                accountContext -> invokeBotMethod(loginMethod, accountContext),
+                (accountContext, result) -> {
+                    // 登录成功
+                    if (BooleanUtil.isTrue(result.getSuccess())) {
+                        String token = result.getData() == null ? null : (String) result.getData();
+
+                        // token不为空，设置到accountContext里
+                        if (StrUtil.isNotBlank(token)) {
+                            accountContext.setParam(MapConfigKey.TOKEN_KEY, token);
+                        } else {
+                            log.debug("账号[{}]-[{}]token为空", accountContext.getId(), accountContext.getName());
+                        }
+                    }
+                    return result;
+                },
+                BotJobType.LOGIN.name()
+        );
+    }
+
+
+    @Override
+    public CompletableFuture<ACListOptResult> updateAccountRewordInfo() {
+        if (registerMethod == null) {
+            return CompletableFuture.completedFuture(ACListOptResult.fail(
+                    getBotInfo().getId(),
+                    getBotInfo().getName(),
+                    BotJobType.QUERY_REWARD.name(),
+                    "未找到奖励查询方法"
+            ));
+        }
+
+        return asyncForACList(
+                accountContext -> invokeBotMethod(updateRewordMethod, accountContext),
+                (accountContext, result) -> result,
+                BotJobType.QUERY_REWARD.name()
+        );
+    }
+
+    @Override
+    public Set<String> getBotJobNameList() {
+        return autoBotJobMap.keySet();
+    }
+
+    @Override
+    public BotACJobResult startBotJob(String jobName) {
+        return getBotApi().getBotJobService().registerJob(autoBotJobMap.get(jobName));
+    }
+
+    protected abstract T getInstance();
+
+    /**
+     * 异步遍历账户
+     *
+     * @param buildResultFuture buildResultFuture
+     * @param resultHandler     resultHandler
+     * @return CompletableFuture<Result>
+     */
+    public CompletableFuture<ACListOptResult> asyncForACList(
+            Function<AccountContext, CompletableFuture<Result>> buildResultFuture,
+            BiFunction<AccountContext, BotACJobResult, BotACJobResult> resultHandler,
+            String jobName
     ) {
-        String dirResourcePath = FileUtil.getConfigDirResourcePath(path, fileName);
+        List<AccountContext> accountContexts = getAccountContexts();
 
-        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
-            if (config == null) {
-                Yaml yaml = new Yaml();
-                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
-                    Map<String, Object> yamlData = yaml.load(inputStream);
+        List<CompletableFuture<BotACJobResult>> futures = accountContexts.stream()
+                .map(accountContext -> {
+                    try {
+                        // 获取信号量
+                        getCcSemaphore().acquire();
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
 
-                    if (prefixList != null) {
-                        for (String prefix : prefixList) {
-                            yamlData = (Map<String, Object>) yamlData.get(prefix);
+                    BotACJobResult botACJobResult;
+                    CompletableFuture<Result> future;
+
+                    try {
+                        botACJobResult = new BotACJobResult(
+                                getBotInfo().getId(),
+                                getBotInfo().getName(),
+                                jobName,
+                                accountContext.getId()
+                        );
+
+                        future = buildResultFuture.apply(accountContext);
+
+                    } catch (Exception e) {
+                        getCcSemaphore().release();
+                        throw new RuntimeException(e);
+                    }
+
+                    return future.thenApplyAsync(botACJobResult::setResult, getExecutorService())
+                            .whenComplete((result, throwable) -> {
+                                // 释放信号量
+                                getCcSemaphore().release();
+                            });
+                }).toList();
+
+
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .thenApplyAsync(unused -> {
+                    List<BotACJobResult> results = new ArrayList<>();
+
+                    int success = 0;
+                    for (int i = 0; i < futures.size(); i++) {
+                        CompletableFuture<BotACJobResult> future = futures.get(i);
+                        AccountContext accountContext = accountContexts.get(i);
+
+                        try {
+                            BotACJobResult result = future.get();
+                            BotACJobResult botACJobResult = resultHandler.apply(accountContext, result);
+
+                            if (BooleanUtil.isTrue(botACJobResult.getSuccess())) success++;
+
+                            results.add(botACJobResult);
+                        } catch (InterruptedException | ExecutionException e) {
+                            String errorMsg = String.format("[%s] %s 获取异步结果发生错误",
+                                    accountContext.getId(), accountContext.getSimpleInfo());
+
+                            log.error(errorMsg, e);
+
+                            results.add(
+                                    new BotACJobResult(
+                                            getBotInfo().getId(),
+                                            getBotInfo().getName(),
+                                            jobName,
+                                            accountContext.getId(),
+                                            false,
+                                            errorMsg,
+                                            null
+                                    )
+                            );
                         }
                     }
 
-                    config = yaml.loadAs(yaml.dump(yamlData), clazz);
-                } catch (IOException e) {
-                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
+                    return ACListOptResult.builder()
+                            .botId(getBotInfo().getId())
+                            .botName(getBotInfo().getName())
+                            .jobName(jobName)
+                            .successCount(success)
+                            .success(true)
+                            .results(results)
+                            .build();
+                });
+    }
+
+    /**
+     * 解析注解，添加botInfo
+     */
+    private BotInfo resolveAnnoBotInfo(BotApi botApi) {
+        BotApplication annotation = this.getClass().getAnnotation(BotApplication.class);
+
+        if (annotation != null) {
+            String botName = annotation.name();
+            if (StrUtil.isBlank(botName)) throw new IllegalArgumentException("bot name 不能为空");
+
+            BotInfo dbBotInfo = botApi.getBotInfoService().query().eq("name", botName).one();
+
+            // 查询bot是否存在，不存在则创建
+            if (dbBotInfo == null) {
+                log.warn("不存在[{}]bot info, 自动创建...", botName);
+
+                BotInfo botInfo = new BotInfo();
+                botInfo.setDescribe(annotation.describe());
+                botInfo.setLimitProjectIds(Arrays.toString(annotation.limitProjectIds()));
+                botInfo.setName(botName);
+                if (botApi.getBotInfoService().save(botInfo)) {
+                    log.info("自动创建[{}]bot info成功", botName);
+                    return botInfo;
+                } else {
+                    throw new RuntimeException("保存bot[" + botName + "]信息失败");
+                }
+            } else {
+                return dbBotInfo;
+            }
+        } else {
+            throw new IllegalArgumentException("bot 应该带有 @BotApplication注解");
+        }
+    }
+
+
+    /**
+     * 解析注解中的方法
+     *
+     * @return List<AutoBotJob>
+     */
+    private Map<String, AutoBotJobParam> resolveBotMethodAnno() {
+        Map<String, AutoBotJobParam> jobMap = new HashMap<>();
+
+        // Step 1 遍历方法
+        for (Method method : getClass().getDeclaredMethods()) {
+            method.setAccessible(true);
+
+            // Step 2 找到方法中带有BotMethod注解的
+            if (method.isAnnotationPresent(BotMethod.class)) {
+                BotMethod botJobMethod = method.getAnnotation(BotMethod.class);
+
+                // Step 3 根据BotMethod注解 的jobType，方法分类
+                switch (botJobMethod.jobType()) {
+                    case REGISTER -> registerMethodHandler(method);
+                    case LOGIN -> loginMethodHandler(method);
+                    case QUERY_REWARD -> queryRewardMethodHandler(method, botJobMethod, jobMap);
+                    case TIMED_TASK -> timedTaskMethodHandler(method, botJobMethod, jobMap);
+                    case WEB_SOCKET_CONNECT -> webSocketConnectMethodHandler(method, botJobMethod, jobMap);
                 }
             }
+        }
 
-            return config;
-        });
-
-        return (T) compute;
+        return jobMap;
     }
 
-    public static List<Object> load(List<String> configDirBotPath, String fileName, String prefix) {
-        return load(configDirBotPath, fileName, List.of(prefix.split("\\.")));
+    /**
+     * 注册方法处理器
+     *
+     * @param method method
+     */
+    private void registerMethodHandler(Method method) {
+        if (method.getReturnType() == Result.class
+                && method.getParameterCount() == 2
+                && method.getParameters()[0].getType() == AccountContext.class
+                && method.getParameters()[1].getType() == String.class) {
+
+            if (this.registerMethod == null) {
+                this.registerMethod = method;
+            } else {
+                throw new BotMethodFormatException("注册方法只能有一个");
+            }
+        } else {
+            throw new BotMethodFormatException("注册方法错误, " +
+                    "应为 Result methodName(AccountContext ac, String inviteCode)");
+        }
     }
 
-    public static List<Object> load(
-            List<String> path,
-            String fileName,
-            List<String> prefixList
-    ) {
-        String dirResourcePath = FileUtil.getConfigDirResourcePath(path, fileName);
+    /**
+     * 登录方法处理器
+     *
+     * @param method method
+     */
+    private void loginMethodHandler(Method method) {
+        if (method.getReturnType() == Result.class
+                && method.getParameterCount() == 1
+                && method.getParameters()[0].getType() == AccountContext.class) {
 
-        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
-            if (config == null) {
-                Yaml yaml = new Yaml();
-                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
-                    Map<String, Object> yamlData = yaml.load(inputStream);
+            if (this.loginMethod == null) {
+                this.loginMethod = method;
+            } else {
+                throw new BotMethodFormatException("登录方法只能有一个");
+            }
+        } else {
+            throw new BotMethodFormatException("登录方法错误, " +
+                    "应为 Result methodName(AccountContext ac)");
+        }
+    }
 
-                    if (prefixList != null) {
-                        for (String prefix : prefixList) {
-                            yamlData = (Map<String, Object>) yamlData.get(prefix);
-                        }
+    /**
+     * 奖励查询方法处理器
+     *
+     * @param method       method
+     * @param botJobMethod botJobMethod
+     * @param jobMap       jobMap
+     */
+    private void queryRewardMethodHandler(Method method, BotMethod botJobMethod, Map<String, AutoBotJobParam> jobMap) {
+        if (method.getReturnType() == Result.class
+                && method.getParameterCount() == 1
+                && method.getParameters()[0].getType() == AccountContext.class) {
+
+            if (this.updateRewordMethod == null) {
+                this.updateRewordMethod = method;
+            } else {
+                throw new BotMethodFormatException("收益查询方法只能有一个");
+            }
+
+            AutoBotJobParam queryRewardJob = buildAutoBotJobParam(method, botJobMethod);
+
+            jobMap.put(BotJobType.QUERY_REWARD.name(), queryRewardJob);
+        } else {
+            throw new BotMethodFormatException("收益查询方法错误, " +
+                    "应为 Result methodName(AccountContext ac)");
+        }
+    }
+
+    /**
+     * 定时任务方法处理器
+     *
+     * @param method       method
+     * @param botJobMethod botJobMethod
+     * @param jobMap       jobMap
+     */
+    private void timedTaskMethodHandler(Method method, BotMethod botJobMethod, Map<String, AutoBotJobParam> jobMap) {
+        if (method.getParameterCount() == 1
+                && method.getParameters()[0].getType() == AccountContext.class
+        ) {
+
+            AutoBotJobParam autoBotJob = buildAutoBotJobParam(method, botJobMethod);
+            String jobName = autoBotJob.getJobName();
+
+            if (!jobMap.containsKey(jobName)) {
+                jobMap.put(jobName, autoBotJob);
+            } else {
+                throw new BotMethodFormatException("任务名称重复, " + jobName);
+            }
+        } else {
+            throw new BotMethodFormatException("定时任务方法错误, " +
+                    "应为 Result methodName(AccountContext ac)");
+        }
+    }
+
+    /**
+     * Web socket 方法处理器
+     *
+     * @param method           method
+     * @param botJobMethodAnno botJobMethodAnno
+     * @param jobMap           jobMap
+     */
+    private void webSocketConnectMethodHandler(Method method, BotMethod botJobMethodAnno, Map<String, AutoBotJobParam> jobMap) {
+        Class<?> returnType = method.getReturnType();
+
+        // 检查方法是否符合要求
+        if (BaseBotWSClient.class.isAssignableFrom(returnType)
+                && method.getParameterCount() == 1
+                && method.getParameters()[0].getType() == AccountContext.class
+        ) {
+            try {
+                // 符合要求，添加到jobMap
+                AutoBotJobParam jobParam = buildAutoBotJobParam(WebSocketClientLauncher.lanuchMethod, botJobMethodAnno);
+
+                // 更改执行target，添加额外参数
+                jobParam.setTarget(webSocketClientLauncher);
+                jobParam.setExtraParams(new Object[]{jobParam, new AccountWSClientBuilder() {
+                    @Override
+                    public BaseBotWSClient<?, ?> build(AccountContext accountContext) throws InvocationTargetException, IllegalAccessException {
+                        Object invoke = method.invoke(getInstance(), accountContext);
+
+                        return (BaseBotWSClient<?, ?>) invoke;
                     }
-                    return yamlData.get("list");
-                } catch (IOException e) {
-                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
-                }
+                }});
+
+                // 添加到jobMap
+                jobMap.put("[WS]-" + jobParam.getJobName(), jobParam);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
+        } else {
+            throw new BotMethodFormatException("websocket 方法错误, 应为 BotWebSocketContext<?,?> methodName(AccountContext)");
+        }
+    }
 
-            return config;
-        });
+    /**
+     * 根据方法注解创建 AutoBotJob
+     *
+     * @param method           方法
+     * @param botJobMethodAnno 方法上的BotMethod注解
+     * @return AutoBotJobParam
+     */
+    private @NotNull AutoBotJobParam buildAutoBotJobParam(Method method, BotMethod botJobMethodAnno) {
+        AutoBotJobParam autoBotJobParam = null;
 
-        return (List<Object>) compute;
+        try {
+            autoBotJobParam = new AutoBotJobParam(
+                    this,
+                    StrUtil.isBlank(botJobMethodAnno.jobName()) ? method.getName() : botJobMethodAnno.jobName(),
+                    botJobMethodAnno.description(),
+                    method,
+                    new CronExpression(botJobMethodAnno.cronExpression()),
+                    botJobMethodAnno.bowWsConfig(),
+                    null,
+                    null
+            );
+        } catch (ParseException e) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "[%s]-[%s]BotJobMethod上错误的cron表达式[%s]",
+                            getBotInfo().getName(),
+                            method.getName(),
+                            botJobMethodAnno.cronExpression()
+                    ),
+                    e
+            );
+        }
+
+        return autoBotJobParam;
+    }
+
+    /**
+     * 运行bot method
+     *
+     * @param method method
+     * @param args   args
+     * @return CompletableFuture<R>
+     */
+    private @NotNull CompletableFuture<Result> invokeBotMethod(Method method, Object... args) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return (Result) method.invoke(this, args);
+            } catch (IllegalAccessException | InvocationTargetException e) {
+                throw new BotMethodInvokeException(String.format(
+                        "执行[%s]-[%s]方法发生异常",
+                        getBotInfo().getName(),
+                        registerMethod.getName()
+                ), e);
+            }
+        }, getExecutorService());
     }
 
 
-    public static <T> T load(File path, List<String> prefixList, Class<T> tClass) {
-        Object compute = LOADED_CONFIG_MAP.compute(path.getAbsolutePath(), (k, config) -> {
-            if (config == null) {
-                Yaml yaml = new Yaml();
-                try (InputStream inputStream = new FileInputStream(path)) {
-                    Map<String, Object> yamlData = yaml.load(inputStream);
+}
+package cn.com.helei.bot.core.bot.constants;
 
-                    if (prefixList != null) {
-                        for (String prefix : prefixList) {
-                            yamlData = (Map<String, Object>) yamlData.get(prefix);
+/**
+ * Bot Job 类型
+ */
+public enum BotJobType {
+    /**
+     * 注册
+     */
+    REGISTER,
+    /**
+     * 登录
+     */
+    LOGIN,
+    /**
+     * 查询奖励
+     */
+    QUERY_REWARD,
+    /**
+     * 定时任务
+     */
+    TIMED_TASK,
+    /**
+     * web socket连接任务
+     */
+    WEB_SOCKET_CONNECT,
+}
+package cn.com.helei.bot.core.bot.constants;
+
+/**
+ * Depin Bot 状态
+ */
+public enum BotStatus {
+    NEW,
+
+    INIT,
+    INIT_ERROR,
+    INIT_FINISH,
+
+    STARTING,
+    RUNNING,
+    SHUTDOWN,
+}
+package cn.com.helei.bot.core.bot.job;
+
+import cn.com.helei.bot.core.bot.base.AnnoDriveAutoBot;
+import cn.com.helei.bot.core.dto.Result;
+import lombok.extern.slf4j.Slf4j;
+import org.quartz.JobExecutionContext;
+import org.quartz.JobExecutionException;
+import org.springframework.scheduling.quartz.QuartzJobBean;
+
+import java.lang.reflect.Method;
+import java.util.concurrent.CompletableFuture;
+
+@Slf4j
+public class AutoBotJob extends QuartzJobBean {
+
+    public static final String BOT_JOB_PARAM_Key = "bot_job_param";
+
+    @Override
+    protected void executeInternal(JobExecutionContext context) throws JobExecutionException {
+        AutoBotJobParam autoBotJobParam = (AutoBotJobParam) context.getJobDetail().getJobDataMap().get(BOT_JOB_PARAM_Key);
+
+        String jobName = autoBotJobParam.getJobName();
+        AnnoDriveAutoBot<?> bot = autoBotJobParam.getBot();
+        Method jobMethod = autoBotJobParam.getJobMethod();
+
+        Object target = autoBotJobParam.getTarget() == null ? bot : autoBotJobParam.getTarget();
+        Object[] extraParams = autoBotJobParam.getExtraParams();
+
+        log.info("开始执行[{}]定时任务", jobName);
+
+        bot.asyncForACList(
+                accountContext -> CompletableFuture.supplyAsync(() -> {
+                    try {
+                        Object[] params;
+                        if (extraParams == null) {
+                            params = new Object[]{accountContext};
+                        } else {
+                            params = new Object[1 + extraParams.length];
+                            params[0] = accountContext;
+                            System.arraycopy(extraParams, 0, params, 1, extraParams.length);
                         }
-                    }
 
-                    return yaml.loadAs(yaml.dump(yamlData), tClass);
-                } catch (IOException e) {
-                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", path), e);
-                }
+                        jobMethod.setAccessible(true);
+                        Object invoke = jobMethod.invoke(target, params);
+                        return Result.ok(invoke);
+                    } catch (Exception e) {
+                        log.info("执行定时任务发生异常", e);
+                        return Result.fail("执行定时任务发生异常" + e.getMessage());
+                    }
+                }, bot.getExecutorService()),
+                (accountContext, result) -> result,
+                jobName
+        ).thenAcceptAsync(acListOptResult -> {
+            if (!acListOptResult.getSuccess()) {
+                log.info("botId[{}]-botName[{}]-jobName[{}] 定时任务执行失败, {}",
+                        acListOptResult.getBotId(), acListOptResult.getBotName(), acListOptResult.getJobName(), acListOptResult.getErrorMsg()
+                );
+            } else {
+                log.info("botId[{}]-botName[{}]-jobName[{}] 定时任务执行成功, {}/{}",
+                        acListOptResult.getBotId(), acListOptResult.getBotName(),
+                        acListOptResult.getJobName(), acListOptResult.getSuccessCount(), acListOptResult.getResults().size()
+                );
             }
-            return config;
         });
 
-        return (T) compute;
+        log.info("[{}]定时任务执行完毕", jobName);
+    }
+}
+package cn.com.helei.bot.core.bot.job;
+
+import cn.com.helei.bot.core.bot.anno.BotWSMethodConfig;
+import cn.com.helei.bot.core.bot.base.AnnoDriveAutoBot;
+import lombok.*;
+import org.quartz.CronExpression;
+
+import java.lang.reflect.Method;
+
+@Data
+@AllArgsConstructor
+public class AutoBotJobParam {
+
+    private final AnnoDriveAutoBot<?> bot;
+
+    private final String jobName;
+
+    @Getter
+    private final String description;
+
+    private final Method jobMethod;
+
+    @Getter
+    private final CronExpression cronExpression;
+
+    private final BotWSMethodConfig botWSMethodConfig;
+
+    private Object target;
+
+    private Object[] extraParams;
+
+    public String getGroup() {
+        return this.bot.getBotInfo().getName();
     }
 
-    public static void main(String[] args) {
-        System.out.println(YamlConfigLoadUtil.load(SystemConfig.CONFIG_DIR_BOT_PATH, "browser-env.yaml", List.of("bot", "browser")));
+    public Integer getBotId() {
+        return bot.getBotInfo().getId();
+    }
+}
+package cn.com.helei.bot.core.bot.view;
+
+import cn.com.helei.bot.core.bot.base.AccountManageAutoBot;
+import cn.com.helei.bot.core.config.AutoBotConfig;
+import cn.com.helei.bot.core.bot.constants.BotStatus;
+import cn.com.helei.bot.core.util.exception.DepinBotStartException;
+import cn.com.helei.bot.core.supporter.commandMenu.CommandMenuNode;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import org.jline.reader.LineReader;
+import org.jline.reader.LineReaderBuilder;
+import org.jline.reader.impl.DefaultParser;
+import org.jline.terminal.Terminal;
+import org.jline.terminal.TerminalBuilder;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.Stack;
+import java.util.concurrent.CountDownLatch;
+
+
+/**
+ * 命令行交互的depin机器人
+ */
+@Slf4j
+@Getter
+public abstract class CommandLineAutoBot {
+
+    private final AutoBotConfig botConfig;
+
+    private final AccountManageAutoBot bot;
+
+    private final CommandMenuNode mainManu;
+
+    public CommandLineAutoBot(AccountManageAutoBot bot) {
+        this.bot = bot;
+        this.botConfig = bot.getAutoBotConfig();
+
+        this.mainManu = new CommandMenuNode(
+                "主菜单",
+                String.format("欢迎使用[%s]-bot", getBot().getBotInfo().getName()),
+                this::printBanner
+        );
+    }
+
+    /**
+     * 构建command菜单
+     */
+    protected abstract void buildMenuNode(CommandMenuNode mainManu);
+
+
+    /**
+     * 异步启动
+     */
+    private void asyncExecute(CountDownLatch startLatch) {
+        Thread commandInputThread = new Thread(() -> {
+            try {
+                doExecute();
+            } catch (Exception e) {
+                log.error("启动bot发生错误", e);
+            } finally {
+                startLatch.countDown();
+            }
+        }, "depin-bot-main");
+        commandInputThread.setDaemon(true);
+        commandInputThread.start();
+    }
+
+    /**
+     * 启动bot
+     *
+     * @throws DepinBotStartException DepinBotStartException
+     */
+    public void start() throws DepinBotStartException {
+        bot.init();
+
+        bot.updateState(BotStatus.STARTING);
+        log.info("正在启动Depin Bot");
+        try {
+            CountDownLatch startLatch = new CountDownLatch(1);
+            //启动命令行交互的线程
+            asyncExecute(startLatch);
+
+            log.info("Depin Bot启动完毕");
+
+            bot.updateState(BotStatus.RUNNING);
+            startLatch.await();
+
+        } catch (Exception e) {
+            bot.updateState(BotStatus.SHUTDOWN);
+            throw new DepinBotStartException("启动CommandLineDepinBot发生错误", e);
+        }
+    }
+
+
+    /**
+     * 运行机器人
+     *
+     * @throws IOException IOException
+     */
+    public void doExecute() throws IOException {
+        //Step 1 获取输入
+        CommandMenuNode mainMenuNode = getMenuNode();
+        Terminal terminal = TerminalBuilder.builder().system(true).build();
+        LineReader reader = LineReaderBuilder.builder().terminal(terminal).parser(new DefaultParser()).build();
+
+        Stack<CommandMenuNode> menuNodeStack = new Stack<>();
+        CommandMenuNode currentMenuNode = mainMenuNode;
+
+        //Step 2 不断监听控制台输入
+        while (true) {
+            boolean inputAccept = true;
+            //Step 2.1 获取输入
+            String choice;
+            try {
+                choice = reader.readLine("\n<\n" + getInvokeActionAndMenuNodePrintStr(currentMenuNode) + "请选择>").trim();
+            } catch (Exception e) {
+                log.error("进入菜单节点[{}]发生异常", currentMenuNode.getTittle(), e);
+                currentMenuNode = menuNodeStack.pop();
+                continue;
+            }
+
+            try {
+                //Step 2.2 退出
+                if ("exit".equals(choice)) {
+                    exitHandler();
+                    break;
+                }
+
+                //Step 2.3 选择操作
+                int option = Integer.parseInt(choice.trim());
+                if (option == 0) {
+                    //返回上一级菜单
+                    if (!menuNodeStack.isEmpty()) {
+                        currentMenuNode = menuNodeStack.pop();
+                    }
+                } else if (option > 0 && option <= currentMenuNode.getSubNodeList().size()) {
+                    //进入选择的菜单
+                    menuNodeStack.push(currentMenuNode);
+                    currentMenuNode = currentMenuNode.getSubNodeList().get(option - 1);
+                } else {
+                    inputAccept = false;
+                }
+
+                //终点节点，不进入，直接返回
+                if (currentMenuNode.isEnd()) {
+                    System.out.println(getInvokeActionAndMenuNodePrintStr(currentMenuNode));
+                    currentMenuNode = menuNodeStack.pop();
+                }
+            } catch (Exception e) {
+                inputAccept = false;
+            }
+
+            try {
+                if (!inputAccept && currentMenuNode.getResolveInput() != null) {
+                    currentMenuNode.getResolveInput().accept(choice);
+                }
+            } catch (Exception e) {
+                System.out.println("系统异常");
+            }
+        }
+    }
+
+
+    /**
+     * 获取菜单， 会放入额外的固定菜单
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode getMenuNode() {
+
+        buildMenuNode(mainManu);
+
+        return mainManu;
+    }
+
+    private String printBanner() {
+
+        return "" + bot.printBotRuntimeInfo();
+    }
+
+    /**
+     * 退出回调
+     */
+    protected void exitHandler() {
+    }
+
+    /**
+     * 执行Action回调，获取当前菜单打印的字符串
+     *
+     * @param currentMenuNode currentMenuNode
+     * @return String
+     */
+    public String getInvokeActionAndMenuNodePrintStr(CommandMenuNode currentMenuNode) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(currentMenuNode.getDescribe()).append("\n");
+
+        if (currentMenuNode.getAction() != null) {
+            sb.append(currentMenuNode.getAction().get()).append("\n");
+        }
+
+        if (currentMenuNode.isEnd()) return sb.toString();
+
+        sb.append("选项:\n");
+        List<CommandMenuNode> menuNodeList = currentMenuNode.getSubNodeList();
+        for (int i = 0; i < menuNodeList.size(); i++) {
+            sb.append(i + 1).append(". ").append(menuNodeList.get(i).getTittle()).append("\n");
+        }
+
+        sb.append("0. 返回上一级菜单\n");
+
+        return sb.toString();
     }
 
 }
-package cn.com.helei.bot.view;
+package cn.com.helei.bot.core.bot.view;
 
-import cn.com.helei.bot.core.AutoBotApplication;
-import cn.com.helei.bot.core.bot.RestTaskAutoBot;
-import cn.com.helei.bot.core.bot.anno.BotApplication;
-import cn.com.helei.bot.core.bot.anno.BotMethod;
-import cn.com.helei.bot.core.bot.constants.BotJobType;
-import cn.com.helei.bot.core.bot.view.MenuCMDLineAutoBot;
+
+import cn.com.helei.bot.core.bot.base.AnnoDriveAutoBot;
 import cn.com.helei.bot.core.config.AutoBotConfig;
-import cn.com.helei.bot.core.dto.Result;
-import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import cn.com.helei.bot.core.supporter.AccountInfoPrinter;
+import cn.com.helei.bot.core.supporter.commandMenu.CommandMenuNode;
 import cn.com.helei.bot.core.supporter.commandMenu.DefaultMenuType;
 import cn.com.helei.bot.core.supporter.commandMenu.MenuNodeMethod;
-import cn.com.helei.bot.core.util.YamlConfigLoadUtil;
-import cn.com.helei.bot.core.util.exception.DepinBotStartException;
-import cn.hutool.core.util.RandomUtil;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
+import com.alibaba.fastjson.JSON;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.*;
+import java.util.function.Consumer;
+
+import static cn.com.helei.bot.core.constants.MapConfigKey.*;
+
+
+@Slf4j
+public class MenuCMDLineAutoBot<C extends AutoBotConfig> extends CommandLineAutoBot {
+    /**
+     * 刷新节点
+     */
+    public static final CommandMenuNode REFRESH_NODE = new CommandMenuNode(true, "刷新", "当前数据已刷新", null);
+
+
+    private final List<DefaultMenuType> defaultMenuTypes;
+
+    @Setter
+    private Consumer<CommandMenuNode> addCustomMenuNode;
+
+    public MenuCMDLineAutoBot(AnnoDriveAutoBot bot, List<DefaultMenuType> defaultMenuTypes) {
+        super(bot);
+        this.defaultMenuTypes = new ArrayList<>(defaultMenuTypes);
+
+        this.defaultMenuTypes.add(DefaultMenuType.ACCOUNT_LIST);
+        this.defaultMenuTypes.add(DefaultMenuType.PROXY_LIST);
+        this.defaultMenuTypes.add(DefaultMenuType.BROWSER_ENV_LIST);
+
+        if (bot.getRegisterMethod() != null) {
+            this.defaultMenuTypes.add(DefaultMenuType.REGISTER);
+        }
+        if (bot.getLoginMethod() != null) {
+            this.defaultMenuTypes.add(DefaultMenuType.LOGIN);
+        }
+        if (bot.getBotJobNameList() != null) {
+            this.defaultMenuTypes.add(DefaultMenuType.START_ACCOUNT_CLAIM);
+        }
+
+        // 解析MenuNodeMethod注解添加菜单节点
+        for (Method method : bot.getClass().getDeclaredMethods()) {
+            method.setAccessible(true);
+
+            if (method.isAnnotationPresent(MenuNodeMethod.class)) {
+                if (method.getParameterCount() > 0) {
+                    throw new IllegalArgumentException("菜单方法参数数量必须为0");
+                }
+
+                MenuNodeMethod anno = method.getAnnotation(MenuNodeMethod.class);
+                String title = anno.title();
+                String description = anno.description();
+
+                CommandMenuNode menuNode = new CommandMenuNode(title, description, () -> {
+                    try {
+                        return method.invoke(bot).toString();
+                    } catch (IllegalAccessException | InvocationTargetException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+
+                getMainManu().addSubMenu(menuNode);
+            }
+        }
+    }
+
+
+    @Override
+    public final void buildMenuNode(CommandMenuNode mainManu) {
+        if (addCustomMenuNode != null) {
+            addCustomMenuNode.accept(mainManu);
+        }
+
+        for (DefaultMenuType menuType : defaultMenuTypes) {
+            mainManu.addSubMenu(switch (menuType) {
+                case REGISTER -> buildRegisterMenuNode();
+                case VERIFIER -> buildVerifierMenuNode();
+                case LOGIN -> buildQueryTokenMenuNode();
+                case ACCOUNT_LIST -> buildAccountListMenuNode();
+                case PROXY_LIST -> buildProxyListMenuNode();
+                case BROWSER_ENV_LIST -> buildBrowserListMenuNode();
+                case START_ACCOUNT_CLAIM -> buildStartAccountConnectMenuNode();
+                case IMPORT -> buildImportMenuNode();
+            });
+        }
+    }
+
+
+    /**
+     * 构建注册菜单节点
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildRegisterMenuNode() {
+        CommandMenuNode registerMenu = new CommandMenuNode("注册",
+                "请确认设置后运行", this::printCurrentRegisterConfig);
+
+        CommandMenuNode interInvite = new CommandMenuNode(
+                "填入邀请码",
+                "请输入邀请码：",
+                this::printCurrentRegisterConfig
+        );
+        interInvite.setResolveInput(input -> {
+            log.info("邀请码修改[{}]->[{}]", getBotConfig().getConfig(INVITE_CODE_KEY), input);
+            getBotConfig().setConfig(INVITE_CODE_KEY, input);
+        });
+
+        return registerMenu
+                .addSubMenu(interInvite)
+                .addSubMenu(new CommandMenuNode(
+                        true,
+                        "开始注册",
+                        "开始注册所有账号...",
+                        () -> getBot()
+                                .registerAccount().toString()
+                ));
+    }
+
+    private CommandMenuNode buildVerifierMenuNode() {
+
+        return new CommandMenuNode("验证邮箱", "请选择验证的账户类型",
+                () -> "当前的邮箱类型：" + getBotConfig().getConfig(EMAIL_VERIFIER_TYPE));
+    }
+
+
+    /**
+     * 获取token
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildQueryTokenMenuNode() {
+        return new CommandMenuNode("获取token", "开始获取token",()->{
+            return JSON.toJSONString(getBot().loginAndTakeTokenAccount());
+        });
+    }
+
+    /**
+     * 构建查看代理列表的菜单节点
+     *
+     * @return 查看代理列表菜单节点
+     */
+    private CommandMenuNode buildProxyListMenuNode() {
+        return new CommandMenuNode(
+                "查看代理列表",
+                "当前代理列表:",
+                null
+        ).addSubMenu(REFRESH_NODE);
+    }
+
+    /**
+     * 构建查看浏览器环境列表的菜单节点
+     *
+     * @return 查看浏览器环境列表菜单节点
+     */
+    private CommandMenuNode buildBrowserListMenuNode() {
+        return new CommandMenuNode(
+                "查看浏览器环境列表",
+                "当前浏览器环境:",
+                null
+        ).addSubMenu(REFRESH_NODE);
+    }
+
+    /**
+     * 账户列表菜单节点
+     *
+     * @return 账户列表节点
+     */
+    private CommandMenuNode buildAccountListMenuNode() {
+        CommandMenuNode accountListMenuNode = new CommandMenuNode(
+                "查看账号",
+                "当前账户详情列表:",
+                () -> AccountInfoPrinter.printAccountList(getBot().getAccountContexts())
+        );
+
+        return accountListMenuNode
+                .addSubMenu(buildAccountRewardMenuNode())
+                .addSubMenu(buildAccountConnectStatusMenuNode())
+                .addSubMenu(REFRESH_NODE);
+    }
+
+    /**
+     * 查看账户收益菜单节点
+     *
+     * @return 账户收益节点
+     */
+    private CommandMenuNode buildAccountRewardMenuNode() {
+        return new CommandMenuNode(
+                "查看账号收益",
+                "账号收益详情列表:",
+                () -> AccountInfoPrinter.printAccountReward(getBot().getAccountContexts())
+        ).addSubMenu(REFRESH_NODE);
+    }
+
+    /**
+     * 查看账户连接情况菜单节点
+     *
+     * @return 账户收益节点
+     */
+    private CommandMenuNode buildAccountConnectStatusMenuNode() {
+        return new CommandMenuNode(
+                "查看账号连接情况",
+                "账号连接情况列表:",
+                () -> AccountInfoPrinter.printAccountConnectStatusList(getBot().getAccountContexts())
+        ).addSubMenu(REFRESH_NODE);
+    }
+
+
+    /**
+     * 开始账户连接菜单节点
+     *
+     * @return 连接账户菜单节点
+     */
+    private CommandMenuNode buildStartAccountConnectMenuNode() {
+        CommandMenuNode menuNode = new CommandMenuNode(
+                "启动任务",
+                "选择任务类型",
+                null
+        );
+
+        Set<String> jobNameSet = getBot().getBotJobNameList();
+        for (String jobName : jobNameSet) {
+            CommandMenuNode typeInput = new CommandMenuNode(true, jobName + " 任务", "type",
+                    () -> JSON.toJSONString(getBot().startBotJob(jobName))
+            );
+
+            menuNode.addSubMenu(typeInput);
+        }
+
+        return menuNode;
+    }
+
+    /**
+     * 导入菜单节点
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportMenuNode() {
+
+        return new CommandMenuNode("导入", "请选择要导入的数据", null)
+                .addSubMenu(buildImportBotAccountContextMenuNode())
+                .addSubMenu(buildImportBaseAccountMenuNode())
+                .addSubMenu(buildImportProxyMenuNode())
+                .addSubMenu(buildImportBrowserEnvMenuNode())
+                .addSubMenu(buildImportTwitterMenuNode())
+                .addSubMenu(buildImportDiscordMenuNode())
+                .addSubMenu(buildImportTelegramMenuNode())
+                ;
+    }
+
+    /**
+     * 导入浏览器环境菜单节点
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportBrowserEnvMenuNode() {
+
+        return new CommandMenuNode(true, "导入浏览器环境", null, () -> {
+            String filePath = getBotConfig().getFilePathConfig().getBrowserEnvFileBotConfigPath();
+
+            getBot().getBotApi().getImportService().importBrowserEnvFromExcel(filePath);
+
+            return "浏览器环境导入完成";
+        });
+    }
+
+    /**
+     * 导入代理信息
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportProxyMenuNode() {
+        return new CommandMenuNode(true, "导入代理", null, () -> {
+
+            getBot().getBotApi().getImportService()
+                    .importProxyFromExcel(getBotConfig().getFilePathConfig().getProxyFileBotConfigPath());
+
+            return "代理导入完成";
+        });
+    }
+
+    /**
+     * 导入账号基本信息
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportBaseAccountMenuNode() {
+        return new CommandMenuNode(true, "导入账号基本信息", null, () -> {
+
+            Map<String, Integer> result = getBot().getBotApi().getImportService()
+                    .importAccountBaseInfoFromExcel(getBotConfig().getFilePathConfig().getBaseAccountFileBotConfigPath());
+
+            return "账号基本信息导入完成，" + result;
+        });
+    }
+
+
+    /**
+     * 导入twitter账号基本信息
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportTwitterMenuNode() {
+        return new CommandMenuNode(true, "导入twitter账号", null, () -> {
+            getBot().getBotApi().getImportService()
+                    .importTwitterFromExcel(getBotConfig().getFilePathConfig().getTwitterFileBotConfigPath());
+            return "twitter导入完成";
+        });
+    }
+
+
+    /**
+     * 导入discord账号基本信息
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportDiscordMenuNode() {
+        return new CommandMenuNode(true, "导入discord账号", null, () -> {
+
+            getBot().getBotApi().getImportService().importDiscordFromExcel(getBotConfig().getFilePathConfig().getDiscordFileBotConfigPath());
+
+            return "discord导入完成";
+        });
+    }
+
+    /**
+     * 导入Telegram账号基本信息
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportTelegramMenuNode() {
+        return new CommandMenuNode(true, "导入Telegram账号", null, () -> {
+
+            getBot().getBotApi().getImportService().importTelegramFormExcel(getBotConfig().getFilePathConfig().getTelegramFileBotConfigPath());
+
+            return "Telegram导入完成";
+        });
+    }
+
+
+    /**
+     * 导入bot使用的账号菜单节点
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportBotAccountContextMenuNode() {
+        return new CommandMenuNode(true, "导入bot运行账号", null, () -> {
+
+            getBot().getBotApi().getImportService().importBotAccountContextFromExcel(
+                    getBot().getBotInfo().getId(),
+                    getBotConfig().getAccountConfig().getProxyType(),
+                    getBotConfig().getAccountConfig().getProxyRepeat(),
+                    getBotConfig().getAccountConfig().getConfigFilePath()
+            );
+
+            return "bot运行账号导入完成";
+        });
+    }
+
+
+    /**
+     * 打印当前的邀请码
+     *
+     * @return 邀请码
+     */
+    private String printCurrentRegisterConfig() {
+        String inviteCode = (String) getBotConfig().getCustomConfig().get(INVITE_CODE_KEY);
+        String registerType = (String) getBotConfig().getCustomConfig().get(REGISTER_TYPE_KEY);
+
+        return "(当前邀请码为:" + inviteCode + ")\n"
+                + "(当前注册类型为:" + registerType + ")\n";
+    }
+}
+package cn.com.helei.bot.core.bot;
+
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.netty.BaseBotWSClient;
+
+import java.lang.reflect.InvocationTargetException;
+
+public interface AccountWSClientBuilder {
+
+    BaseBotWSClient<?, ?> build(AccountContext accountContext) throws InvocationTargetException, IllegalAccessException;
+
+}
+package cn.com.helei.bot.core.bot;
+
+
+import cn.com.helei.bot.core.bot.base.AnnoDriveAutoBot;
+import cn.com.helei.bot.core.config.AutoBotConfig;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+
+public abstract class RestTaskAutoBot<T> extends AnnoDriveAutoBot<T> {
+
+    public RestTaskAutoBot(AutoBotConfig autoBotConfig, BotApi botApi) {
+        super(autoBotConfig, botApi);
+    }
+
+}
+package cn.com.helei.bot.core.bot;
+
+import cn.com.helei.bot.core.bot.anno.BotWSMethodConfig;
+import cn.com.helei.bot.core.bot.base.AnnoDriveAutoBot;
+import cn.com.helei.bot.core.bot.job.AutoBotJobParam;
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.netty.BaseBotWSClient;
+import cn.com.helei.bot.core.supporter.netty.constants.WebsocketClientStatus;
+import cn.com.helei.bot.core.util.NamedThreadFactory;
+import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.Map;
+import java.util.concurrent.*;
+
+
+@Slf4j
+public class WebSocketClientLauncher {
+
+    public static final Method lanuchMethod;
+
+    static {
+        try {
+            lanuchMethod = WebSocketClientLauncher.class.getMethod("launchWSClient",
+                    Object.class, Object.class, Object.class);
+        } catch (NoSuchMethodException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 线程池
+     */
+    private final ExecutorService executorService;
+
+    /**
+     * bot 对象
+     */
+    private final AnnoDriveAutoBot<?> bot;
+
+    /**
+     * 控制并发数量的信号量
+     */
+    private final Map<String, Semaphore> wsCCSemapthoreMap = new ConcurrentHashMap<>();
+
+    /**
+     * 已启动的ws客户端
+     */
+    private final Map<String, BaseBotWSClient<?, ?>> launchedWSClientMap = new ConcurrentHashMap<>();
+
+    public WebSocketClientLauncher(
+            AnnoDriveAutoBot<?> bot
+    ) {
+        this.bot = bot;
+        this.executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("ws-client-launcher"));
+    }
+
+    /**
+     * 构建ws客户端
+     *
+     * @param accountContextObj accountContextObj
+     * @param jobParamObj       jobParamObj
+     * @return BaseBotWSClient < Req, Resp>
+     */
+    public final CompletableFuture<Result> launchWSClient(
+            Object accountContextObj,
+            Object jobParamObj,
+            Object wsClientBuilderObj
+    ) {
+        // 参数处理
+        AccountContext accountContext = (AccountContext) accountContextObj;
+        AutoBotJobParam jobParam = (AutoBotJobParam) jobParamObj;
+        AccountWSClientBuilder wsClientBuilder = (AccountWSClientBuilder) wsClientBuilderObj;
+
+        String key = generateAccountKey(accountContext, jobParam.getJobName());
+
+        String prefix = String.format("bot[%s]-job[%s]-account[%s]-[%s]",
+                jobParam.getGroup(), jobParam.getJobName(), accountContext.getId(), accountContext.getName());
+
+        BotWSMethodConfig botWSMethodConfig = jobParam.getBotWSMethodConfig();
+
+
+        // 已经启动的，不再创建
+        if (launchedWSClientMap.containsKey(key)) {
+            if (!botWSMethodConfig.isRefreshWSConnection()) {
+                log.warn("{} ws client already created", prefix);
+                return CompletableFuture.completedFuture(Result.fail(prefix + "ws client already created"));
+            } else {
+                log.warn(prefix + " 移除旧ws客户端");
+                launchedWSClientMap.remove(key).shutdown();
+            }
+        }
+
+        return buildAndConnectWebSocket(accountContext, botWSMethodConfig, key, wsClientBuilder, prefix);
+    }
+
+
+    /**
+     * 构建并连接ws客户端
+     *
+     * @param accountContext    accountContext
+     * @param botWSMethodConfig botWSMethodConfig
+     * @param key               key
+     * @param wsClientBuilder   wsClientBuilder
+     * @param prefix            prefix
+     * @return CompletableFuture<Result>
+     */
+    private @NotNull CompletableFuture<Result> buildAndConnectWebSocket(
+            AccountContext accountContext,
+            BotWSMethodConfig botWSMethodConfig,
+            String key,
+            AccountWSClientBuilder wsClientBuilder,
+            String prefix
+    ) {
+
+        // Step 1 ws 连接数量控制
+        Semaphore wsConnectSemaphore;
+        try {
+            wsConnectSemaphore = wsCCSemapthoreMap.computeIfAbsent(key, k -> new Semaphore(botWSMethodConfig.wsConnectCount()));
+            wsConnectSemaphore.acquire();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+
+        //  Step 2 启动
+        BaseBotWSClient<?, ?> wsClient = null;
+
+        // Step 3 创建ws client
+        try {
+            wsClient = wsClientBuilder.build(accountContext);
+
+            launchedWSClientMap.put(key, wsClient);
+        } catch (InvocationTargetException | IllegalAccessException e) {
+            log.error("build account ws client error", e);
+            return CompletableFuture.completedFuture(Result.fail(prefix + "build account ws client error"));
+        }
+
+        // Step 4 设置handler
+        init(wsClient, botWSMethodConfig, wsConnectSemaphore);
+
+        // Step 5 检查当前状态，如果为new或stop才进行启动
+        WebsocketClientStatus currentStatus = wsClient.getClientStatus();
+
+
+        return switch (currentStatus) {
+            // 新创建，停止状态，需要建立连接
+            case NEW, STOP -> wsClient
+                    .connect() // 异步连接
+                    .thenApplyAsync(connectResult -> {
+                        if (connectResult) {
+                            // 连接成功
+                            return Result.ok(prefix + "connect success");
+                        } else if (botWSMethodConfig.wsUnlimitedRetry()) {
+                            // TODO ws需要加入shutdown后的恢复机制
+                            // 连接失败，且允许无限重连, 返回ok，ws内部会自动重连
+                            return Result.ok(prefix + "connect fail, restarting...");
+                        } else {
+                            return Result.fail(prefix + "ws client can not connect");
+                        }
+                    }, executorService)
+                    .exceptionallyAsync(throwable -> {
+                        log.error("ws client connect error", throwable);
+                        return Result.fail(prefix + "connect error, " + throwable.getMessage());
+                    }, executorService);
+            case STARTING, RUNNING -> CompletableFuture.completedFuture(Result.ok());
+            // 被禁止使用，抛出异常
+            case SHUTDOWN -> CompletableFuture.completedFuture(Result.fail(prefix + " ws client can not connect"));
+        };
+    }
+
+    /**
+     * 生成账户key
+     *
+     * @param accountContext accountContext
+     * @param jobName        jobName
+     * @return String
+     */
+    private static @NotNull String generateAccountKey(AccountContext accountContext, String jobName) {
+        return jobName + accountContext.getName();
+    }
+
+
+    /**
+     * 添加ws状态改变的handler
+     *
+     * @param <Req>             Req
+     * @param <Resp>            Resp
+     * @param wsClient          wsClient
+     * @param botWSMethodConfig botWSMethodConfig
+     */
+    private <Req, Resp> void init(BaseBotWSClient<Req, Resp> wsClient, BotWSMethodConfig botWSMethodConfig, Semaphore wsConnectSemaphore) {
+        // 设置参数
+        wsClient.setAllIdleTimeSecond(botWSMethodConfig.heartBeatIntervalSecond());
+        wsClient.setReconnectCountDownSecond(botWSMethodConfig.reconnectCountDownSecond());
+        wsClient.setReconnectLimit(botWSMethodConfig.reconnectLimit());
+
+        //设置相关回调
+        wsClient.setClientStatusChangeHandler(newStatus -> {
+            wsClient.whenClientStatusChange(newStatus);
+            // 释放资源
+            if (newStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+                // 记录完成的ws数量
+                wsConnectSemaphore.release();
+            }
+        });
+    }
+}
+package cn.com.helei.bot.core.config;
+
+
+import lombok.Data;
+import lombok.ToString;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Data
+@ToString
+public class AutoBotConfig {
+
+    /**
+     * 项目信息
+     */
+    private String botClassName;
+
+    /**
+     * 运行时设置
+     */
+    private AutoBotRuntimeConfig runtime = new AutoBotRuntimeConfig();
+
+    /**
+     * websocket 设置
+     */
+    private AutoBotWSConfig websocket = new AutoBotWSConfig();
+
+    /**
+     * 配置文件配置
+     */
+    private AutoBotConfigFilePathConfig filePathConfig = new AutoBotConfigFilePathConfig();
+
+    /**
+     * 账户配置
+     */
+    private AutoBotAccountConfig accountConfig = new AutoBotAccountConfig();
+
+    /**
+     * 自定义配置
+     */
+    private Map<String, Object> customConfig = new HashMap<>();
+
+
+    public String getConfig(String key) {
+        return String.valueOf(customConfig.get(key));
+    }
+
+    public void setConfig(String key, String value) {
+        this.customConfig.put(key, value);
+    }
+
+}
+package cn.com.helei.bot.core.dto;
+
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.util.List;
 
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class ACListOptResult {
 
-@SpringBootTest(classes = AutoBotApplication.class)
-class MenuCMDLineAutoBotTest {
+    private Integer botId;
 
-    private static final Logger log = LoggerFactory.getLogger(MenuCMDLineAutoBotTest.class);
+    private String botName;
 
-    private TestRestAutoBot autoBot;
+    private String jobName;
 
-    private MenuCMDLineAutoBot<AutoBotConfig> menuCMDLineAutoBot;
+    private Boolean success;
 
-    @Autowired
-    public BotApi botApi;
+    private String errorMsg;
 
-    @BeforeEach
-    public  void setUp() throws DepinBotStartException {
-        AutoBotConfig load = YamlConfigLoadUtil.load("config.app", "example.yaml", "bot.app", AutoBotConfig.class);
+    private List<BotACJobResult> results;
 
-        autoBot = new TestRestAutoBot(load, botApi);
+    private Integer successCount;
 
-        menuCMDLineAutoBot = new MenuCMDLineAutoBot<>(autoBot, List.of(DefaultMenuType.IMPORT));
-
-    }
-
-    @Test
-    public void test() throws DepinBotStartException {
-        menuCMDLineAutoBot.start();
-    }
-
-
-    @BotApplication(name = "test", describe = "dwadwa")
-    static class TestRestAutoBot extends RestTaskAutoBot {
-
-        public TestRestAutoBot(AutoBotConfig autoBotConfig, BotApi botApi) {
-            super(autoBotConfig, botApi);
-        }
-
-        @BotMethod(jobType = BotJobType.REGISTER)
-        public Result register(AccountContext accountContext, String inviteCode) {
-            return Result.ok("success");
-        }
-
-        @BotMethod(jobType = BotJobType.LOGIN)
-        public Result login(AccountContext accountContext) {
-            return Result.ok();
-        }
-
-        @BotMethod(jobType = BotJobType.TIMED_TASK, cronExpression = "*/10 * * * * ?")
-        public Result dailyCheckIn(AccountContext accountContext) {
-            return Result.ok("签到成功");
-        }
-
-        @MenuNodeMethod(title = "测试", description = "账户1，param -> 随机数")
-        public String test() {
-            getAccountContexts().getFirst().setParam("test", String.valueOf(RandomUtil.randomInt()));
-            return "";
-        }
+    public static ACListOptResult fail(
+            Integer botId,
+            String botName,
+            String jobName,
+            String errorMsg
+    ) {
+        return new ACListOptResult(botId, botName, jobName, false, errorMsg, null, 0);
     }
 }
+package cn.com.helei.bot.core.dto;
 
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-quartz</artifactId>
-        </dependency>
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+@Builder
+public class BotACJobResult {
+
+    private Integer botId;
+
+    private String group;
+
+    private String jobName;
+
+    private Integer acId;
+
+    private Boolean success;
+
+    private String errorMsg;
+
+    private Object data;
+
+    public BotACJobResult(Integer botId, String group, String jobName, Integer acId) {
+        this(botId, group, jobName, acId, true, null, null);
+    }
+
+    public static BotACJobResult ok(Integer botId, String group, String jobName, Integer acId) {
+        return new BotACJobResult(botId, group, jobName, acId, true, null, null);
+    }
+
+    public BotACJobResult setResult(Result result) {
+        this.success = result.getSuccess();
+        this.errorMsg = result.getErrorMsg();
+        this.data = result.getData();
+
+        return this;
+    }
+}
+package cn.com.helei.bot.core.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.Collection;
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class Result {
+    private Boolean success;
+    private String errorMsg;
+    private Object data;
+
+    public static Result ok(){
+        return new Result(true, null, null);
+    }
+    public static Result ok(Object data){
+        return new Result(true, null, data);
+    }
+    public static Result fail(String errorMsg){
+        return new Result(false, errorMsg, null);
+    }
+}
