@@ -1,49 +1,1456 @@
-package cn.com.helei.bot.core.supporter.botapi.impl;
+package cn.com.helei.bot.core.entity;
 
-import cn.com.helei.bot.core.mvc.service.*;
-import cn.com.helei.bot.core.supporter.botapi.BotApi;
-import cn.com.helei.bot.core.supporter.botapi.BotJobService;
-import lombok.Getter;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
+import cn.com.helei.bot.core.dto.ConnectStatusInfo;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenClass;
+import cn.com.helei.bot.core.util.excel.IntegerStringConverter;
+import cn.com.helei.bot.core.util.typehandler.LocalDateTimeTypeHandler;
+import cn.com.helei.bot.core.util.typehandler.MapTextTypeHandler;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenField;
+import com.alibaba.excel.annotation.ExcelProperty;
+import com.alibaba.fastjson.annotation.JSONField;
+import com.baomidou.mybatisplus.annotation.*;
 
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
 
+import lombok.*;
+
+/**
+ * <p>
+ *
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
 @Getter
-@Component
-public class DBBotApi implements BotApi {
+@Setter
+@TableName("t_bot_account_context")
+@NoArgsConstructor
+@Builder
+@AllArgsConstructor
+@PropertyChangeListenClass(isDeep = true)
+public class AccountContext {
 
-    @Autowired
-    private IAccountBaseInfoService accountBaseInfoService;
 
-    @Autowired
-    private ITwitterAccountService twitterAccountService;
+    @TableId(value = "id", type = IdType.AUTO)
+    private Integer id;
 
-    @Autowired
-    private IProxyInfoService proxyInfoService;
+    @TableField("bot_id")
+    private Integer botId;
 
-    @Autowired
-    private IBrowserEnvService browserEnvService;
+    @TableField("bot_key")
+    @ExcelProperty(value = "bot_key")
+    private String botKey;
 
-    @Autowired
-    private IDiscordAccountService discordAccountService;
+    @TableField("account_base_info_id")
+    @ExcelProperty(value = "account_base_info_id", converter = IntegerStringConverter.class)
+    private Integer accountBaseInfoId;
+
+    @TableField("twitter_id")
+    @ExcelProperty(value = "twitter_id", converter = IntegerStringConverter.class)
+    private Integer twitterId;
+
+    @TableField("discord_id")
+    @ExcelProperty(value = "discord_id", converter = IntegerStringConverter.class)
+    private Integer discordId;
+
+    @TableField("proxy_id")
+    @ExcelProperty(value = "proxy_id", converter = IntegerStringConverter.class)
+    private Integer proxyId;
+
+    @TableField("browser_env_id")
+    @ExcelProperty(value = "browser_env_id", converter = IntegerStringConverter.class)
+    private Integer browserEnvId;
+
+    @TableField("telegram_id")
+    @ExcelProperty(value = "telegram_id", converter = IntegerStringConverter.class)
+    private Integer telegramId;
+
+    @TableField("wallet_id")
+    @ExcelProperty(value = "wallet_id", converter = IntegerStringConverter.class)
+    private Integer walletId;
+
+    @TableField("reward_id")
+    private Integer rewardId;
+
+    /**
+     * 账号状态
+     * 0 表示初始状态
+     * 1 表示已注册
+     */
+    @TableField("status")
+    @PropertyChangeListenField
+    private Integer status;
+
+    @JSONField(serialize = true, deserialize = true)
+    @TableField(value = "params", typeHandler = MapTextTypeHandler.class)
+    @PropertyChangeListenField
+    private Map<String, Object> params = new HashMap<>();
+
+    @TableField(value = "insert_datetime", typeHandler = LocalDateTimeTypeHandler.class, fill = FieldFill.INSERT)
+    private LocalDateTime insertDatetime;
+
+    @TableField(value = "update_datetime", typeHandler = LocalDateTimeTypeHandler.class, fill = FieldFill.INSERT_UPDATE)
+    private LocalDateTime updateDatetime;
+
+    @TableField(value = "is_valid", fill = FieldFill.INSERT)
+    @TableLogic
+    private Integer isValid;
+
+
+    @TableField(exist = false)
+    @PropertyChangeListenField
+    private RewordInfo rewordInfo = new RewordInfo();
+
+    @TableField(exist = false)
+    private AccountBaseInfo accountBaseInfo;
+
+    @TableField(exist = false)
+    private TwitterAccount twitter;
+
+    @TableField(exist = false)
+    private DiscordAccount discord;
+
+    @TableField(exist = false)
+    private TelegramAccount telegram;
+
+    @TableField(exist = false)
+    private ProxyInfo proxy;
+
+    @TableField(exist = false)
+    private BrowserEnv browserEnv;
+
+    @TableField(exist = false)
+    private final ConnectStatusInfo connectStatusInfo = new ConnectStatusInfo();
+
+    public String getParam(String key) {
+        return String.valueOf(params.get(key));
+    }
+
+    public void setParam(String key, Object value) {
+        params.put(key, value);
+    }
+
+    public void removeParam(String key) {
+        params.remove(key);
+    }
+
+    public String getName() {
+        return accountBaseInfo.getName() == null ? accountBaseInfo.getEmail() : accountBaseInfo.getName();
+    }
+
+    public String getSimpleInfo() {
+        return String.format("%s-账户[%s]-代理[%s]", getAccountBaseInfo().getId(), getName(), getProxy() == null ? "NO_PROXY" : getProxy().getAddressStr());
+    }
+
+    public Boolean isSignUp() {
+        return status != null && status == 1;
+    }
+
+    public String getType() {
+        return accountBaseInfo == null ? null : accountBaseInfo.getType();
+    }
+
+    public static void signUpSuccess(AccountContext accountContext) {
+        accountContext.setStatus(1);
+    }
+}
+
+package cn.com.helei.bot.core.entity;
+
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenClass;
+import cn.com.helei.bot.core.util.typehandler.LocalDateTimeTypeHandler;
+import com.baomidou.mybatisplus.annotation.*;
+
+
+        import lombok.Getter;
+import lombok.Setter;
+
+import java.time.LocalDateTime;
+
+/**
+ * <p>
+ *
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Getter
+@Setter
+@TableName("t_reword_info")
+@PropertyChangeListenClass
+public class RewordInfo {
+
+    @TableId(value = "project_account_id", type = IdType.INPUT)
+    private Integer projectAccountId;
+
+    @TableField("total_points")
+    private Double totalPoints;
+
+    @TableField("session")
+    private String session;
+
+    @TableField("session_points")
+    private Double sessionPoints;
+
+    @TableField("daily_points")
+    private Double dailyPoints;
+
+    @TableField(value = "insert_datetime", typeHandler = LocalDateTimeTypeHandler.class, fill = FieldFill.INSERT)
+    private LocalDateTime insertDatetime;
+
+    @TableField(value = "update_datetime", typeHandler = LocalDateTimeTypeHandler.class, fill = FieldFill.INSERT_UPDATE)
+    private LocalDateTime updateDatetime;
+
+    @TableField(value = "is_valid", fill = FieldFill.INSERT)
+    @TableLogic
+    private Integer isValid;
+
+
+
+    public RewordInfo newInstance() {
+        RewordInfo rewordInfo = new RewordInfo();
+        rewordInfo.totalPoints = this.totalPoints;
+        rewordInfo.session = this.session;
+        rewordInfo.sessionPoints = this.sessionPoints;
+        rewordInfo.dailyPoints = this.dailyPoints;
+        rewordInfo.insertDatetime = this.insertDatetime;
+        rewordInfo.updateDatetime = this.updateDatetime;
+        rewordInfo.isValid = this.isValid;
+
+        return rewordInfo;
+    }
+}
+package cn.com.helei.bot.core.mvc.controller;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.mvc.service.IBotAccountContextService;
+import cn.com.helei.bot.core.mvc.vo.BotImportVO;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * <p>
+ * 前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@RestController
+@RequestMapping("/accountContext")
+public class BotAccountContextController {
 
     @Autowired
     private IBotAccountContextService botAccountContextService;
 
+    @PostMapping("/batchAdd")
+    public Result batchAdd(@RequestBody BotImportVO importVO) {
+        return botAccountContextService.saveBotAccountContext(importVO.getBotId(), importVO.getBotKey(), importVO.getRawLines());
+    }
+}
+package cn.com.helei.bot.core.mvc.controller;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.mvc.service.IBrowserEnvService;
+import cn.com.helei.bot.core.mvc.vo.BotImportVO;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+/**
+ * <p>
+ *  前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@RestController
+@RequestMapping("/browserEnv")
+public class BrowserEnvController {
     @Autowired
-    private IRewordInfoService rewordInfoService;
+    private IBrowserEnvService browserEnvService;
+
+    @PostMapping("/batchAdd")
+    public Result batchAdd(@RequestBody BotImportVO importVO) {
+        return browserEnvService.saveBrowserEnvs(importVO.getRawLines());
+    }
+
+}
+package cn.com.helei.bot.core.mvc.controller;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.BrowserEnv;
+import cn.com.helei.bot.core.entity.DiscordAccount;
+import cn.com.helei.bot.core.mvc.service.IBrowserEnvService;
+import cn.com.helei.bot.core.mvc.service.IDiscordAccountService;
+import cn.com.helei.bot.core.mvc.vo.BotImportVO;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+/**
+ * <p>
+ *  前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@RestController
+@RequestMapping("/discordAccount")
+public class DiscordAccountController {
+    @Autowired
+    private IDiscordAccountService discordAccountService;
+
+    @PostMapping("/batchAdd")
+    public Result batchAdd(@RequestBody BotImportVO importVO) {
+        return discordAccountService.saveDiscordAccounts(importVO.getRawLines());
+    }
+}
+package cn.com.helei.bot.core.mvc.controller;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import cn.com.helei.bot.core.mvc.service.IProxyInfoService;
+import cn.com.helei.bot.core.mvc.vo.BotImportVO;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+/**
+ * <p>
+ *  前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@RestController
+@RequestMapping("/proxyInfo")
+public class ProxyInfoController {
 
     @Autowired
-    private DBImportService importService;
+    private IProxyInfoService proxyInfoService;
+
+    @PostMapping("/batchAdd")
+    public Result batchAdd(@RequestBody BotImportVO importVO) {
+        return proxyInfoService.saveProxyInfos(importVO.getRawLines());
+    }
+
+}
+package cn.com.helei.bot.core.mvc.controller;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.mvc.service.ITelegramAccountService;
+import cn.com.helei.bot.core.mvc.vo.BotImportVO;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * <p>
+ *  前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-06
+ */
+@RestController
+@RequestMapping("/core/telegramAccount")
+public class TelegramAccountController {
 
     @Autowired
-    private IProjectInfoService projectInfoService;
+    private ITelegramAccountService telegramAccountService;
+
+    @PostMapping("/batchAdd")
+    public Result batchAdd(@RequestBody BotImportVO importVO) {
+        return telegramAccountService.saveTelegrams(importVO.getRawLines());
+    }
+}
+package cn.com.helei.bot.core.mvc.controller;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.TwitterAccount;
+import cn.com.helei.bot.core.mvc.service.ITwitterAccountService;
+import cn.com.helei.bot.core.mvc.vo.BotImportVO;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+/**
+ * <p>
+ *  前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@RestController
+@RequestMapping("/core/twitterAccount")
+public class TwitterAccountController {
+    @Autowired
+    private ITwitterAccountService twitterAccountService;
+
+    @PostMapping("/batchAdd")
+    public Result batchAdd(@RequestBody BotImportVO importVO) {
+        return twitterAccountService.saveTwitters(importVO.getRawLines());
+    }
+}
+package cn.com.helei.bot.core.mvc.service.impl;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.mvc.mapper.BotAccountContextMapper;
+import cn.com.helei.bot.core.mvc.service.IBotAccountContextService;
+import cn.com.helei.bot.core.supporter.botapi.ImportService;
+import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@Service
+public class BotAccountContextServiceImpl extends ServiceImpl<BotAccountContextMapper, AccountContext> implements IBotAccountContextService {
 
     @Autowired
-    private IBotInfoService botInfoService;
+    private ImportService importService;
+
+    @Override
+    public Integer insertOrUpdate(AccountContext accountBaseInfo) {
+        accountBaseInfo.setInsertDatetime(LocalDateTime.now());
+        accountBaseInfo.setUpdateDatetime(LocalDateTime.now());
+        accountBaseInfo.setIsValid(1);
+
+        return baseMapper.insertOrUpdate(accountBaseInfo);
+    }
+
+    @Override
+    public Integer insertOrUpdateBatch(List<AccountContext> accountContext) {
+        int successCount = 0;
+        for (AccountContext accountBaseInfo : accountContext) {
+            try {
+                Integer count = insertOrUpdate(accountBaseInfo);
+                successCount += count == null ? 0 : count;;
+            } catch (Exception e) {
+                log.error("insert or update [{}] error", accountBaseInfo, e);
+            }
+        }
+
+        return successCount;
+    }
+
+    @Override
+    public Result saveBotAccountContext(Integer botId, String botKey, List<Map<String, Object>> rawLines) {
+        if (botId == null || StrUtil.isBlank(botKey)) {
+            return Result.fail("botId或botKey不能为空");
+        }
+
+        try {
+            importService.importBotAccountContextFromRaw(botId, botKey, rawLines);
+
+            return Result.ok();
+        } catch (Exception e) {
+            log.error("botId[{}]-botKey[{}] 报错账户信息失败", botId, botKey, e);
+            return Result.fail("保存失败, " + e.getMessage());
+        }
+    }
+}
+package cn.com.helei.bot.core.mvc.service.impl;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.BrowserEnv;
+import cn.com.helei.bot.core.mvc.mapper.BrowserEnvMapper;
+import cn.com.helei.bot.core.mvc.service.IBrowserEnvService;
+import cn.com.helei.bot.core.supporter.botapi.ImportService;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@Service
+public class BrowserEnvServiceImpl extends ServiceImpl<BrowserEnvMapper, BrowserEnv> implements IBrowserEnvService {
 
     @Autowired
-    private BotJobService botJobService;
+    private ImportService importService;
+
+    @Override
+    public Integer insertOrUpdate(BrowserEnv browserEnv) {
+        browserEnv.setInsertDatetime(LocalDateTime.now());
+        browserEnv.setUpdateDatetime(LocalDateTime.now());
+        browserEnv.setIsValid(1);
+
+        return baseMapper.insertOrUpdate(browserEnv);
+    }
+
+    @Override
+    public Integer insertOrUpdateBatch(List<BrowserEnv> browserEnvs) {
+        int successCount = 0;
+        for (BrowserEnv browserEnv : browserEnvs) {
+            try {
+                Integer count = insertOrUpdate(browserEnv);
+                successCount += count == null ? 0 : count;;
+            } catch (Exception e) {
+                log.error("insert or update [{}] error", browserEnv, e);
+            }
+        }
+
+        return successCount;
+    }
+
+    @Override
+    public Result saveBrowserEnvs(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importService.importBrowserEnvFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail("导入浏览器环境失败," + e.getMessage());
+        }
+    }
+}
+package cn.com.helei.bot.core.mvc.service.impl;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.DiscordAccount;
+import cn.com.helei.bot.core.mvc.mapper.DiscordAccountMapper;
+import cn.com.helei.bot.core.mvc.service.IDiscordAccountService;
+import cn.com.helei.bot.core.supporter.botapi.ImportService;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@Service
+public class DiscordAccountServiceImpl extends ServiceImpl<DiscordAccountMapper, DiscordAccount> implements IDiscordAccountService {
+
+    @Autowired
+    private ImportService importService;
+
+    @Override
+    public Integer insertOrUpdate(DiscordAccount discordAccount) {
+        discordAccount.setInsertDatetime(LocalDateTime.now());
+        discordAccount.setUpdateDatetime(LocalDateTime.now());
+        discordAccount.setIsValid(1);
+
+        return baseMapper.insertOrUpdate(discordAccount);
+    }
+
+    @Override
+    public Integer insertOrUpdateBatch(List<DiscordAccount> browserEnvs) {
+        int successCount = 0;
+        for (DiscordAccount discordAccount : browserEnvs) {
+            try {
+                Integer count = insertOrUpdate(discordAccount);
+                successCount += count == null ? 0 : count;;
+            } catch (Exception e) {
+                log.error("insert or update [{}] error", discordAccount, e);
+            }
+        }
+
+        return successCount;
+    }
+
+    @Override
+    public Result saveDiscordAccounts(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importService.importDiscordFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail("导入discord账号失败," + e.getMessage());
+        }
+    }
+}
+package cn.com.helei.bot.core.mvc.service.impl;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import cn.com.helei.bot.core.mvc.mapper.ProxyInfoMapper;
+import cn.com.helei.bot.core.mvc.service.IProxyInfoService;
+import cn.com.helei.bot.core.supporter.botapi.ImportService;
+import com.baomidou.mybatisplus.extension.service.IService;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@Service
+public class ProxyInfoServiceImpl extends ServiceImpl<ProxyInfoMapper, ProxyInfo> implements IProxyInfoService {
+
+    @Autowired
+    private ImportService importService;
+
+    @Override
+    public Integer insertOrUpdate(ProxyInfo proxyInfo) {
+        proxyInfo.setInsertDatetime(LocalDateTime.now());
+        proxyInfo.setUpdateDatetime(LocalDateTime.now());
+        proxyInfo.setIsValid(1);
+
+        return baseMapper.insertOrUpdate(proxyInfo);
+    }
+
+    @Override
+    public Integer insertOrUpdateBatch(List<ProxyInfo> browserEnvs) {
+        int successCount = 0;
+        for (ProxyInfo proxyInfo : browserEnvs) {
+            try {
+                Integer count = insertOrUpdate(proxyInfo);
+                successCount += count == null ? 0 : count;;
+            } catch (Exception e) {
+                log.error("insert or update [{}] error", proxyInfo, e);
+            }
+        }
+
+        return successCount;
+    }
+
+    @Override
+    public Result saveProxyInfos(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importService.importProxyFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail("导入代理信息失败," + e.getMessage());
+        }
+    }
+}
+package cn.com.helei.bot.core.mvc.service.impl;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.TelegramAccount;
+import cn.com.helei.bot.core.mvc.mapper.TelegramAccountMapper;
+import cn.com.helei.bot.core.mvc.service.ITelegramAccountService;
+import cn.com.helei.bot.core.supporter.botapi.ImportService;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-06
+ */
+@Slf4j
+@Service
+public class TelegramAccountServiceImpl extends ServiceImpl<TelegramAccountMapper, TelegramAccount> implements ITelegramAccountService {
+
+    @Autowired
+    private ImportService importService;
+
+    @Override
+    public Integer insertOrUpdate(TelegramAccount telegramAccount) {
+        telegramAccount.setInsertDatetime(LocalDateTime.now());
+        telegramAccount.setUpdateDatetime(LocalDateTime.now());
+        telegramAccount.setIsValid(1);
+
+        return baseMapper.insertOrUpdate(telegramAccount);
+    }
+
+    @Override
+    public Integer insertOrUpdateBatch(List<TelegramAccount> browserEnvs) {
+        int successCount = 0;
+        for (TelegramAccount telegramAccount : browserEnvs) {
+            try {
+                Integer count = insertOrUpdate(telegramAccount);
+                successCount += count == null ? 0 : count;;
+            } catch (Exception e) {
+                log.error("insert or update [{}] error", telegramAccount, e);
+            }
+        }
+
+        return successCount;
+    }
+
+    @Override
+    public Result saveTelegrams(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importService.importTelegramFormRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail("导入telegram账号失败," + e.getMessage());
+        }
+    }
+}
+package cn.com.helei.bot.core.mvc.service.impl;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.TwitterAccount;
+import cn.com.helei.bot.core.mvc.mapper.TwitterAccountMapper;
+import cn.com.helei.bot.core.mvc.service.ITwitterAccountService;
+import cn.com.helei.bot.core.supporter.botapi.ImportService;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@Service
+public class TwitterAccountServiceImpl extends ServiceImpl<TwitterAccountMapper, TwitterAccount> implements ITwitterAccountService {
+
+    @Autowired
+    private ImportService importService;
+
+    @Override
+    public Integer insertOrUpdate(TwitterAccount twitterAccount) {
+        twitterAccount.setInsertDatetime(LocalDateTime.now());
+        twitterAccount.setUpdateDatetime(LocalDateTime.now());
+        twitterAccount.setIsValid(1);
+
+        return baseMapper.insertOrUpdate(twitterAccount);
+    }
+
+    @Override
+    public Integer insertOrUpdateBatch(List<TwitterAccount> browserEnvs) {
+        int successCount = 0;
+        for (TwitterAccount twitterAccount : browserEnvs) {
+            try {
+                Integer count = insertOrUpdate(twitterAccount);
+                successCount += count == null ? 0 : count;;
+            } catch (Exception e) {
+                log.error("insert or update [{}] error", twitterAccount, e);
+            }
+        }
+
+        return successCount;
+    }
+
+    @Override
+    public Result saveTwitters(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importService.importTwitterFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail("导入twitter 账号失败," + e.getMessage());
+        }
+    }
+}
+package cn.com.helei.bot.core.mvc.service;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.AccountContext;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IBotAccountContextService extends IService<AccountContext> {
+    Integer insertOrUpdate(AccountContext accountBaseInfo);
+
+    Integer insertOrUpdateBatch(List<AccountContext> twitterAccounts);
+
+    Result saveBotAccountContext(Integer botId, String botKey, List<Map<String, Object>> acKVMap);
+}
+package cn.com.helei.bot.core.mvc.service;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.BrowserEnv;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IBrowserEnvService extends IService<BrowserEnv> {
+
+    Integer insertOrUpdate(BrowserEnv browserEnv);
+
+    Integer insertOrUpdateBatch(List<BrowserEnv> browserEnvs);
+
+    Result saveBrowserEnvs(List<Map<String, Object>> rawLines);
+}
+package cn.com.helei.bot.core.mvc.service;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.DiscordAccount;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IDiscordAccountService extends IService<DiscordAccount> {
+
+    Integer insertOrUpdate(DiscordAccount discordAccount);
+
+    Integer insertOrUpdateBatch(List<DiscordAccount> discordAccounts);
+
+    Result saveDiscordAccounts(List<Map<String, Object>> rawLines);
+}
+package cn.com.helei.bot.core.mvc.service;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IProxyInfoService extends IService<ProxyInfo> {
+
+    Integer insertOrUpdate(ProxyInfo proxyInfo);
+
+    Integer insertOrUpdateBatch(List<ProxyInfo> proxyInfo);
+
+    Result saveProxyInfos(List<Map<String, Object>> rawLines);
+}
+package cn.com.helei.bot.core.mvc.service;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.TelegramAccount;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-06
+ */
+public interface ITelegramAccountService extends IService<TelegramAccount> {
+
+    Integer insertOrUpdate(TelegramAccount telegramAccount);
+
+    Integer insertOrUpdateBatch(List<TelegramAccount> telegramAccounts);
+
+    Result saveTelegrams(List<Map<String, Object>> rawLines);
+}
+package cn.com.helei.bot.core.mvc.service;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.TwitterAccount;
+import com.baomidou.mybatisplus.extension.service.IService;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface ITwitterAccountService extends IService<TwitterAccount> {
+
+    Integer insertOrUpdate(TwitterAccount twitterAccount);
+
+    Integer insertOrUpdateBatch(List<TwitterAccount> twitterAccounts);
+
+    Result saveTwitters(List<Map<String, Object>> rawLines);
+}
+package cn.com.helei.bot.core.mvc.vo;
+
+import lombok.Data;
+
+import java.util.List;
+import java.util.Map;
+
+@Data
+public class BotImportVO {
+
+    private Integer botId;
+
+    private String botKey;
+
+    private List<Map<String, Object>> rawLines;
+}
+package cn.com.helei.bot.core.supporter.botapi.impl;
+
+import cn.com.helei.bot.core.config.SystemConfig;
+import cn.com.helei.bot.core.constants.ProxyProtocol;
+import cn.com.helei.bot.core.constants.ProxyType;
+import cn.com.helei.bot.core.entity.*;
+import cn.com.helei.bot.core.mvc.service.*;
+import cn.com.helei.bot.core.mvc.service.ITelegramAccountService;
+import cn.com.helei.bot.core.supporter.botapi.ImportService;
+import cn.com.helei.bot.core.util.excel.ExcelReadUtil;
+import cn.com.helei.bot.core.util.FileUtil;
+import cn.hutool.core.util.BooleanUtil;
+import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
+
+import static cn.com.helei.bot.core.constants.MapConfigKey.USER_AGENT_KEY;
+
+@Slf4j
+@Component
+public class DBImportService implements ImportService {
+
+    public static final String DEFAULT_ACCOUNT_TYPE = "default";
+
+    @Autowired
+    @Lazy
+    private IBotAccountContextService botAccountContextService;
+
+    @Autowired
+    @Lazy
+    private IAccountBaseInfoService accountBaseInfoService;
+
+    @Autowired
+    @Lazy
+    private IProxyInfoService proxyInfoService;
+
+    @Autowired
+    @Lazy
+    private IBrowserEnvService browserEnvService;
+
+    @Autowired
+    @Lazy
+    private ITwitterAccountService twitterAccountService;
+
+    @Autowired
+    @Lazy
+    private IDiscordAccountService discordAccountService;
+
+    @Autowired
+    @Lazy
+    private ITelegramAccountService telegramAccountService;
+
+
+    @Override
+    public Integer importBotAccountContextFromExcel(Integer botId, String botKey, String fileBotConfigPath) {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_APP_PATH, fileBotConfigPath);
+
+        try {
+            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(proxyFilePath);
+
+            return importBotAccountContextFromRaw(botId, botKey, rawLines);
+        } catch (Exception e) {
+            log.error("读取twitter account 文件[{}]发生异常", proxyFilePath, e);
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importBotAccountContextFromRaw(Integer botId, String botKey, List<Map<String, Object>> rawLines) {
+        List<AccountContext> accountContexts = rawLines.stream().map(map -> {
+                    Integer customBotId = autoCast(map.remove("bot_id"));
+                    String customBotKey = autoCast(map.remove("bot_key"));
+
+                    return AccountContext.builder()
+                            .botId(customBotId == null ? botId : customBotId)
+                            .botKey(StrUtil.isBlank(customBotKey) ? botKey : customBotKey)
+                            .accountBaseInfoId(toInteger(map.remove("account_base_info_id")))
+                            .twitterId(toInteger(map.remove("twitter_id")))
+                            .discordId(toInteger(map.remove("discord_id")))
+                            .proxyId(toInteger((map.remove("proxy_id"))))
+                            .browserEnvId(toInteger(map.remove("browser_env_id")))
+                            .telegramId(toInteger(map.remove("telegram_id")))
+                            .walletId(toInteger(map.remove("wallet_id")))
+                            .params(map)
+                            .build();
+                })
+                .toList();
+
+        // 没设置代理的根据配置填充代理
+//            tryFillProxy(accountContexts, proxyRepeat, proxyType);
+
+        // 没设置浏览器环境的根据设置填充环境
+        tryFillBrowserEnv(accountContexts);
+
+        return botAccountContextService.insertOrUpdateBatch(accountContexts);
+    }
+
+
+    @Override
+    public Integer importBrowserEnvFromExcel(String fileBotConfigPath) {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        List<Map<String, Object>> headerList = ExcelReadUtil.readExcelToMap(proxyFilePath);
+
+        log.info("文件解析成功, 共[{}]个", headerList.size());
+        return importProxyFromRaw(headerList);
+    }
+
+    @Override
+    public Integer importBrowserEnvFromRaw(List<Map<String, Object>> rawLines) {
+
+        List<BrowserEnv> list = rawLines.stream().map(map -> {
+            Object userAgent = map.remove(USER_AGENT_KEY);
+            if (userAgent == null) return null;
+
+            BrowserEnv browserEnv = new BrowserEnv();
+            browserEnv.setUserAgent((String) userAgent);
+            browserEnv.setOtherHeader(map);
+            return browserEnv;
+        }).filter(Objects::nonNull).toList();
+
+        return browserEnvService.insertOrUpdateBatch(list);
+    }
+
+    @Override
+    public Integer importProxyFromExcel(String botConfigPath) {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, botConfigPath);
+
+        int total = 0;
+
+        try {
+            List<Map<String, Object>> staticProxies = ExcelReadUtil.readExcelToMap(proxyFilePath, "static");
+
+            total += importProxyFromRaw(staticProxies);
+
+            List<Map<String, Object>> dynamicProxies = ExcelReadUtil.readExcelToMap(proxyFilePath, "dynamic");
+
+            total += importProxyFromRaw(dynamicProxies);
+
+            log.info("代理配置文件解析成功，static-proxy:[{}], dynamic-proxy:[{}]", staticProxies.size(), dynamicProxies.size());
+
+            return total;
+        } catch (Exception e) {
+            log.error("解析代理配置文件[{}]错误", proxyFilePath, e);
+
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importProxyFromRaw(List<Map<String, Object>> rawLines) {
+
+        List<ProxyInfo> list = rawLines.stream().map(map -> {
+            String proxyProtocol = autoCast(map.remove("proxy_protocol"));
+
+            return ProxyInfo.builder()
+                    .proxyType(ProxyType.STATIC)
+                    .host(autoCast(map.remove("host")))
+                    .port(Integer.valueOf(autoCast(map.remove("port"))))
+                    .proxyProtocol(ProxyProtocol.valueOf(proxyProtocol.toUpperCase()))
+                    .username(autoCast(map.remove("username")))
+                    .password(autoCast(map.remove("password")))
+                    .params(map)
+                    .build();
+        }).toList();
+
+        return proxyInfoService.insertOrUpdateBatch(list);
+    }
+
+    @Override
+    public Map<String, Integer> importAccountBaseInfoFromExcel(String botConfigPath) {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, botConfigPath);
+        Map<String, Integer> result = new HashMap<>();
+
+        try {
+            ExcelReadUtil.readExcelAsMap(
+                    proxyFilePath,
+                    (type, map) -> AccountBaseInfo.builder()
+                            .type(type)
+                            .name(autoCast(map.remove("name")))
+                            .email(autoCast(map.remove("email")))
+                            .password(autoCast(map.remove("password")))
+                            .params(map)
+                            .build(),
+                    (type, accountBaseInfos) -> CompletableFuture.runAsync(() -> {
+                        log.info("[{}] 账号基本信息读取完毕, 共[{}]", type, accountBaseInfos.size());
+                        Integer insertCount = accountBaseInfoService.insertOrUpdateBatch(accountBaseInfos);
+
+                        log.info("[{}] 账号基本信息保存成功, 新增[{}], 共[{}]", type, insertCount, accountBaseInfos.size());
+
+                        result.put(type, accountBaseInfos.size());
+                    })
+            );
+
+        } catch (IOException e) {
+            log.error("从文件导入账号基本信息出错", e);
+        }
+
+        return result;
+    }
+
+    @Override
+    public Integer importAccountBaseInfoFromRaw(List<Map<String, Object>> rawLines) {
+        List<AccountBaseInfo> list = rawLines.stream().map(map -> {
+            String type = autoCast(map.remove("type"));
+
+            return AccountBaseInfo.builder()
+                    .type(StrUtil.isBlank(type) ? DEFAULT_ACCOUNT_TYPE : type)
+                    .name(autoCast(map.remove("name")))
+                    .email(autoCast(map.remove("email")))
+                    .password(autoCast(map.remove("password")))
+                    .params(map)
+                    .build();
+        }).toList();
+
+        return accountBaseInfoService.insertOrUpdateBatch(list);
+    }
+
+    @Override
+    public Integer importTwitterFromExcel(String fileBotConfigPath) {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        try {
+            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(proxyFilePath);
+
+            return importTwitterFromRaw(rawLines);
+        } catch (Exception e) {
+            log.error("读取twitter account 文件[{}]发生异常", proxyFilePath, e);
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importTwitterFromRaw(List<Map<String, Object>> rawLines) {
+        List<TwitterAccount> twitterAccounts = rawLines.stream().map(map -> TwitterAccount.builder()
+                .username(autoCast(map.remove("username")))
+                .password(autoCast(map.remove("password")))
+                .email(autoCast(map.remove("email")))
+                .emailPassword(autoCast(map.remove("email_password")))
+                .token(autoCast(map.remove("token")))
+                .f2aKey(autoCast(map.remove("f2a_key")))
+                .params(map)
+                .build()).toList();
+
+        return twitterAccountService.insertOrUpdateBatch(twitterAccounts);
+    }
+
+    @Override
+    public Integer importDiscordFromExcel(String fileBotConfigPath) {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        try {
+            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(dirResourcePath);
+
+            return importDiscordFromRaw(rawLines);
+        } catch (Exception e) {
+            log.error("读取discord account 文件[{}]发生异常", dirResourcePath, e);
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importDiscordFromRaw(List<Map<String, Object>> rawLines) {
+        List<DiscordAccount> discordAccounts = rawLines.stream().map(map -> DiscordAccount.builder()
+                .username(autoCast(map.remove("username")))
+                .password(autoCast(map.remove("password")))
+                .bindEmail(autoCast(map.remove("bind_email")))
+                .bindEmailPassword(autoCast(map.remove("bind_email_password")))
+                .token(autoCast(map.remove("token")))
+                .params(map)
+                .build()
+        ).toList();
+
+        return discordAccountService.insertOrUpdateBatch(discordAccounts);
+    }
+
+    @Override
+    public Integer importTelegramFormExcel(String fileBotConfigPath) {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        try {
+            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(dirResourcePath);
+
+            return importTelegramFormRaw(rawLines);
+        } catch (Exception e) {
+            log.error("读取telegram account 文件[{}]发生异常", dirResourcePath, e);
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importTelegramFormRaw(List<Map<String, Object>> rawLines) {
+
+        List<TelegramAccount> telegramAccounts = rawLines.stream().map(map -> TelegramAccount.builder()
+                .username(autoCast(map.remove("username")))
+                .password(autoCast(map.remove("password")))
+                .phonePrefix(autoCast(map.remove("phone_prefix")))
+                .phone(autoCast(map.remove("phone")))
+                .token(autoCast(map.remove("token")))
+                .params(map)
+                .build()
+        ).toList();
+
+
+        return telegramAccountService.insertOrUpdateBatch(telegramAccounts);
+    }
+
+
+    private static <T> T autoCast(Object obj) {
+        return obj == null ? null : (T) obj;
+    }
+
+    private static Integer toInteger(Object obj) {
+        return obj == null ? null : Integer.valueOf(obj.toString());
+    }
+
+    /**
+     * 填充代理
+     *
+     * @param accountContexts accountContexts
+     * @param proxyType       proxyType
+     */
+    private void tryFillProxy(List<AccountContext> accountContexts, Boolean proxyRepeat, ProxyType proxyType) {
+        ;// 创建 Page 对象，设置当前页和每页的条数
+
+        Page<ProxyInfo> page = new Page<>(1, accountContexts.size());
+        QueryWrapper<ProxyInfo> queryWrapper = new QueryWrapper<>(ProxyInfo.builder().proxyType(proxyType).build())
+                .select("id");
+
+        List<ProxyInfo> allProxy = proxyInfoService.list(page, queryWrapper);
+
+
+        // 筛选
+        Map<Integer, Integer> proxyUseCount = new HashMap<>();
+        Map<Integer, ProxyInfo> idMapProxy = allProxy.stream().collect(Collectors.toMap(ProxyInfo::getId, p -> {
+            proxyUseCount.put(p.getId(), 0);
+            return p;
+        }));
+
+        Set<AccountContext> noProxyAccounts = new HashSet<>();
+
+        accountContexts.forEach(accountContext -> {
+
+            Integer proxyId = accountContext.getProxyId();
+
+            if (proxyId == null || !idMapProxy.containsKey(proxyId)) {
+                // 代理配置无效，给他添上
+                noProxyAccounts.add(accountContext);
+            } else if (proxyUseCount.getOrDefault(proxyId, 0) > 1 && BooleanUtil.isFalse(proxyRepeat)) {
+                // 代理被使用过,并且不允许重复使用
+                noProxyAccounts.add(accountContext);
+            } else {
+                proxyUseCount.put(proxyId, proxyUseCount.getOrDefault(proxyId, 0) + 1);
+            }
+        });
+
+
+        // 填充代理
+        List<Integer> ids = getLessUsedItem(proxyUseCount, noProxyAccounts.size());
+        ArrayList<AccountContext> list = new ArrayList<>(noProxyAccounts);
+        for (int i = 0; i < ids.size(); i++) {
+            list.get(i).setProxyId(ids.get(i));
+        }
+    }
+
+
+    /**
+     * 填充浏览器环境
+     *
+     * @param accountContexts accountContexts
+     */
+    private void tryFillBrowserEnv(List<AccountContext> accountContexts) {
+        Page<BrowserEnv> page = new Page<>(1, accountContexts.size());
+        QueryWrapper<BrowserEnv> queryWrapper = new QueryWrapper<BrowserEnv>().select("id");
+
+        List<BrowserEnv> allProxy = browserEnvService.list(page, queryWrapper);
+
+        Map<Integer, Integer> useCount = new HashMap<>();
+        Map<Integer, BrowserEnv> idMapEnv = allProxy.stream().collect(Collectors.toMap(BrowserEnv::getId, p -> {
+            useCount.put(p.getId(), 0);
+            return p;
+        }));
+
+
+        Set<AccountContext> noUseAccounts = new HashSet<>();
+
+        accountContexts.forEach(accountContext -> {
+            Integer browserEnvId = accountContext.getBrowserEnvId();
+
+            if (browserEnvId == null || !idMapEnv.containsKey(browserEnvId)) {
+                // 配置无效，给他添上
+                noUseAccounts.add(accountContext);
+            } else {
+                useCount.put(browserEnvId, useCount.getOrDefault(browserEnvId, 0) + 1);
+            }
+        });
+
+        // 填充浏览器环境
+        List<Integer> ids = getLessUsedItem(useCount, noUseAccounts.size());
+        ArrayList<AccountContext> list = new ArrayList<>(noUseAccounts);
+        for (int i = 0; i < ids.size(); i++) {
+            list.get(i).setBrowserEnvId(ids.get(i));
+        }
+    }
+
+
+    /**
+     * 获取最少使用的
+     *
+     * @param count 数量
+     * @return List<T>
+     */
+    private List<Integer> getLessUsedItem(Map<Integer, Integer> useCountMap, int count) {
+        if (useCountMap == null || useCountMap.isEmpty()) return Collections.emptyList();
+        int batchSize = Math.min(count, useCountMap.size());
+
+        List<Integer> res = new ArrayList<>(count);
+
+        int needCount = count;
+        while (needCount > 0) {
+            int currentSize = Math.min(needCount, batchSize);
+
+            List<Integer> batch = useCountMap.entrySet().stream()
+                    .sorted((e1, e2) -> e1.getValue().compareTo(e2.getValue()))
+                    .limit(currentSize)
+                    .map(e -> {
+                        useCountMap.compute(e.getKey(), (k, v) -> v == null ? 0 : v + 1);
+                        return e.getKey();
+                    }).toList();
+            res.addAll(batch);
+
+            needCount -= batch.size();
+        }
+
+        return res;
+    }
+
 }
 package cn.com.helei.bot.core.supporter.botapi.impl;
 
@@ -112,12 +1519,23 @@ public class QuartzBotJobService implements BotJobService {
                         .storeDurably()
                         .build();
 
-                CronTrigger trigger = TriggerBuilder.newTrigger()
+                TriggerBuilder<Trigger> triggerBuilder = TriggerBuilder.newTrigger()
                         .withIdentity(jobParam.getJobName(), jobParam.getGroup())
-                        .withSchedule(CronScheduleBuilder.cronSchedule(jobParam.getCronExpression()))
-                        .build();
+                        .startNow();
 
-                scheduler.scheduleJob(jobDetail, trigger);
+                if (jobParam.getIntervalInSecond() != null) {
+                    triggerBuilder
+                            .withSchedule(SimpleScheduleBuilder
+                                    .simpleSchedule()
+                                    .withIntervalInSeconds(jobParam.getIntervalInSecond())
+                                    .repeatForever()
+                            );
+                } else if (jobParam.getCronExpression() != null) {
+                    triggerBuilder
+                            .withSchedule(CronScheduleBuilder.cronSchedule(jobParam.getCronExpression()));
+                }
+
+                scheduler.scheduleJob(jobDetail, triggerBuilder.build());
             }
         } catch (Exception e) {
             result.setSuccess(false);
@@ -133,1744 +1551,723 @@ public class QuartzBotJobService implements BotJobService {
 package cn.com.helei.bot.core.supporter.botapi;
 
 
-import cn.com.helei.bot.core.mvc.service.*;
-
-public interface BotApi {
-
-    IProjectInfoService getProjectInfoService();
-
-    IBotInfoService getBotInfoService();
-
-    IAccountBaseInfoService getAccountBaseInfoService();
-
-    IBrowserEnvService getBrowserEnvService();
-
-    IDiscordAccountService getDiscordAccountService();
-
-    IBotAccountContextService getBotAccountContextService();
-
-    IProxyInfoService getProxyInfoService();
-
-    IRewordInfoService getRewordInfoService();
-
-    ITwitterAccountService getTwitterAccountService();
-
-    ImportService getImportService();
-
-    BotJobService getBotJobService();
-}
-package cn.com.helei.bot.core.supporter.botapi;
-
-import cn.com.helei.bot.core.bot.job.AutoBotJob;
-import cn.com.helei.bot.core.bot.job.AutoBotJobParam;
-import cn.com.helei.bot.core.dto.BotACJobResult;
-
-import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 
-public interface BotJobService {
+public interface ImportService {
 
-    /**
-     * 批量注册job
-     *
-     * @param autoBotJobParams autoBotJobParams
-     * @return Result
-     */
-    List<BotACJobResult> registerJobList(Collection<AutoBotJobParam> autoBotJobParams);
+    Integer importBotAccountContextFromExcel(Integer botId, String botKey, String fileBotConfigPath);
 
-    /**
-     * 注册job，开始定时执行
-     *
-     * @param autoBotJobParam autoBotJobParam
-     * @return BotACJobResult
-     */
-    BotACJobResult registerJob(AutoBotJobParam autoBotJobParam);
+    Integer importBotAccountContextFromRaw(Integer botId, String botKey, List<Map<String, Object>> rawLines);
 
+
+    Map<String, Integer> importAccountBaseInfoFromExcel(String botConfigPath);
+
+    Integer importAccountBaseInfoFromRaw(List<Map<String, Object>> rawLines);
+
+
+    Integer importBrowserEnvFromExcel(String fileBotConfigPath);
+
+    Integer importBrowserEnvFromRaw(List<Map<String, Object>> rawLines);
+
+
+    Integer importProxyFromExcel(String botConfigPath);
+
+    Integer importProxyFromRaw(List<Map<String, Object>> rawLines);
+
+
+
+    Integer importTwitterFromExcel(String fileBotConfigPath);
+
+    Integer importTwitterFromRaw(List<Map<String, Object>> rawLines);
+
+
+    Integer importDiscordFromExcel(String fileBotConfigPath);
+
+    Integer importDiscordFromRaw(List<Map<String, Object>> rawLines);
+
+
+    Integer importTelegramFormExcel(String fileBotConfigPath);
+
+    Integer importTelegramFormRaw(List<Map<String, Object>> rawLines);
 }
-package cn.com.helei.bot.core.supporter.netty.base;
-
+package cn.com.helei.bot.core.util.captcha;
 
 import cn.com.helei.bot.core.entity.ProxyInfo;
-import cn.com.helei.bot.core.supporter.netty.constants.NettyConstants;
-import cn.com.helei.bot.core.supporter.netty.constants.WebsocketClientStatus;
+import cn.com.helei.bot.core.util.RestApiClientFactory;
 import cn.hutool.core.util.StrUtil;
-import com.alibaba.fastjson.JSON;
-import io.netty.bootstrap.Bootstrap;
-import io.netty.channel.*;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.nio.NioSocketChannel;
-import io.netty.handler.codec.http.*;
-import io.netty.handler.codec.http.websocketx.*;
-import io.netty.handler.proxy.HttpProxyHandler;
-import io.netty.handler.ssl.SslContext;
-import io.netty.handler.ssl.SslContextBuilder;
-import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
-import io.netty.handler.stream.ChunkedWriteHandler;
-import io.netty.handler.timeout.IdleStateHandler;
-import lombok.Getter;
-import lombok.Setter;
+import com.alibaba.fastjson.JSONObject;
+import io.netty.handler.codec.http.HttpMethod;
 import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
 
-import javax.net.ssl.SSLException;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.Consumer;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
-/**
- * Websocket客户端
- *
- * @param <P> 请求体的类型
- * @param <T> 返回值的类型
- */
 @Slf4j
-public abstract class AbstractWebsocketClient<P, T> {
+public class CloudFlareResolver {
 
-    private static final int MAX_FRAME_SIZE = 10 * 1024 * 1024;  // 10 MB or set to your desired size
+    private static final String CREATE_TASK_URL = "https://api.2captcha.com/createTask";
 
-    /**
-     * websocket的url字符串
-     */
-    protected String url;
+    private static final String GET_RESULT_URL = "https://api.2captcha.com/getTaskResult";
 
-    /**
-     * netty pipeline 最后一个执行的handler
-     */
-    protected final AbstractWebSocketClientHandler<P, T> handler;
+    private static final int GET_RESULT_TIMES = 10;
 
-    /**
-     * 执行回调的线程池
-     */
-    @Getter
-    protected final ExecutorService callbackInvoker;
+    private static final int GET_RESULT_INTERVAL_SECONDS = 3;
 
-    /**
-     * 代理
-     */
-    @Setter
-    protected ProxyInfo proxy = null;
-
-    @Setter
-    protected HttpHeaders headers;
-
-    /**
-     * 空闲时间
-     */
-    @Setter
-    protected int allIdleTimeSecond = 10;
-
-
-    /**
-     * 重连次数减少的间隔
-     */
-    @Setter
-    private int reconnectCountDownSecond = 180;
-
-    @Setter
-    private int reconnectLimit = 3;
-
-    /**
-     * 重链接次数
-     */
-    private final AtomicInteger reconnectTimes = new AtomicInteger(0);
-
-    /**
-     * 重连锁
-     */
-    private final ReentrantLock reconnectLock = new ReentrantLock();
-
-    /**
-     * 启动中阻塞的condition
-     */
-    private final Condition startingWaitCondition = reconnectLock.newCondition();
-
-    /**
-     * 客户端当前状态
-     */
-    @Getter
-    private volatile WebsocketClientStatus clientStatus = WebsocketClientStatus.NEW;
-
-    /**
-     * clientStatus更新的回调
-     */
-    @Setter
-    private Consumer<WebsocketClientStatus> clientStatusChangeHandler = socketCloseStatus -> {
-    };
-
-    @Setter
-    @Getter
-    private String name;
-
-    private Bootstrap bootstrap;
-
-    private final EventLoopGroup eventLoopGroup;
-
-    private URI uri;
-
-    private String host;
-
-    private int port;
-
-    private boolean useSSL;
-
-    private Channel channel;
-
-    public AbstractWebsocketClient(
-            String url,
-            AbstractWebSocketClientHandler<P, T> handler
+    public static CompletableFuture<JSONObject> cloudFlareResolve(
+            ProxyInfo proxy,
+            String websiteUrl,
+            String websiteKey,
+            String twoCaptchaApiKey
     ) {
-        this.url = url;
-        this.handler = handler;
-        this.handler.websocketClient = this;
+        JSONObject body = new JSONObject();
 
-        this.callbackInvoker = Executors.newVirtualThreadPerTaskExecutor();
+        body.put("clientKey", twoCaptchaApiKey);
+        JSONObject task = getTaskInfo(proxy, websiteUrl, websiteKey);
+        body.put("task", task);
 
-        this.eventLoopGroup = new NioEventLoopGroup();
+        log.info("url[{}] start CloudFlare resolve，create task id...", websiteUrl);
+        return RestApiClientFactory.getClient(proxy).request(
+                CREATE_TASK_URL,
+                HttpMethod.POST,
+                null,
+                null,
+                body
+        ).thenApplyAsync(resultStr -> {
+            JSONObject result = JSONObject.parseObject(resultStr);
+
+            String taskId = result.getString("taskId");
+            if (StrUtil.isNotBlank(taskId)) {
+                try {
+                    return getTaskSolution(proxy, twoCaptchaApiKey, taskId);
+                } catch (Exception e) {
+                    throw new RuntimeException(websiteUrl + " CloudFlare resolve error", e);
+                }
+            }
+
+            throw new RuntimeException(websiteUrl + " CloudFlare resolve error, task create error," + resultStr);
+        });
     }
 
-    private void init() throws SSLException, URISyntaxException {
 
-        resolveParamFromUrl();
+    private static JSONObject getTaskSolution(ProxyInfo proxy, String apiKey, String taskId) throws CaptchaResolveException {
+        for (int i = 0; i < GET_RESULT_TIMES; i++) {
+            JSONObject body = new JSONObject();
+            body.put("taskId", taskId);
+            body.put("clientKey", apiKey);
 
-        WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(
-                uri, WebSocketVersion.V13, null, true, headers, MAX_FRAME_SIZE
-        );
-        handler.init(handshaker);
+            try {
+                String resultStr = RestApiClientFactory.getClient(proxy).request(
+                        GET_RESULT_URL,
+                        HttpMethod.POST,
+                        null,
+                        null,
+                        body
+                ).get();
 
-        final SslContext sslCtx;
-        if (useSSL) {
-            sslCtx = SslContextBuilder
-                    .forClient()
-                    .trustManager(InsecureTrustManagerFactory.INSTANCE)
-                    .build();
-        } else {
-            sslCtx = null;
+                JSONObject result = JSONObject.parseObject(resultStr);
+
+                Integer errorId = result.getInteger("errorId");
+
+                boolean isBreak = true;
+                if (errorId == 0) {
+                    String status = result.getString("status");
+
+                    if ("processing".equals(status)) {
+                        log.warn("tart[{}] in processing, [{}/{}] ", taskId, i + 1, GET_RESULT_TIMES);
+                        isBreak = false;
+                    } else if ("ready".equals(status)) {
+                        log.info("tart[{}] is ready", taskId);
+                        return result.getJSONObject("solution");
+                    }
+                } else if (errorId == 12) {
+                    log.error("Workers could not solve the Captcha");
+                    throw new CaptchaResolveException("Workers could not solve the Captcha");
+                }
+
+                if (isBreak) {
+                    String message = String.format("tart[%s] receive unknown response, %s",
+                            taskId, resultStr);
+                    log.error(message);
+                    throw new CaptchaResolveException(message);
+                }
+
+                TimeUnit.SECONDS.sleep(GET_RESULT_INTERVAL_SECONDS);
+            } catch (Exception e) {
+                throw new CaptchaResolveException("task " + taskId + " resolve occur an error",e);
+            }
         }
 
-        bootstrap = new Bootstrap();
+        throw new CaptchaResolveException("task " + taskId + " result request times out of limit " + GET_RESULT_TIMES);
+    }
 
-        bootstrap.group(eventLoopGroup)
-                .channel(NioSocketChannel.class)
-                .option(ChannelOption.TCP_NODELAY, true)
-                .option(ChannelOption.SO_KEEPALIVE, true)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10000) // 设置连接超时为10秒
-                .handler(new ChannelInitializer<NioSocketChannel>() {
-                    @Override
-                    protected void initChannel(NioSocketChannel ch) {
-                        ChannelPipeline p = ch.pipeline();
-                        if (proxy != null) {
-                            // 添加 HttpProxyHandler 作为代理
-                            if (StrUtil.isNotBlank(proxy.getUsername())) {
-                                p.addFirst(new HttpProxyHandler(proxy.getAddress(), proxy.getUsername(), proxy.getPassword()));
-                            } else {
-                                p.addFirst(new HttpProxyHandler(proxy.getAddress()));
-                            }
-                        }
+    @NotNull
+    private static JSONObject getTaskInfo(
+            ProxyInfo proxy,
+            String websiteUrl,
+            String websiteKey
+    ) {
+        JSONObject task = new JSONObject();
+        task.put("type", "TurnstileTask");
+        task.put("websiteURL", websiteUrl);
+        task.put("websiteKey", websiteKey);
 
-                        if (sslCtx != null) {
-                            p.addLast(sslCtx.newHandler(ch.alloc(), uri.getHost(), port));
-                        }
+        if (proxy != null) {
+            task.put("proxyType", proxy.getHost().toLowerCase());
+            task.put("proxyAddress", proxy.getHost());
+            task.put("proxyPort", String.valueOf(proxy.getPort()));
+            task.put("proxyLogin", proxy.getUsername());
+            task.put("proxyPassword", proxy.getPassword());
+        }
+        return task;
+    }
+}
+package cn.com.helei.bot.core.util.exception;
 
-                        p.addLast("http-chunked", new ChunkedWriteHandler()); // 支持大数据流
+public class RequestException extends Exception{
 
+    // 默认构造函数
+    public RequestException() {
+        super("request failed.");
+    }
 
-                        p.addLast(new HttpClientCodec());
-                        p.addLast(new HttpObjectAggregator(81920));
-                        p.addLast(new IdleStateHandler(0, 0, allIdleTimeSecond, TimeUnit.SECONDS));
-                        p.addLast(new ChunkedWriteHandler());
+    // 传入错误信息的构造函数
+    public RequestException(String message) {
+        super(message);
+    }
 
-                        p.addLast(new WebSocketFrameAggregator(MAX_FRAME_SIZE));  // 设置聚合器的最大帧大小
+    // 传入错误信息和异常原因的构造函数
+    public RequestException(String message, Throwable cause) {
+        super(message, cause);
+    }
 
+    // 传入异常原因的构造函数
+    public RequestException(Throwable cause) {
+        super(cause);
+    }
+}
+package cn.com.helei.bot.core.util.llm;
 
-                        p.addLast(handler);
-                    }
+import com.alibaba.fastjson.JSONObject;
+import lombok.*;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+@Setter
+@Getter
+public class OpenAIPrompt {
+
+    private String model;
+
+    private final List<JSONObject> messages = new ArrayList<>();
+
+    private String system;
+
+    private final JSONObject systemJB = new JSONObject();
+
+    private boolean stream = false;
+
+    private double temperature;
+
+    private double topP = 0.7;
+
+    private double presencePenalty = 0;
+
+    private final JSONObject responseForMatObj = new JSONObject();
+
+    public JSONObject build() {
+        JSONObject jb = new JSONObject();
+        jb.put("model", model);
+        jb.put("messages", messages);
+        jb.put("system", system);
+        jb.put("stream", stream);
+        jb.put("temperature", temperature);
+        jb.put("top_p", topP);
+        jb.put("presence_penalty", presencePenalty);
+        jb.put("response_format", responseForMatObj);
+
+        return jb;
+    }
+
+    public void setSystem(String content) {
+        this.system = content;
+
+        if (messages.isEmpty() || "system".equals(messages.getFirst().getString("role"))) {
+            if (messages.isEmpty()) messages.addFirst(systemJB);
+            systemJB.put("role", "system");
+            systemJB.put("content", content);
+        }
+    }
+
+    public void addQuestion(String content) {
+
+        if (!messages.isEmpty() && "user".equals(messages.getLast().getString("role"))) {
+            messages.getLast().put("content", content);
+        } else {
+            JSONObject question = new JSONObject();
+            question.put("role", "user");
+            question.put("content", content);
+
+            this.messages.add(question);
+        }
+    }
+
+    public void addAnswer(String content) {
+
+        if (!messages.isEmpty() && "assistant".equals(messages.getLast().getString("role"))) {
+            messages.getLast().put("content", content);
+        } else {
+            JSONObject question = new JSONObject();
+            question.put("role", "assistant");
+            question.put("content", content);
+
+            this.messages.add(question);
+        }
+    }
+
+    public void setResponseFormat(String type) {
+        this.responseForMatObj.put("type", type);
+    }
+
+    public String getLastAnswer() {
+
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            if ("user".equals(messages.get(i).getString("role"))) return messages.get(i).getString("content");
+        }
+
+        return null;
+    }
+}
+package cn.com.helei.bot.core.util.llm;
+
+import cn.com.helei.bot.core.util.RestApiClientFactory;
+import com.alibaba.fastjson.JSONObject;
+import io.netty.handler.codec.http.HttpMethod;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+
+public class QwenLLMAgent {
+
+    private static final String BASE_URL = "";
+
+    private final String apiKey;
+
+    public QwenLLMAgent(String apiKey) {
+        this.apiKey = apiKey;
+    }
+
+    public CompletableFuture<OpenAIPrompt> request(OpenAIPrompt prompt) {
+
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Authorization", "Bearer " + apiKey);
+
+        return RestApiClientFactory
+                .getClient(null)
+                .request(
+                        BASE_URL,
+                        HttpMethod.POST,
+                        headers,
+                        null,
+                        prompt.build()
+                )
+                .thenApplyAsync(response -> {
+                    JSONObject result = JSONObject.parseObject(response);
+                    String answer = result.getJSONArray("choices").getJSONObject(0).getString("content");
+                    prompt.addAnswer(answer);
+                    return prompt;
                 });
     }
 
-
-    /**
-     * 链接服务端
-     */
-    public CompletableFuture<Boolean> connect() {
-        return switch (clientStatus) {
-            case NEW, STOP -> reconnect();
-            case STARTING -> waitForStarting();
-            case RUNNING -> {
-                log.warn("WS客户端[{}}正在运行, clientStatus[{}]", url, clientStatus);
-                yield CompletableFuture.supplyAsync(() -> true);
-            }
-            case SHUTDOWN -> throw new RuntimeException("");
-        };
-    }
-
-
-    /**
-     * 重链接
-     *
-     * @return CompletableFuture<Void>
-     */
-    public CompletableFuture<Boolean> reconnect() {
-        return switch (clientStatus) {
-            case NEW, STOP -> doReconnect();
-            case STARTING -> waitForStarting().thenApplyAsync(success -> {
-                if (success) return true;
-                try {
-                    return doReconnect().get();
-                } catch (InterruptedException | ExecutionException e) {
-                    throw new RuntimeException(e);
-                }
-            });
-            case RUNNING -> {
-                log.warn("WS客户端[{}}正在启动或运行, 不能reconnect. clientStatus[{}]", url, clientStatus);
-                yield CompletableFuture.supplyAsync(() -> true);
-            }
-            case SHUTDOWN -> CompletableFuture.supplyAsync(() -> {
-                log.error("client[{}] already shutdown", name);
-                return false;
-            });
-        };
-    }
-
-    /**
-     * 执行重连接，带重试逻辑
-     *
-     * @return CompletableFuture<Void>
-     */
-    private CompletableFuture<Boolean> doReconnect() {
-        updateClientStatus(WebsocketClientStatus.STARTING);
-
-        return CompletableFuture.supplyAsync(() -> {
-            //Step 1 重连次数超过限制，关闭
-            if (reconnectTimes.get() >= reconnectLimit) {
-                log.error("reconnect times out of limit [{}], close websocket client", reconnectLimit);
-                close();
-                return false;
-            }
-
-            AtomicBoolean isSuccess = new AtomicBoolean(false);
-
-            //Step 2 重连逻辑
-            //Step 2.1 加锁保证只要一个线程进行重连
-            reconnectLock.lock();
-            try {
-
-                //Step 2.2 已经再running状态，直接返回true。变为shutdown、stop状态，直接返回false
-                if (clientStatus.equals(WebsocketClientStatus.RUNNING)) {
-                    log.info("client started by other thread");
-                    return true;
-                } else if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN) || clientStatus.equals(WebsocketClientStatus.STOP)) {
-                    log.error("clint stop/shutdown when client starting");
-                    return false;
-                }
-
-                //Step 3 初始化
-                log.info("开始初始化WS客户端");
-                try {
-                    init();
-                } catch (SSLException | URISyntaxException e) {
-                    throw new RuntimeException("初始化WS客户端发生错误", e);
-                }
-                log.info("初始化WS客户端完成，开始链接服务器 [{}]", url);
-
-
-                //Step 4 链接服务器
-                if (reconnectTimes.incrementAndGet() <= reconnectLimit) {
-
-                    //Step 4.1 每进行重连都会先将次数加1并设置定时任务将重连次数减1
-                    eventLoopGroup.schedule(() -> {
-                        reconnectTimes.decrementAndGet();
-                    }, reconnectCountDownSecond, TimeUnit.SECONDS);
-
-                    log.info("start connect client [{}], url[{}], current times [{}]", name, uri, reconnectTimes.get());
-
-                    //Step 4.2 latch用于同步等等链接完成
-                    CountDownLatch latch = new CountDownLatch(1);
-
-                    //Step 4.3 延迟再进行连接
-                    eventLoopGroup.schedule(() -> {
-                        try {
-                            channel = bootstrap.connect(host, port).sync().channel();
-
-                            handler.handshakeFuture().sync();
-
-                            channel.attr(NettyConstants.CLIENT_NAME).set(name);
-
-                            //Step 4.4 连接成功设置标识
-                            isSuccess.set(true);
-                        } catch (Exception e) {
-                            log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(), e);
-                            isSuccess.set(false);
-                        } finally {
-                            latch.countDown();
-                        }
-                    }, NettyConstants.RECONNECT_DELAY_SECONDS, TimeUnit.SECONDS);
-
-                    //Step 4.5 等待链接完成
-                    try {
-                        latch.await();
-                    } catch (InterruptedException e) {
-                        log.error("connect client [{}], url[{}] interrupted, times [{}]", name, url, reconnectTimes.get(), e);
-                    }
-
-
-                    //Step 6 未成功启动，关闭
-                    if (!isSuccess.get()) {
-                        log.info("connect client [{}], url[{}] fail, current times [{}]", name, url, reconnectTimes.get());
-
-                        close();
-                    } else {
-                        log.info("connect client [{}], url[{}] success, current times [{}]", name, url, reconnectTimes.get());
-
-                        updateClientStatus(WebsocketClientStatus.RUNNING);
-                        reconnectTimes.set(0);
-                    }
-                }
-            } catch (Exception e) {
-                //exception 遇到未处理异常，直接关闭
-                close();
-                throw new RuntimeException(String.format("connect client [%s] appear unknown error", name), e);
-            } finally {
-                //Step 5 释放等待启动的线程
-                startingWaitCondition.signalAll();
-                reconnectLock.unlock();
-            }
-
-            return isSuccess.get();
-        }, callbackInvoker);
-    }
-
-
-    /**
-     * 停止WebSocketClient
-     */
-    public void close() {
-        if (clientStatus.equals(WebsocketClientStatus.STOP)
-                || clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) return;
-
-        updateClientStatus(WebsocketClientStatus.STOP);
-
-        log.info("closing websocket client [{}], [{}]", name, channel == null ? "null" : channel.hashCode());
-        if (channel != null) {
-            channel.close();
-            channel = null;
-        }
-
-        log.warn("web socket client [{}] closed", name);
-    }
-
-    /**
-     * 彻底关闭客户端
-     */
-    public void shutdown() {
-        updateClientStatus(WebsocketClientStatus.SHUTDOWN);
-
-        if (channel != null) {
-            channel.close();
-            channel = null;
-        }
-
-        if (eventLoopGroup != null) {
-            eventLoopGroup.shutdownGracefully();
-        }
-
-        log.warn("web socket client [{}] already shutdown !", name);
-    }
-
-    /**
-     * 等待启动完成
-     *
-     * @return CompletableFuture<Void>
-     */
-    private CompletableFuture<Boolean> waitForStarting() {
-        return CompletableFuture.supplyAsync(() -> {
-            log.warn("client [{}] is starting, waiting for complete", name);
-            reconnectLock.lock();
-            try {
-                while (clientStatus.equals(WebsocketClientStatus.STARTING)) {
-                    startingWaitCondition.await();
-                }
-
-                if (clientStatus.equals(WebsocketClientStatus.STOP) || clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
-                    log.error("启动WS客户端[{}]失败, ClientStatus [{}}", name, clientStatus);
-                    return false;
-                }
-                return true;
-            } catch (InterruptedException e) {
-                log.error("waiting for start client [{}] error", name);
-                throw new RuntimeException(e);
-            } finally {
-                reconnectLock.unlock();
-            }
-        }, callbackInvoker);
-    }
-
-
-    /**
-     * 发送消息，没有回调
-     *
-     * @param message message
-     * @return CompletableFuture<Void>
-     */
-    public CompletableFuture<Void> sendMessage(P message) {
-        return CompletableFuture.runAsync(() -> {
-            if (message == null) {
-                throw new IllegalArgumentException("message is null");
-            }
-
-            try {
-                channel.writeAndFlush(new TextWebSocketFrame(JSON.toJSONString(message)));
-            } catch (Exception e) {
-                throw new RuntimeException("send message [" + message + "] error");
-            }
-        }, callbackInvoker);
-    }
-
-    ;
-
-    /**
-     * 发送请求, 注册响应监听
-     *
-     * @param request 请求体
-     */
-    public CompletableFuture<T> sendRequest(P request) {
-        return CompletableFuture.supplyAsync(() -> {
-            if (request == null) {
-                log.error("request is null");
-                return null;
-            }
-
-            CountDownLatch latch = new CountDownLatch(1);
-            AtomicReference<T> jb = new AtomicReference<>(null);
-
-            boolean flag = handler.registryRequest(request, response -> {
-                latch.countDown();
-                jb.set(response);
-            });
-
-            if (flag) {
-                log.info("send request [{}]", request);
-                channel.writeAndFlush(new TextWebSocketFrame(JSON.toJSONString(request)));
-                log.debug("send request [{}] success", request);
-            } else {
-                log.error("request id registered");
-                return null;
-            }
-
-            try {
-                if (!latch.await(NettyConstants.REQUEST_WAITE_SECONDS, TimeUnit.SECONDS)) return null;
-
-                return jb.get();
-            } catch (InterruptedException e) {
-                log.error("send request interrupted", e);
-                return null;
-            }
-        }, callbackInvoker);
-    }
-
-    /**
-     * 发送ping
-     */
-    public void sendPing() {
-        log.debug("client [{}] send ping {}", name, url);
-        channel.writeAndFlush(new PingWebSocketFrame());
-    }
-
-    /**
-     * 发送pong
-     */
-    public void sendPong() {
-        log.debug("client [{}] send pong {}", name, url);
-        channel.writeAndFlush(new PongWebSocketFrame());
-    }
-
-
-    /**
-     * 更新status
-     *
-     * @param newStatus newStatus
-     */
-    public void updateClientStatus(WebsocketClientStatus newStatus) {
-        synchronized ("CLIENT_STATUS_LOCK") {
-            if (clientStatus.equals(newStatus)) return;
-
-            if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
-                throw new IllegalArgumentException("client status is shutdown，new status can not be " + newStatus);
-            }
-
-            try {
-                if (newStatus != clientStatus && clientStatusChangeHandler != null) {
-                    clientStatusChangeHandler.accept(newStatus);
-                }
-            } finally {
-                log.info("client status [{}] -> [{}]", clientStatus, newStatus);
-                clientStatus = newStatus;
-            }
-        }
-    }
-
-    /**
-     * 解析参数
-     *
-     * @throws URISyntaxException url解析错误
-     */
-    private void resolveParamFromUrl() throws URISyntaxException {
-        uri = new URI(url);
-        String scheme = uri.getScheme() == null ? "ws" : uri.getScheme();
-        host = uri.getHost() == null ? "127.0.0.1" : uri.getHost();
-        if (uri.getPort() == -1) {
-            if ("ws".equalsIgnoreCase(scheme)) {
-                port = 80;
-            } else if ("wss".equalsIgnoreCase(scheme)) {
-                port = 443;
-            } else {
-                port = -1;
-            }
-        } else {
-            port = uri.getPort();
-        }
-
-        if (!"ws".equalsIgnoreCase(scheme) && !"wss".equalsIgnoreCase(scheme)) {
-            log.error("Only WS(S) is supported.");
-            throw new IllegalArgumentException("url error, Only WS(S) is supported.");
-        }
-
-        useSSL = "wss".equalsIgnoreCase(scheme);
-    }
 }
-package cn.com.helei.bot.core.supporter.netty;
+package cn.com.helei.bot.core.util.pool;
 
-import cn.com.helei.bot.core.constants.ConnectStatus;
-import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.supporter.netty.base.AbstractWebsocketClient;
-import cn.com.helei.bot.core.supporter.netty.constants.WebsocketClientStatus;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-
-import java.time.LocalDateTime;
-
-
-@Slf4j
-@Getter
-public abstract class BaseBotWSClient<Req, Resp> extends AbstractWebsocketClient<Req, Resp> {
-
-    /**
-     * client对应的账号
-     */
-    private final AccountContext accountContext;
-
-    public BaseBotWSClient(
-            AccountContext accountContext,
-            String connectUrl,
-            BaseBotWSClientHandler<Req, Resp> handler
-    ) {
-        super(connectUrl, handler);
-
-        super.setName(accountContext.getName());
-        super.setProxy(accountContext.getProxy());
-        super.setClientStatusChangeHandler(this::whenClientStatusChange);
-
-        this.accountContext = accountContext;
-
-        updateClientStatus(WebsocketClientStatus.NEW);
-    }
-
-
-    public abstract Req getHeartbeatMessage();
-
-    public abstract void whenAccountReceiveResponse(Object id, Resp response) ;
-
-    public abstract void whenAccountReceiveMessage(Resp message);
-
-    public abstract Object getRequestId(Req request);
-
-    public abstract Object getResponseId(Resp response);
-
-    public void whenAccountClientStatusChange(WebsocketClientStatus clientStatus) {}
-
-    /**
-     * ws客户端状态改变，同步更新账户状态
-     *
-     * @param newClientStatus 最新的客户端状态
-     */
-    public void whenClientStatusChange(WebsocketClientStatus newClientStatus) {
-        ConnectStatus connectStatus = switch (newClientStatus) {
-            case NEW -> {
-                accountContext.getConnectStatusInfo().setStartDateTime(LocalDateTime.now());
-                accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
-                yield ConnectStatus.NEW;
-            }
-            case STARTING -> {
-                accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
-                yield ConnectStatus.STARTING;
-            }
-            case RUNNING -> {
-                accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
-                yield ConnectStatus.RUNNING;
-            }
-            case STOP, SHUTDOWN -> {
-                accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
-                yield ConnectStatus.STOP;
-            }
-        };
-
-        accountContext.getConnectStatusInfo().setConnectStatus(connectStatus);
-
-        whenAccountClientStatusChange(newClientStatus);
-    }
-
-}
-package cn.com.helei.bot.core.supporter.netty;
-
-import cn.com.helei.bot.core.dto.ConnectStatusInfo;
-import cn.com.helei.bot.core.supporter.netty.base.AbstractWebSocketClientHandler;
-import io.netty.channel.ChannelHandlerContext;
-import lombok.extern.slf4j.Slf4j;
-
-@Slf4j
-public abstract class BaseBotWSClientHandler<Req, Resp> extends AbstractWebSocketClientHandler<Req, Resp> {
-
-    /**
-     * channel 空闲，向其发送心跳
-     * @param ctx ctx
-     */
-    @Override
-    protected void handleAllIdle(ChannelHandlerContext ctx) {
-        BaseBotWSClient<Req, Resp> botWSClient = getBotWSClient();
-
-
-        Req heartbeatMessage = botWSClient.getHeartbeatMessage();
-        if (heartbeatMessage != null) {
-            botWSClient
-                    .sendMessage(heartbeatMessage)
-                    .whenCompleteAsync((unused, throwable) -> {
-                        ConnectStatusInfo connectStatusInfo = botWSClient
-                                .getAccountContext()
-                                .getConnectStatusInfo();
-
-                        if (throwable != null) {
-                            log.error("client[{}] 发送心跳异常", websocketClient.getName(), throwable);
-                            // 发送心跳失败，记录次数
-                            connectStatusInfo.getErrorHeartBeat().getAndIncrement();
-                        }
-
-                        // 心跳计数
-                        connectStatusInfo.getHeartBeat()
-                                .getAndIncrement();
-                    }, botWSClient.getCallbackInvoker());
-        }
-    }
-
-
-    @Override
-    public Object getRequestId(Req request) {
-        return getBotWSClient().getRequestId(request);
-    }
-
-    @Override
-    public Object getResponseId(Resp response) {
-        return getBotWSClient().getResponseId(response);
-    }
-
-
-    @Override
-    protected void handleResponseMessage(Object id, Resp response) {
-        getBotWSClient().whenAccountReceiveResponse(id, response);
-    }
-
-    @Override
-    protected void handleOtherMessage(Resp message) {
-        getBotWSClient().whenAccountReceiveMessage(message);
-    }
-
-    private BaseBotWSClient<Req, Resp> getBotWSClient() {
-        return (BaseBotWSClient<Req, Resp>) websocketClient;
-    }
-}
-package cn.com.helei.bot.core.supporter.netty;
-
-import cn.com.helei.bot.core.entity.AccountContext;
-import com.alibaba.fastjson.JSONObject;
+import cn.com.helei.bot.core.util.tableprinter.CommandLineTablePrintHelper;
 import lombok.Getter;
 import lombok.Setter;
 
-@Setter
-public abstract class BotJsonWSClient extends BaseBotWSClient<JSONObject, JSONObject> {
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
-    private String idFieldName = "id";
+@Getter
+public class IdMarkPool<T> {
 
-    public BotJsonWSClient(
-            AccountContext accountContext,
-            String connectUrl
-    ) {
-        super(accountContext, connectUrl, new SimpleBotWSClientHandler());
-        ((SimpleBotWSClientHandler) handler).setWsClient(this);
-    }
+    private static Random random = new Random();
 
-    @Override
-    public Object getRequestId(JSONObject request) {
-        return request.get(idFieldName);
-    }
+    private final Class<T> tClass;
 
-    @Override
-    public Object getResponseId(JSONObject response) {
-        return response.get(idFieldName);
-    }
-
-
+    @Getter
+    @Setter
+    private List<Object> list;
 
     @Setter
+    private String configClassPath;
+
+
+    private final ConcurrentMap<Integer, IdMarkPoolItem<T>> idMapItem = new ConcurrentHashMap<>();
+
+    /**
+     * 使用次数
+     */
+    private final Map<Integer, Integer> useCountMap = new HashMap<>();
+
+    public IdMarkPool(Class<T> tClass) {
+        this.tClass = tClass;
+    }
+
+    public static <C> IdMarkPool<C> create(List<C> items, Class<C> cClass) {
+        IdMarkPool<C> tIdMarkPool = new IdMarkPool<>(cClass);
+
+        AtomicInteger idCounter = new AtomicInteger();
+
+        for (C item : items) {
+            int id = idCounter.getAndIncrement();
+
+            tIdMarkPool.getIdMapItem().put(id, new IdMarkPoolItem<>(id, item));
+            tIdMarkPool.getUseCountMap().put(id, 0);
+        }
+
+        return tIdMarkPool;
+    }
+
+    /**
+     * 获取代理
+     *
+     * @param id id
+     * @return NetworkProxy
+     */
+    public synchronized T getItem(Integer id) {
+        IdMarkPoolItem<T> compute = idMapItem.compute(id, (k, v) -> {
+            if (v == null) return null;
+
+            useCountMap.compute(id, (k1, v1) -> {
+                if (v1 == null) v1 = 0;
+
+                return v1 + 1;
+            });
+
+            return v;
+        });
+
+        if (compute == null) return null;
+
+        return compute.data;
+    }
+
+
+    /**
+     * 随机获取
+     *
+     * @param count count
+     * @return List<T>
+     */
+    public synchronized List<T> getRandomItem(int count) {
+        List<T> res = new ArrayList<>(count);
+
+        List<IdMarkPoolItem<T>> values = new ArrayList<>(getIdMapItem().values());
+
+        for (int i = 0; i < count; i++) {
+            res.add(values.get(random.nextInt(0, values.size())).data);
+        }
+
+        return res;
+    }
+
+    /**
+     * 获取最少使用的
+     *
+     * @param count 数量
+     * @return List<T>
+     */
+    public synchronized List<T> getLessUsedItem(int count) {
+        int batchSize = Math.min(count, getUseCountMap().size());
+
+        List<T> res = new ArrayList<>(count);
+
+        int needCount = count;
+        while (needCount > 0) {
+            int currentSize = Math.min(needCount, batchSize);
+
+            List<T> batch = getUseCountMap().entrySet().stream()
+                    .sorted((e1, e2) -> e1.getValue().compareTo(e2.getValue()))
+                    .limit(currentSize)
+                    .map(e -> {
+                        getUseCountMap().compute(e.getKey(), (k, v) -> v == null ? 0 : v + 1);
+                        return (T) getIdMapItem().get(e.getKey()).getData();
+                    }).toList();
+            res.addAll(batch);
+
+            needCount -= batch.size();
+        }
+
+        return res;
+    }
+
+    /**
+     * 获取全部
+     *
+     * @return List<T>
+     */
+    public List<T> getAllItem() {
+        return getIdMapItem().values().stream().map(e -> (T) e).toList();
+    }
+
+
+    /**
+     * 打印池
+     *
+     * @return String
+     */
+    public String printPool() {
+        return CommandLineTablePrintHelper.generateTableString(new ArrayList<>(idMapItem.values()), tClass);
+    }
+
+
+    public T buildTInstanceFromLineStr(Object originLine)
+            throws NoSuchMethodException, InvocationTargetException, InstantiationException, IllegalAccessException {
+        Constructor<T> constructor = getTClass().getConstructor(Object.class);
+        return constructor.newInstance(originLine);
+    }
+
+
     @Getter
-    private static class SimpleBotWSClientHandler extends BaseBotWSClientHandler<JSONObject, JSONObject> {
+    @Setter
+    public static class IdMarkPoolItem<T> {
+        private T data;
 
-        private BotJsonWSClient wsClient;
+        private Integer id;
 
-        @Override
-        public JSONObject convertMessageToRespType(String message) {
-            return JSONObject.parseObject(message);
+        public IdMarkPoolItem(int id, T item) {
+            this.id = id;
+            this.data = item;
         }
     }
 }
-package cn.com.helei.bot.core.supporter.persistence.impl;
+package cn.com.helei.bot.core.util;
 
-
-import cn.com.helei.bot.core.config.TypedAccountConfig;
-import cn.com.helei.bot.core.entity.AccountBaseInfo;
-import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.supporter.botapi.BotApi;
-import cn.com.helei.bot.core.supporter.persistence.AbstractPersistenceManager;
-import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeInvocation;
-import cn.com.helei.bot.core.util.NamedThreadFactory;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson.JSONObject;
+import io.netty.handler.codec.http.HttpMethod;
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import okhttp3.*;
+import okio.BufferedSource;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
-import java.util.HashMap;
+import java.io.IOException;
+import java.net.Proxy;
+import java.net.SocketTimeoutException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.stream.Collectors;
+import java.util.concurrent.TimeUnit;
+
 
 @Slf4j
-public class DBAccountPersistenceManager extends AbstractPersistenceManager {
+public class RestApiClient {
 
-    private final ExecutorService executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("database-"));
+    private static final int RETRY_TIMES = 1;
 
-    private final BotApi botApi;;
+    @Getter
+    private final OkHttpClient okHttpClient;
 
-    public DBAccountPersistenceManager(BotApi botApi) {
-        this.botApi = botApi;
-    }
+    private final ExecutorService executorService;
 
-    @Override
-    public void init() {
-
-    }
-
-    @Override
-    public void persistenceAccountContexts(Map<String, List<AccountContext>> typedAccountMap) {
-        for (List<AccountContext> values : typedAccountMap.values()) {
-            botApi.getBotAccountContextService().saveBatch(values);
-        }
-    }
-
-    public Map<String, List<AccountContext>> createAccountContexts(Integer projectId, List<TypedAccountConfig> accountConfigs) {
-        if (accountConfigs == null || accountConfigs.isEmpty())
-            return new HashMap<>();
-
-        // Step 1 按类型遍历
-        return accountConfigs.stream().collect(Collectors.toMap(TypedAccountConfig::getType, typedAccountConfig -> {
-            String type = typedAccountConfig.getType();
-
-            // Step 2 根据类型查询对应的AccountBaseInfo
-            AccountBaseInfo query = new AccountBaseInfo();
-            query.setType(type);
-
-            List<AccountBaseInfo> typeBaseInfos = botApi.getAccountBaseInfoService().list(new QueryWrapper<>(query));
-
-            // Step 3 创建AccountCount
-            return typeBaseInfos.stream()
-                    .map(accountBaseInfo -> AccountContext.builder().accountBaseInfo(accountBaseInfo).build())
-                    .toList();
-        }));
-    }
-
-    @Override
-    public List<AccountContext> loadAccountContexts(Integer botId) {
-        // Step 1 加载 projectId 对应的账号
-        AccountContext query = new AccountContext();
-        query.setBotId(botId);
-        query.setParams(null);
-
-        List<AccountContext> accountContexts = botApi
-                .getBotAccountContextService().
-                list(new QueryWrapper<>(query));
-
-        // Step 2 遍历账号，补充对象
-        CompletableFuture<?>[] futures = accountContexts.stream()
-                .map(accountContext -> CompletableFuture.runAsync(
-                        () -> fillAccountInfo(accountContext), executorService))
-                .toArray(CompletableFuture[]::new);
-
-        // Step 3 等待所有任务完成
-        for (int i = 0; i < futures.length; i++) {
-            try {
-                futures[i].get();
-            } catch (InterruptedException | ExecutionException e) {
-                log.error("{} fill account context info error", i, e);
-            }
-        }
-
-        // Step 4 按类型分类账号
-        return accountContexts;
-    }
-
-    @Override
-    protected void propertyChangeHandler(PropertyChangeInvocation invocation) {
-        log.info("对象属性改变了{} {}->{}", invocation.getPropertyName(), invocation.getOldValue(), invocation.getNewValue());
-    }
-
-
-    /**
-     * 查询填充账户信息
-     *
-     * @param accountContext accountContext
-     */
-    private void fillAccountInfo(AccountContext accountContext) {
-
-        // Step 2.1 绑定基础账号信息
-        if (accountContext.getAccountBaseInfoId() != null) {
-            accountContext.setAccountBaseInfo(botApi.getAccountBaseInfoService().getById(accountContext.getAccountBaseInfoId()));
-        }
-        // Step 2,2 绑定推特
-        if (accountContext.getTwitterId() != null) {
-            accountContext.setTwitter(botApi.getTwitterAccountService().getById(accountContext.getTwitterId()));
-        }
-        // Step 2,3 绑定 discord
-        if (accountContext.getDiscordId() != null) {
-            accountContext.setDiscord(botApi.getDiscordAccountService().getById(accountContext.getDiscordId()));
-        }
-        // Step 2.4 绑定代理
-        if (accountContext.getProxyId() != null) {
-            accountContext.setProxy(botApi.getProxyInfoService().getById(accountContext.getProxyId()));
-        }
-        // Step 2.5 绑定浏览器环境
-        if (accountContext.getBrowserEnvId() != null) {
-            accountContext.setBrowserEnv(botApi.getBrowserEnvService().getById(accountContext.getBrowserEnvId()));
-        }
-        // Step 2.6 绑定tg
-        if (accountContext.getTelegramId() != null) {
-
-        }
-        // Step 2.7 绑定钱包
-        if (accountContext.getWalletId() != null) {
-
-        }
-
-        // Step 2.8 绑定奖励信息
-        if (accountContext.getRewardId() != null) {
-            accountContext.setRewordInfo(botApi.getRewordInfoService().getById(accountContext.getRewardId()));
-        }
-    }
-}
-package cn.com.helei.bot.core.supporter.persistence;
-
-import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeInvocation;
-import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenClass;
-import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenField;
-import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeProxy;
-import lombok.Getter;
-
-import java.lang.reflect.Field;
-import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-
-@Getter
-public abstract class AbstractPersistenceManager implements AccountPersistenceManager {
-
-
-    /**
-     * 监听的对象 -> 该对象的root
-     */
-    private final ConcurrentMap<Object, Object> listenedObjRootMap = new ConcurrentHashMap<>();
-
-    /**
-     * root target -> root proxy
-     */
-    private final ConcurrentMap<Object, Object> originRoot2ProxyMap = new ConcurrentHashMap<>();
-
-
-    /**
-     * 注册持久化监听
-     *
-     * @param accountContexts accountContexts
-     */
-    @Override
-    public void registerPersistenceListener(List<AccountContext> accountContexts) {
-        if (accountContexts == null || accountContexts.isEmpty()) return;
-        accountContexts.replaceAll(this::bindPersistenceAnnoListener);
-    }
-
-
-    /**
-     * 对象属性添加变化监听
-     *
-     * @param target target 目标对象
-     * @param <T>    T
-     * @return 添加监听后被动态代理的对象
-     */
-    public <T> T bindPersistenceAnnoListener(T target) {
-        return doBindPersistenceAnnoListener(target, target);
-    }
-
-
-    /**
-     * 对象属性添加变化监听
-     *
-     * @param target target 目标对象
-     * @param <T>    T
-     * @return 添加监听后被动态代理的对象
-     */
-    private <T> T doBindPersistenceAnnoListener(T target, Object rootObj) {
-        if (target == null) return null;
-
-        Class<?> targetClass = target.getClass();
-
-        PropertyChangeListenClass propertyChangeListenClass = targetClass.getAnnotation(PropertyChangeListenClass.class);
-
-        // 类上带有PersistenceClass注解，表示可以的类
-        if (propertyChangeListenClass == null) {
-            return target;
-        }
-
-        T proxy = PropertyChangeProxy.createProxy(target, this::propertyChangeHandler);
-
-        // 深度监听，还要给监听的字段对象内的属性监听
-        if (propertyChangeListenClass.isDeep()) {
-
-            for (Field field : targetClass.getDeclaredFields()) {
-                field.setAccessible(true);
-                // 字段上带有PersistenceField注解，表示可以的字段， 字段类型上带有PersistenceClass，还要监听字段对象的属性
-                if (field.isAnnotationPresent(PropertyChangeListenField.class)
-                        && field.getType().isAnnotationPresent(PropertyChangeListenClass.class)) {
-                    try {
-                        Object fieldValue = field.get(target);
-                        Object filedProxy = doBindPersistenceAnnoListener(fieldValue, rootObj);
-
-                        field.set(target, filedProxy);
-                    } catch (IllegalAccessException e) {
-                        throw new RuntimeException("访问字段失败", e);
-                    }
-                }
-            }
-        }
-
-        listenedObjRootMap.put(target, rootObj);
-
-        if (target.equals(rootObj)) {
-            originRoot2ProxyMap.put(rootObj, proxy);
-        }
-
-        return proxy;
-    }
-
-
-    /**
-     * 对象属性发生改变的回调
-     *
-     * @param invocation invocation
-     */
-    protected abstract void propertyChangeHandler(PropertyChangeInvocation invocation);
-}
-package cn.com.helei.bot.core.supporter.persistence;
-
-import cn.com.helei.bot.core.entity.AccountContext;
-
-import java.util.List;
-import java.util.Map;
-
-public interface AccountPersistenceManager {
-
-    void init();
-
-    void persistenceAccountContexts(Map<String, List<AccountContext>> typedAccountMap);
-
-    List<AccountContext> loadAccountContexts(Integer botId);
-
-    void registerPersistenceListener(List<AccountContext> targetList);
-
-}
-package cn.com.helei.bot.core.supporter;
-
-import cn.com.helei.bot.core.dto.ConnectStatusInfo;
-import cn.com.helei.bot.core.dto.account.AccountPrintDto;
-import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.entity.BrowserEnv;
-import cn.com.helei.bot.core.entity.ProxyInfo;
-import cn.com.helei.bot.core.entity.RewordInfo;
-import cn.com.helei.bot.core.util.tableprinter.CommandLineTablePrintHelper;
-
-import java.util.List;
-import java.util.Map;
-
-public class AccountInfoPrinter {
-
-    /**
-     * 打印账号列表
-     *
-     * @return String
-     */
-    public static String printAccountList(List<AccountContext> accountContexts) {
-
-        StringBuilder sb = new StringBuilder();
-
-        sb.append(" 账户列表\n");
-
-        List<AccountPrintDto> list = accountContexts.stream().map(accountContext -> {
-            ProxyInfo proxy = accountContext.getProxy();
-            BrowserEnv browserEnv = accountContext.getBrowserEnv();
-
-            return AccountPrintDto
-                    .builder()
-                    .id(accountContext.getAccountBaseInfo().getId())
-                    .name(accountContext.getName())
-                    .proxyInfo(proxy == null ? "NO_PROXY" : proxy.getId() + "-" + proxy.getAddressStr())
-                    .browserEnvInfo(String.valueOf(browserEnv == null ? "NO_ENV" : browserEnv.getId()))
-                    .signUp(accountContext.getSignUp())
-                    .build();
-        }).toList();
-
-        sb.append(CommandLineTablePrintHelper.generateTableString(list, AccountPrintDto.class)).append("\n");
-
-        return sb.toString();
-    }
-
-    /**
-     * 打印账户连接情况
-     *
-     * @return String
-     */
-    public static String printAccountConnectStatusList(List<AccountContext> accountContexts) {
-        StringBuilder sb = new StringBuilder();
-
-        sb.append(" 账号链接状态列表:\n");
-
-        List<ConnectStatusInfo> list = accountContexts.stream()
-                .map(AccountContext::getConnectStatusInfo).toList();
-
-        sb.append(CommandLineTablePrintHelper.generateTableString(list, ConnectStatusInfo.class)).append("\n");
-
-        return sb.toString();
-    }
-
-    /**
-     * 打印账号收益
-     *
-     * @return String
-     */
-    public static String printAccountReward(List<AccountContext> accountContexts) {
-        StringBuilder sb = new StringBuilder();
-
-        sb.append(" 收益列表:\n");
-
-        List<RewordInfo> list = accountContexts.stream()
-                .map(accountContext -> accountContext.getRewordInfo().newInstance()).toList();
-
-        sb.append(CommandLineTablePrintHelper.generateTableString(list, RewordInfo.class)).append("\n");
-
-        return sb.toString();
-    }
-
-}
-package cn.com.helei.bot.core.util.exception;
-
-public class BotMethodFormatException extends RuntimeException{
-
-    // 默认构造函数
-    public BotMethodFormatException() {
-        super("error bot method format.");
-    }
-
-    // 传入错误信息的构造函数
-    public BotMethodFormatException(String message) {
-        super(message);
-    }
-
-    // 传入错误信息和异常原因的构造函数
-    public BotMethodFormatException(String message, Throwable cause) {
-        super(message, cause);
-    }
-
-    // 传入异常原因的构造函数
-    public BotMethodFormatException(Throwable cause) {
-        super(cause);
-    }
-}
-package cn.com.helei.bot.core.util.exception;
-
-public class BotMethodInvokeException extends RuntimeException{
-
-    // 默认构造函数
-    public BotMethodInvokeException() {
-        super("invoke bot method failed.");
-    }
-
-    // 传入错误信息的构造函数
-    public BotMethodInvokeException(String message) {
-        super(message);
-    }
-
-    // 传入错误信息和异常原因的构造函数
-    public BotMethodInvokeException(String message, Throwable cause) {
-        super(message, cause);
-    }
-
-    // 传入异常原因的构造函数
-    public BotMethodInvokeException(Throwable cause) {
-        super(cause);
-    }
-}
-package cn.com.helei.bot.core.util;
-
-
-import cn.com.helei.bot.core.config.SystemConfig;
-
-import java.io.*;
-import java.nio.file.Path;
-import java.util.List;
-
-public class FileUtil {
-
-
-    public static final String RESOURCE_ROOT_DIR = System.getProperty("user.dir") + File.separator + "botData";
-
-    public static String getConfigDirResourcePath(List<String> path, String fileName) {
-        StringBuilder sb = new StringBuilder(RESOURCE_ROOT_DIR);
-
-        for (String p : path) {
-            sb.append(File.separator).append(p);
-        }
-        return sb.append(File.separator).append(fileName).toString();
-    }
-
-    public static String getBotAppConfigPath() {
-        return RESOURCE_ROOT_DIR +File.separator + String.join(File.separator, SystemConfig.CONFIG_DIR_APP_PATH);
-    }
-
-    /**
-     * 保存账户
-     */
-    public static void saveJSONStringContext(Path filePath, String jsonContext) {
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(filePath.toFile()))) {
-            writer.write(jsonContext);
-            writer.flush();
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    public static void main(String[] args) {
-        System.out.println(getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, "account.yaml"));
-    }
-}
-package cn.com.helei.bot.core.util;
-
-import cn.com.helei.bot.core.config.SystemConfig;
-import org.yaml.snakeyaml.Yaml;
-
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
-public class YamlConfigLoadUtil {
-
-    private static final ConcurrentHashMap<String, Object> LOADED_CONFIG_MAP = new ConcurrentHashMap<>();
-
-    public static <T> T load(
-            String path,
-            String fileName,
-            String prefix,
-            Class<T> clazz
+    public RestApiClient(
+            ProxyInfo proxy,
+            ExecutorService executorService
     ) {
-        return load(
-                Arrays.asList(path.split("\\.")),
-                fileName,
-                Arrays.asList(prefix.split("\\.")),
-                clazz
-        );
-    }
+        this.executorService = executorService;
+        OkHttpClient.Builder builder = new OkHttpClient.Builder();
+        builder
+                // 连接超时
+                .connectTimeout(25, TimeUnit.SECONDS)
+                // 读取超时
+                .readTimeout(120, TimeUnit.SECONDS)
+                // 写入超时
+                .writeTimeout(60, TimeUnit.SECONDS);
 
-
-    public static <T> T load(
-            List<String> path,
-            String fileName,
-            List<String> prefixList,
-            Class<T> clazz
-    ) {
-        String dirResourcePath = FileUtil.getConfigDirResourcePath(path, fileName);
-
-        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
-            if (config == null) {
-                Yaml yaml = new Yaml();
-                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
-                    Map<String, Object> yamlData = yaml.load(inputStream);
-
-                    if (prefixList != null) {
-                        for (String prefix : prefixList) {
-                            yamlData = (Map<String, Object>) yamlData.get(prefix);
-                        }
-                    }
-
-                    config = yaml.loadAs(yaml.dump(yamlData), clazz);
-                } catch (IOException e) {
-                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
-                }
-            }
-
-            return config;
-        });
-
-        return (T) compute;
-    }
-
-    public static List<Object> load(List<String> configDirBotPath, String fileName, String prefix) {
-        return load(configDirBotPath, fileName, List.of(prefix.split("\\.")));
-    }
-
-    public static List<Object> load(
-            List<String> path,
-            String fileName,
-            List<String> prefixList
-    ) {
-        String dirResourcePath = FileUtil.getConfigDirResourcePath(path, fileName);
-
-        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
-            if (config == null) {
-                Yaml yaml = new Yaml();
-                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
-                    Map<String, Object> yamlData = yaml.load(inputStream);
-
-                    if (prefixList != null) {
-                        for (String prefix : prefixList) {
-                            yamlData = (Map<String, Object>) yamlData.get(prefix);
-                        }
-                    }
-                    return yamlData.get("list");
-                } catch (IOException e) {
-                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
-                }
-            }
-
-            return config;
-        });
-
-        return (List<Object>) compute;
-    }
-
-
-    public static <T> T load(File path, List<String> prefixList, Class<T> tClass) {
-        Object compute = LOADED_CONFIG_MAP.compute(path.getAbsolutePath(), (k, config) -> {
-            if (config == null) {
-                Yaml yaml = new Yaml();
-                try (InputStream inputStream = new FileInputStream(path)) {
-                    Map<String, Object> yamlData = yaml.load(inputStream);
-
-                    if (prefixList != null) {
-                        for (String prefix : prefixList) {
-                            yamlData = (Map<String, Object>) yamlData.get(prefix);
-                        }
-                    }
-
-                    return yaml.loadAs(yaml.dump(yamlData), tClass);
-                } catch (IOException e) {
-                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", path), e);
-                }
-            }
-            return config;
-        });
-
-        return (T) compute;
-    }
-
-    public static void main(String[] args) {
-        System.out.println(YamlConfigLoadUtil.load(SystemConfig.CONFIG_DIR_BOT_PATH, "browser-env.yaml", List.of("bot", "browser")));
-    }
-
-}
-package cn.com.helei.bot.keitokun;
-
-import cn.com.helei.bot.core.bot.anno.BotMethod;
-import cn.com.helei.bot.core.bot.anno.BotWSMethodConfig;
-import cn.com.helei.bot.core.bot.base.AnnoDriveAutoBot;
-import cn.com.helei.bot.core.bot.constants.BotJobType;
-import cn.com.helei.bot.core.config.AutoBotConfig;
-import cn.com.helei.bot.core.dto.ConnectStatusInfo;
-import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.supporter.botapi.BotApi;
-import cn.com.helei.bot.core.supporter.netty.BaseBotWSClient;
-import cn.com.helei.bot.core.supporter.netty.BotJsonWSClient;
-import cn.com.helei.bot.core.supporter.netty.constants.WebsocketClientStatus;
-import cn.hutool.core.util.StrUtil;
-import com.alibaba.fastjson.JSONObject;
-import lombok.extern.slf4j.Slf4j;
-
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.concurrent.ConcurrentHashMap;
-
-@Slf4j
-public class KeiToKunBot extends AnnoDriveAutoBot<KeiToKunBot> {
-
-    private static final String UID_KEY = "uid";
-
-    private static final String TODAY_KEY = "today";
-
-    private static final String TODAY_REMAINING_TAP_KEY = "today_remaining_tap";
-
-    private static final String TAP_BASE_URL_KEY = "tap_base_url";
-
-    private final static int noResponsePingLimit = 10;
-
-    private final static Map<BaseBotWSClient<JSONObject, JSONObject>, Integer> clientNoResponsePingCount = new ConcurrentHashMap<>();
-
-    private final static Map<BaseBotWSClient<JSONObject, JSONObject>, Integer> requestIdMap = new ConcurrentHashMap<>();
-
-    private final Random random = new Random();
-
-
-    public KeiToKunBot(AutoBotConfig autoBotConfig, BotApi botApi) {
-        super(autoBotConfig, botApi);
-    }
-
-
-    @Override
-    protected KeiToKunBot getInstance() {
-        return this;
-    }
-
-
-    @Override
-    protected void accountsLoadedHandler(List<AccountContext> accountContexts) {
-        String today = LocalDate.now().toString();
-
-        accountContexts.forEach(accountContext -> {
-            // 判断今日的有没有点击完成
-            String remainingTapStr = accountContext.getParam(TODAY_REMAINING_TAP_KEY);
-            String accountSaveDay = accountContext.getParam(TODAY_KEY);
-
-            // 今天还有没点击的,或者就没点击
-            if (accountSaveDay == null || remainingTapStr == null
-                    || !accountSaveDay.equals(today) || Integer.parseInt(remainingTapStr) >= 0
-            ) {
-                accountContext.setParam(TODAY_KEY, LocalDate.now().toString());
-                accountContext.setParam(TODAY_REMAINING_TAP_KEY, StrUtil.isBlank(remainingTapStr) ? "500" : remainingTapStr);
-            } else {
-                accountContext.setParam(TODAY_REMAINING_TAP_KEY, "0");
-            }
-        });
-    }
-
-
-    @BotMethod(
-            jobType = BotJobType.WEB_SOCKET_CONNECT,
-            jobName = "ws-keep-alive-task",
-            cronExpression = "*/10 * * * * ?",
-            bowWsConfig = @BotWSMethodConfig(
-                    isRefreshWSConnection = true
-            )
-    )
-    public BotJsonWSClient tapConnection(AccountContext accountContext) {
-        String prefix = accountContext.getSimpleInfo();
-
-        // Step 1 检查是否有uid
-        String uid = accountContext.getParam("uid");
-
-        if (StrUtil.isBlank(uid)) {
-            log.warn("{} uid不可用", prefix);
-            return null;
-        }
-
-        // Step 2 判断今天的点击是否完成
-        String today = LocalDate.now().toString();
-        String remainingTapStr = accountContext.getParam(TODAY_REMAINING_TAP_KEY);
-        String accountSaveDay = accountContext.getParam(TODAY_KEY);
-
-        // 新的一天
-        if (accountSaveDay == null || !accountSaveDay.equals(today) || StrUtil.isBlank(remainingTapStr)) {
-            accountContext.setParam(TODAY_KEY, LocalDate.now().toString());
-            accountContext.setParam(TODAY_REMAINING_TAP_KEY, "500");
-        } else if (Integer.parseInt(remainingTapStr) > 0) { // 日内没点击完
-            log.info("{} 没点击完，剩余: {}", prefix, remainingTapStr);
-        } else {
-            // 今天点击完的
-            log.warn("{} 今日点击已完成", prefix);
-            return null;
-        }
-
-        log.info("{}-uid[{}] 开始创建ws客户端", prefix, uid);
-
-        String connectUrl = getAutoBotConfig().getConfig(TAP_BASE_URL_KEY) + "?uid=" + accountContext.getParam(UID_KEY);
-
-        return new BotJsonWSClient(
-                accountContext,
-                connectUrl
-        ) {
-
-            @Override
-            public void whenAccountClientStatusChange(WebsocketClientStatus clientStatus) {
-                AccountContext accountContext = this.getAccountContext();
-
-                String printPrefix = accountContext.getSimpleInfo() + "-" + accountContext.getParam(UID_KEY);
-
-                switch (clientStatus) {
-                    case RUNNING -> {
-                        log.info("{} 连接ws服务器[{}]成功", printPrefix, connectUrl);
-
-                    }
-                    case STOP -> {
-                        log.info("{} 连接到ws服务器[{}]失败", printPrefix, connectUrl);
-
-                        accountContext.getConnectStatusInfo().getRestart().incrementAndGet();
-                    }
-                    case SHUTDOWN -> {
-                        log.info("{} ws连接已断开", printPrefix);
-                        requestIdMap.remove(this);
-                    }
-                }
-            }
-
-            @Override
-            public JSONObject getHeartbeatMessage() {
-                Integer count = clientNoResponsePingCount.compute(this, (k, v) -> {
-                    if (v != null && v >= noResponsePingLimit) {
-                        return null;
-                    }
-                    return v == null ? 1 : v + 1;
+        if (proxy != null) {
+            builder.proxy(new Proxy(Proxy.Type.HTTP, proxy.getAddress()));
+            if (StrUtil.isNotBlank(proxy.getUsername())) {
+                builder.proxyAuthenticator((route, response) -> {
+                    String credential = Credentials.basic(proxy.getUsername(), proxy.getPassword());
+                    return response.request().newBuilder()
+                            .header("Proxy-Authorization", credential)
+                            .build();
                 });
+            }
+        }
+        this.okHttpClient = builder.build();
+    }
 
-                if (count == null) {
-                    log.warn("{} 长时间未收到pong，关闭客户端", this.getAccountContext().getSimpleInfo());
-                    this.close();
-                    return null;
+
+    /**
+     * 发送请求，如果有asKey参数不为null，则会鉴权
+     *
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<JSONObject>
+     */
+    public CompletableFuture<String> request(
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            Request request = buildRequest(url, method, headers, params, body);
+
+            return normalRequest(url, method, request);
+        }, executorService);
+    }
+
+    public CompletableFuture<List<String>> streamRequest(
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            Request request = buildRequest(url, method, headers, params, body);
+
+
+            Exception exception = null;
+            for (int i = 0; i < RETRY_TIMES; i++) {
+                // 发送请求并获取响应
+                try (Response response = okHttpClient.newCall(request).execute()) {
+                    return streamRequest(url, response);
+                } catch (SocketTimeoutException e) {
+                    log.warn("请求[{}]超时，尝试重新请求 [{}}/{}],", url, i, RETRY_TIMES);
+                    exception = e;
+                } catch (IOException e) {
+                    throw new RuntimeException("请求url [" + url + "] 失败", e);
                 }
-
-
-                JSONObject frame = new JSONObject();
-                frame.put("cmd", 1001);
-                frame.put("id", requestIdMap.compute(this, (k, v) -> v == null ? 1 : v + 1));
-                frame.put("uid", accountContext.getParam("uid"));
-
-                JSONObject data = new JSONObject();
-                int randomClickTimes = getRandomClickTimes();
-
-                data.put("amount", randomClickTimes);
-                data.put("collectNum", randomClickTimes);
-                data.put("timestamp", System.currentTimeMillis());
-                frame.put("data", data);
-
-                log.info("[{}] 发送心跳[{}]", accountContext.getSimpleInfo(), frame);
-                accountContext.getConnectStatusInfo().getHeartBeat().getAndIncrement();
-
-                return frame;
             }
 
-            @Override
-            public void whenAccountReceiveResponse(
-                    Object id,
-                    JSONObject response
-            ) {
-                Integer cmd = response.getInteger("cmd");
-                JSONObject data = response.getJSONObject("data");
+            throw new RuntimeException("请求重试次数超过限制, " + RETRY_TIMES, exception);
+        });
+    }
 
-                AccountContext accountContext = this.getAccountContext();
-                ConnectStatusInfo connectStatusInfo = accountContext.getConnectStatusInfo();
+    @NotNull
+    private static Request buildRequest(String url, HttpMethod method, Map<String, String> headers, JSONObject params, JSONObject body) {
+        // 创建表单数据
+        StringBuilder queryString = new StringBuilder();
 
-                String prefix = accountContext.getSimpleInfo() + "-" + accountContext.getParam("uid");
+        String requestUrl = url;
+        if (params != null) {
+            params.keySet().forEach(key -> {
+                queryString.append(key).append("=").append(params.get(key)).append("&");
+            });
 
-                log.info("{} 收到消息 {}", prefix, response);
-                switch (cmd) {
-                    case 1001:
-                        Integer totalNum = data.getInteger("totalNum");
-                        Integer collectNum = data.getInteger("collectNum");
-
-                        accountContext.setParam(TODAY_REMAINING_TAP_KEY,
-                                String.valueOf(Math.max(0, totalNum - collectNum)));
-
-                        // 今日的领完了, 关闭
-                        if (totalNum <= collectNum) {
-                            log.info("{} 今日keitokun点击已完成，断开ws连接", prefix);
-                            accountContext.setParam(TODAY_KEY, LocalDate.now().toString());
-                            this.shutdown();
-                        }
-
-                        log.info("{} 收到响应,[{}/{}](已点击/剩余)", prefix,
-                                collectNum, totalNum);
-
-                        accountContext.getRewordInfo().setTotalPoints(data.getInteger("keitoAmount") * 1.0);
-                        accountContext.getRewordInfo().setTotalPoints(collectNum * 1.0);
-
-                        connectStatusInfo.getHeartBeat().incrementAndGet();
-                        break;
-                    default:
-                        log.warn("{} 收到未知响应[{}]", prefix, response);
-                        connectStatusInfo.getErrorHeartBeat().incrementAndGet();
-                }
-
-                connectStatusInfo.setUpdateDateTime(LocalDateTime.now());
+            if (!queryString.isEmpty()) {
+                queryString.deleteCharAt(queryString.length() - 1);
             }
+            requestUrl = url + "?" + queryString;
+        }
 
-            @Override
-            public void whenAccountReceiveMessage(
-                    JSONObject message
-            ) {
 
+        Request.Builder builder = new Request.Builder();
+
+
+        MediaType JSON = MediaType.get("application/json; charset=utf-8");
+
+        RequestBody requestBody = null;
+        if (body != null) {
+            requestBody = RequestBody.create(body.toJSONString(), JSON);
+        }
+
+
+        // 创建 POST 请求
+        builder.url(requestUrl);
+
+        if (HttpMethod.GET.equals(method)) {
+            builder.get();
+        } else {
+            builder.method(method.name(), requestBody);
+        }
+
+        if (headers != null) {
+            for (Map.Entry<String, String> header : headers.entrySet()) {
+                builder.addHeader(header.getKey(), header.getValue());
             }
-        };
-    }
-
-    private int getRandomClickTimes() {
-        return random.nextInt(5) + 1;
-    }
-
-}
-package cn.com.helei.bot.view;
-
-import cn.com.helei.bot.core.AutoBotApplication;
-import cn.com.helei.bot.core.bot.RestTaskAutoBot;
-import cn.com.helei.bot.core.bot.anno.BotApplication;
-import cn.com.helei.bot.core.bot.anno.BotMethod;
-import cn.com.helei.bot.core.bot.constants.BotJobType;
-import cn.com.helei.bot.core.bot.view.MenuCMDLineAutoBot;
-import cn.com.helei.bot.core.config.AutoBotConfig;
-import cn.com.helei.bot.core.dto.Result;
-import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.supporter.botapi.BotApi;
-import cn.com.helei.bot.core.supporter.commandMenu.DefaultMenuType;
-import cn.com.helei.bot.core.supporter.commandMenu.MenuNodeMethod;
-import cn.com.helei.bot.core.supporter.netty.BaseBotWSClient;
-import cn.com.helei.bot.core.supporter.netty.BotJsonWSClient;
-import cn.com.helei.bot.core.util.YamlConfigLoadUtil;
-import cn.com.helei.bot.core.util.exception.DepinBotStartException;
-import cn.hutool.core.util.RandomUtil;
-import com.alibaba.fastjson.JSONObject;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-
-import java.util.List;
-
-
-@SpringBootTest(classes = AutoBotApplication.class)
-class MenuCMDLineAutoBotTest {
-
-    private static final Logger log = LoggerFactory.getLogger(MenuCMDLineAutoBotTest.class);
-
-    private TestRestAutoBot autoBot;
-
-    private MenuCMDLineAutoBot<AutoBotConfig> menuCMDLineAutoBot;
-
-    @Autowired
-    public BotApi botApi;
-
-    @BeforeEach
-    public void setUp() throws DepinBotStartException {
-        AutoBotConfig load = YamlConfigLoadUtil.load("config.app", "example.yaml", "bot.app", AutoBotConfig.class);
-
-        autoBot = new TestRestAutoBot(load, botApi);
-
-        menuCMDLineAutoBot = new MenuCMDLineAutoBot<>(autoBot, List.of(DefaultMenuType.IMPORT));
-
-    }
-
-    @Test
-    public void test() throws DepinBotStartException {
-        menuCMDLineAutoBot.start();
+        }
+        return builder.build();
     }
 
 
-    @BotApplication(name = "test", describe = "dwadwa")
-    static class TestRestAutoBot extends RestTaskAutoBot<TestRestAutoBot> {
-
-        public TestRestAutoBot(AutoBotConfig autoBotConfig, BotApi botApi) {
-            super(autoBotConfig, botApi);
+    @NotNull
+    private static List<String> streamRequest(String url, Response response) throws IOException {
+        ResponseBody responseBody = response.body();
+        if (response.isSuccessful() || responseBody == null) {
+            throw new RuntimeException("请求 " + url + "失败, " + (responseBody == null ? null : responseBody.string()));
         }
 
-        @Override
-        protected TestRestAutoBot getInstance() {
-            return this;
+        List<String> result = new ArrayList<>();
+
+        BufferedSource source = responseBody.source();
+        while (!source.exhausted()) {
+            String chunk = source.readUtf8Line();
+            System.out.println(chunk);
+            if (chunk != null) {
+                result.add(chunk);
+            }
         }
+        return result;
+    }
 
-        @BotMethod(jobType = BotJobType.REGISTER)
-        public Result register(AccountContext accountContext, String inviteCode) {
-            return Result.ok("success");
-        }
 
-        @BotMethod(jobType = BotJobType.LOGIN)
-        public Result login(AccountContext accountContext) {
-            return Result.ok();
-        }
+    @Nullable
+    private String normalRequest(String url, HttpMethod method, Request request) {
+        log.debug("创建请求 url[{}], method[{}]成功，开始请求服务器", url, method);
 
-        @BotMethod(jobType = BotJobType.TIMED_TASK, cronExpression = "*/10 * * * * ?")
-        public String dailyCheckIn(AccountContext accountContext) {
-            System.out.println("123123");
-            log.info("签到逻辑");
-            return "签到成功";
-        }
-
-        @BotMethod(
-                jobType = BotJobType.WEB_SOCKET_CONNECT,
-                jobName = "ws-keep-alive-task",
-                cronExpression = "*/10 * * * * ?"
-        )
-        public BaseBotWSClient<?, ?> keepAliveTask(AccountContext accountContext) {
-            log.info("[{}]创建ws客户端", accountContext.getId());
-
-            return new BotJsonWSClient(accountContext, "http://127.0.0.1:443/test") {
-                @Override
-                public JSONObject getHeartbeatMessage() {
-                    return null;
+        Exception exception = null;
+        for (int i = 0; i < RETRY_TIMES; i++) {
+            // 发送请求并获取响应
+            try (Response response = okHttpClient.newCall(request).execute()) {
+                ResponseBody responseBody = response.body();
+                if (response.isSuccessful()) {
+                    try {
+                        return responseBody == null ? null : responseBody.string();
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                } else {
+                    String body = "";
+                    if (responseBody != null) {
+                        body =  responseBody.string();
+                        body = body.substring(0, Math.min(body.length(), 200));
+                    }
+                    throw new RuntimeException("请求 " + url + "失败[" + response.code() + "], "+ body);
                 }
-
-                @Override
-                public void whenAccountReceiveResponse(Object id, JSONObject response) {
-
-                }
-
-                @Override
-                public void whenAccountReceiveMessage(JSONObject message) {
-
-                }
-            };
+            } catch (SocketTimeoutException e) {
+                log.warn("请求[{}]超时，尝试重新请求 [{}}/{}],", url, i, RETRY_TIMES);
+                exception = e;
+            } catch (IOException e) {
+                throw new RuntimeException("请求url [" + url + "] 失败", e);
+            }
         }
 
-        @MenuNodeMethod(title = "测试", description = "账户1，param -> 随机数")
-        public String test() {
-            getAccountContexts().getFirst().setParam("test", String.valueOf(RandomUtil.randomInt()));
-            return "";
-        }
+        throw new RuntimeException("请求重试次数超过限制, " + RETRY_TIMES, exception);
     }
 }
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-quartz</artifactId>
-        </dependency>
--ea --add-opens java.base/java.lang=ALL-UNNAMED -Dspring.output.ansi.enabled=ALWAYS
+
