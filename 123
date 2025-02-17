@@ -1,341 +1,277 @@
-<template>
-  <div class="app-container">
-    <DynamicAddColTable
-      :headers="discordAccountFields"
-      :data="discordAccountList"
-      @upload-data-list="uploadDataListHandler"
-    />
-  </div>
-</template>
+package cn.com.helei.bot.core.mvc.controller;
 
-<script>
-import DynamicAddColTable from '@/views/custom/import/components/dynamic-add-col-table.vue'
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.mvc.service.IAccountBaseInfoService;
+import cn.com.helei.bot.core.mvc.vo.BotImportVO;
+import cn.com.helei.bot.core.mvc.vo.DeleteVO;
+import cn.com.helei.bot.core.mvc.vo.PageQuery;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
 
-export default {
-  name: 'ImportDiscordAccount',
-  components: { DynamicAddColTable },
-  filters: {},
-  data() {
-    return {
-      discordAccountFields: [
-        'username', 'password', 'bind_email'
-      ],
-      discordAccountList: [
-      ]
+/**
+ * <p>
+ * 前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@RestController
+@RequestMapping("/accountBaseInfo")
+public class AccountBaseInfoController {
+    @Autowired
+    private IAccountBaseInfoService accountBaseInfoService;
+
+    @PostMapping("/batchAdd")
+    public Result batchAdd(@RequestBody BotImportVO importVO) {
+        return accountBaseInfoService.saveAccountBaseInfos(importVO.getRawLines());
     }
-  },
-  created() {
-  },
-  methods: {
-    uploadDataListHandler(uploadAccountBaseInfoDataList) {
-      console.log(uploadAccountBaseInfoDataList)
-      this.$message('保存代理信息...' + uploadAccountBaseInfoDataList)
+
+    @PostMapping("/pageQuery")
+    public Result pageQuery(@RequestBody PageQuery query) {
+        return accountBaseInfoService.conditionPageQuery(query);
     }
-  }
+
+    @GetMapping("/typedInfo")
+    public Result queryTypedInfo() {
+        return accountBaseInfoService.queryTypedInfo();
+    }
+
+    @PostMapping("/delete")
+    public Result delete(@RequestBody DeleteVO deleteVO) {
+        return accountBaseInfoService.delete(deleteVO.getIds());
+    }
 }
-</script>
-<template>
-  <div class="app-container">
-    <DynamicAddColTable
-      :headers="telegramAccountFields"
-      :data="telegramAccountList"
-      @upload-data-list="uploadDataListHandler"
-    />
-  </div>
-</template>
+package cn.com.helei.bot.core.mvc.mapper;
 
-<script>
-import DynamicAddColTable from '@/views/custom/import/components/dynamic-add-col-table.vue'
+import cn.com.helei.bot.core.entity.AccountBaseInfo;
+import cn.hutool.core.lang.Pair;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 
-export default {
-  name: 'ImportTelegramAccount',
-  components: { DynamicAddColTable },
-  filters: {},
-  data() {
-    return {
-      telegramAccountFields: [
-        'username', 'phone_prefix', 'phone'
-      ],
-      telegramAccountList: []
-    }
-  },
-  created() {
-  },
-  methods: {
-    uploadDataListHandler(uploadAccountBaseInfoDataList) {
-      console.log(uploadAccountBaseInfoDataList)
-      this.$message('保存代理信息...' + uploadAccountBaseInfoDataList)
-    }
-  }
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * Mapper 接口
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface AccountBaseInfoMapper extends BaseMapper<AccountBaseInfo> {
+
+    Integer insertOrUpdate(AccountBaseInfo accountBaseInfo);
+
+    List<AccountBaseInfo> multipleConditionQuery(AccountBaseInfo query);
+
+    @Select("select type as key, count(*) as value from t_account_base_info group by type")
+    List<Pair<String, Integer>> queryTypedInfo();
 }
-</script>
-<template>
-  <div class="app-container">
-    <DynamicAddColTable
-      :headers="twitterAccountFields"
-      :data="twitterAccountList"
-      :upload-data-network="uploadTwitterNetwork"
-      :batch-query-data-network="batchTwitterNetwork"
-      :delete-data-network="deleteTwitterNetwork"
-      :update-data-network="updateTwitterNetwork"
-    />
-  </div>
-</template>
+package cn.com.helei.bot.core.mvc.service.impl;
 
-<script>
-import DynamicAddColTable from '@/views/custom/import/components/dynamic-add-col-table.vue'
-import { deleteTwitter, pageQueryTwitter, uploadTwitterList } from '@/api/custom/twitter'
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.AccountBaseInfo;
+import cn.com.helei.bot.core.mvc.mapper.AccountBaseInfoMapper;
+import cn.com.helei.bot.core.mvc.service.IAccountBaseInfoService;
+import cn.com.helei.bot.core.mvc.util.ConditionBuildUtil;
+import cn.com.helei.bot.core.mvc.vo.PageQuery;
+import cn.com.helei.bot.core.supporter.botapi.ImportService;
+import cn.hutool.core.lang.Pair;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.github.pagehelper.Page;
+import com.github.pagehelper.PageHelper;
+import com.github.pagehelper.PageInfo;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-export default {
-  name: 'ImportTwitterAccount',
-  components: { DynamicAddColTable },
-  filters: {},
-  data() {
-    return {
-      twitterAccountFields: [
-        'username', 'password'
-      ],
-      twitterAccountList: [
-      ]
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@Service
+public class AccountBaseInfoServiceImpl extends ServiceImpl<AccountBaseInfoMapper, AccountBaseInfo> implements IAccountBaseInfoService {
+
+    @Autowired
+    private ImportService importService;
+
+    @Override
+    public Integer insertOrUpdate(AccountBaseInfo accountBaseInfo) {
+        accountBaseInfo.setInsertDatetime(LocalDateTime.now());
+        accountBaseInfo.setUpdateDatetime(LocalDateTime.now());
+        accountBaseInfo.setIsValid(1);
+
+        return baseMapper.insertOrUpdate(accountBaseInfo);
     }
-  },
-  created() {
-  },
-  methods: {
-    batchTwitterNetwork(query, fieldFilter, loadDataCall) {
-      const payload = {
-        page: query.page,
-        limit: query.limit,
-        fieldFilter: fieldFilter
-      }
 
-      pageQueryTwitter(payload).then(response => {
-        this.$message.success(response)
-        loadDataCall.accept(response.data)
-      })
-    },
-    uploadTwitterNetwork(uploadAccountBaseInfoDataList) {
-      uploadTwitterList(uploadAccountBaseInfoDataList)
-    },
-    deleteTwitterNetwork(browserEnv) {
-      if (browserEnv.id === undefined || browserEnv.id === null) {
-        this.$message.error('删除需带有id')
-      } else {
-        deleteTwitter([browserEnv.id]).then(response => {
-          this.$message.success(response)
-        })
-      }
-    },
-    updateTwitterNetwork(browserEnv) {
-      uploadTwitterList([browserEnv]).then(response => {
-        this.$message.success(response)
-      })
+    @Override
+    public Integer insertOrUpdateBatch(List<AccountBaseInfo> accountBaseInfos) {
+        int successCount = 0;
+        for (AccountBaseInfo accountBaseInfo : accountBaseInfos) {
+            try {
+                Integer count = insertOrUpdate(accountBaseInfo);
+                successCount += count == null ? 0 : count;;
+            } catch (Exception e) {
+                throw new RuntimeException("insert or update [%s] error".formatted(accountBaseInfo), e.getCause());
+            }
+        }
+
+        return successCount;
     }
-  }
+
+    @Override
+    public Result saveAccountBaseInfos(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importService.importAccountBaseInfoFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            log.error("导入账户数据失败", e.getCause());
+            return Result.fail("导入账户数据失败," + e.getMessage());
+        }
+    }
+
+    @Override
+    public Result conditionPageQuery(PageQuery query) {
+        log.info("收到查询消息 [{}]", query);
+        Map<String, Object> filterMap = query.getFilterMap();
+
+        try (Page<AccountBaseInfo> page = PageHelper.startPage(query.getPage(), query.getLimit())){
+            AccountBaseInfo condition = ConditionBuildUtil.getMapContainsCondition(
+                    filterMap,
+                    "params",
+                    AccountBaseInfo.class
+            );
+
+            // 执行自定义查询
+            List<AccountBaseInfo> accountBaseInfos = getBaseMapper().multipleConditionQuery(condition);
+
+            // 包装成 PageInfo 对象，便于返回分页结果
+            PageInfo<AccountBaseInfo> data = new PageInfo<>(accountBaseInfos);
+
+            log.info("[{}]查询成功, {}条", query, accountBaseInfos.size());
+
+            return Result.ok(data);
+        } catch (Exception e) {
+            log.error("error", e);
+            return Result.fail("error, " + e.getCause().getMessage());
+        }
+    }
+
+    @Override
+    @Transactional
+    public Result delete(List<Integer> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Result.ok();
+        }
+
+        if (removeBatchByIds(ids)) {
+            return Result.ok();
+        } else {
+            log.error("删除{}失败", ids);
+            return Result.fail("删除" + ids+ "失败");
+        }
+    }
+
+    @Override
+    public Result queryTypedInfo() {
+        try {
+            List<Pair<String, Integer>> typedInfo = getBaseMapper().queryTypedInfo();
+            return Result.ok(typedInfo);
+        } catch (Exception e) {
+            log.error("查询AccountBaseInfo分类信息失败,", e.getCause());
+            return Result.fail(e.getCause().getMessage());
+        }
+    }
 }
-</script>
-<template>
-  <div class="app-container">
-    <DynamicAddColTable
-      :headers="accountBaseInfoFields"
-      :data="accountBaseInfoList"
-      :batch-query-data-network="batchQueryAccount"
-      :upload-data-network="uploadDataListNetwork"
-      :delete-data-network="deleteDataNetwork"
-      :update-data-network="updateDataHandler"
-    />
-  </div>
-</template>
+package cn.com.helei.bot.core.mvc.service;
 
-<script>
-import DynamicAddColTable from '@/views/custom/import/components/dynamic-add-col-table.vue'
-import {
-  uploadAccountBaseInfoList,
-  deleteAccountBaseInfo,
-  pageQueryAccountBaseInfo
-} from '@/api/custom/account-base-info'
-import { id } from 'html-webpack-plugin/lib/chunksorter'
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.AccountBaseInfo;
+import cn.com.helei.bot.core.mvc.vo.PageQuery;
+import com.baomidou.mybatisplus.extension.service.IService;
 
-export default {
-  name: 'ImportAccountBaseInfo',
-  components: { DynamicAddColTable },
-  filters: {},
-  data() {
-    return {
-      accountBaseInfoFields: [
-        'type', 'name', 'email', 'password'
-      ],
-      accountBaseInfoList: []
-    }
-  },
-  created() {
+import java.util.List;
+import java.util.Map;
 
-  },
-  methods: {
-    uploadDataListNetwork(uploadAccountBaseInfoDataList) {
-      uploadAccountBaseInfoList(uploadAccountBaseInfoDataList).then(response => {
-        this.$message.success(response)
-        loadDataCall.accept(response.data)
-      })
-    },
-    deleteDataNetwork(accountBaseInfo) {
-      if (accountBaseInfo.id !== undefined && accountBaseInfo.id !== null) {
-        deleteAccountBaseInfo([id]).then(response => {
-          if (response.success) {
-            this.$message.success('删除 ' + id + '账户成功')
-          }
-        })
-      } else {
-        this.$message.error('参数错误, 删除时必须带有id')
-      }
-    },
-    updateDataHandler(accountBaseInfo) {
-      uploadAccountBaseInfoList([accountBaseInfo])
-        .then(response => {
-          this.$message.success('更新成功')
-        })
-    },
-    batchQueryAccount(query, fieldFilter, loadDataCall) {
-      const payload = {
-        page: query.page,
-        limit: query.limit,
-        fieldFilter: fieldFilter
-      }
-      pageQueryAccountBaseInfo(payload)
-        .then(response => {
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IAccountBaseInfoService extends IService<AccountBaseInfo> {
 
-        })
-    }
-  }
+    Integer insertOrUpdate(AccountBaseInfo accountBaseInfo);
+
+    Integer insertOrUpdateBatch(List<AccountBaseInfo> accountBaseInfos);
+
+    Result saveAccountBaseInfos(List<Map<String, Object>> rawLines);
+
+    Result conditionPageQuery(PageQuery query);
+
+    Result delete(List<Integer> ids);
+
+    Result queryTypedInfo();
 }
-</script>
-<template>
-  <div class="app-container">
-    <DynamicAddColTable
-      :headers="browserEnvFields"
-      :data="browserEnvList"
-      :update-data-network="updateBrowserEnvNetwork"
-      :delete-data-network="deleteBrowserEnvNetwork"
-      :batch-query-data-network="batchBrowserEnvNetwork"
-      :upload-data-network="uploadBrowserEnvNetwork"
-    />
-  </div>
-</template>
+package cn.com.helei.bot.core.util.typehandler;
 
-<script>
-import DynamicAddColTable from '@/views/custom/import/components/dynamic-add-col-table.vue'
-import { pageQueryBrowserEnv, deleteBrowserEnv, uploadBrowserEnvList } from '@/api/custom/browser-env'
+import com.alibaba.fastjson.JSONObject;
+import org.apache.ibatis.type.BaseTypeHandler;
+import org.apache.ibatis.type.JdbcType;
 
-export default {
-  name: 'ImportBrowserEnv',
-  components: { DynamicAddColTable },
-  filters: {},
-  data() {
-    return {
-      browserEnvFields: [
-        'user_agent'
-      ],
-      browserEnvList: [
-      ]
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.Map;
+
+public class MapTextTypeHandler extends BaseTypeHandler<Map<String, Object>> {
+
+
+    @Override
+    public void setNonNullParameter(PreparedStatement ps, int i, Map<String, Object> parameter, JdbcType jdbcType) throws SQLException {
+
+        String jsonString = parameter != null ? JSONObject.toJSONString(parameter) : "";
+        ps.setString(i, jsonString);
     }
-  },
-  created() {
-  },
-  methods: {
-    batchBrowserEnvNetwork(query, fieldFilter, loadDataCall) {
-      const payload = {
-        page: query.page,
-        limit: query.limit,
-        fieldFilter: fieldFilter
-      }
 
-      pageQueryBrowserEnv(payload).then(response => {
-        this.$message.success(response)
-        loadDataCall.accept(response.data)
-      })
-    },
-    uploadBrowserEnvNetwork(uploadAccountBaseInfoDataList) {
-      uploadBrowserEnvList(uploadAccountBaseInfoDataList)
-    },
-    deleteBrowserEnvNetwork(browserEnv) {
-      if (browserEnv.id === undefined || browserEnv.id === null) {
-        this.$message.error('删除需带有id')
-      } else {
-        deleteBrowserEnv([browserEnv.id]).then(response => {
-          this.$message.success(response)
-        })
-      }
-    },
-    updateBrowserEnvNetwork(browserEnv) {
-      uploadBrowserEnvList([browserEnv]).then(response => {
-        this.$message.success(response)
-      })
+    @Override
+    public Map<String, Object> getNullableResult(ResultSet rs, String columnName) throws SQLException {
+        String json = rs.getString(columnName);
+        if (json == null || json.isEmpty()) {
+            return new HashMap<>();
+        }
+        return JSONObject.parseObject(json, Map.class);
     }
-  }
+
+    @Override
+    public Map<String, Object> getNullableResult(ResultSet rs, int columnIndex) throws SQLException {
+        String json = rs.getString(columnIndex);
+        return JSONObject.parseObject(json, Map.class);
+    }
+
+    @Override
+    public Map<String, Object> getNullableResult(java.sql.CallableStatement cs, int columnIndex) throws SQLException {
+        String json = cs.getString(columnIndex);
+        return JSONObject.parseObject(json, Map.class);
+    }
 }
-</script>
-<template>
-  <div class="app-container">
-    <DynamicAddColTable
-      :headers="proxyInfoFields"
-      :data="proxyInfoList"
-      :upload-data-network="uploadDataListNetwork"
-      :batch-query-data-network="batchQueryProxyNetwork"
-      :delete-data-network="deleteProxyNetwork"
-      :update-data-network="updateProxyNetwork"
-    />
-  </div>
-</template>
-
-<script>
-import DynamicAddColTable from '@/views/custom/import/components/dynamic-add-col-table.vue'
-import { uploadProxyInfoList, pageQueryProxyInfo, deleteProxyInfo } from '@/api/custom/proxy-info'
-
-export default {
-  name: 'ImportProxyInfo',
-  components: { DynamicAddColTable },
-  filters: {},
-  data() {
-    return {
-      proxyInfoFields: [
-        'proxy_protocol', 'host', 'port'
-      ],
-      proxyInfoList: []
-    }
-  },
-  created() {
-
-  },
-  methods: {
-    batchQueryProxyNetwork(query, fieldFilter, loadDataCall) {
-      const payload = {
-        page: query.page,
-        limit: query.limit,
-        fieldFilter: fieldFilter
-      }
-
-      pageQueryProxyInfo(payload).then(response => {
-        this.$message.success(response)
-        loadDataCall.accept(response.data)
-      })
-    },
-    uploadDataListNetwork(uploadAccountBaseInfoDataList) {
-      uploadProxyInfoList(uploadAccountBaseInfoDataList)
-    },
-    deleteProxyNetwork(proxyInfo) {
-      if (proxyInfo.id === undefined || proxyInfo.id === null) {
-        this.$message.error('删除需带有id')
-      } else {
-        deleteProxyInfo([proxyInfo.id]).then(response => {
-          this.$message.success(response)
-        })
-      }
-    },
-    updateProxyNetwork(proxyInfo) {
-      uploadProxyInfoList([proxyInfo]).then(response => {
-        this.$message.success(response)
-      })
-    }
-  }
-}
-</script>
