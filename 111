@@ -1,736 +1,2308 @@
-import request from '@/utils/custom_request'
+package cn.com.helei.bot.core.bot.base;
 
-/**
- * 分页查询浏览器环境
- * @param {page, limit}
- * @returns {*}
- */
-export function pageQueryBot({ page, limit, filterMap }) {
-  return request({
-    url: '/bot/pageQuery',
-    method: 'post',
-    data: {
-      page,
-      limit,
-      filterMap
-    }
-  })
-}
-import request from '@/utils/custom_request'
+import cn.com.helei.bot.core.bot.job.AutoBotJobParam;
+import cn.com.helei.bot.core.bot.job.AutoBotJobRuntimeParam;
+import cn.com.helei.bot.core.dto.config.AutoBotConfig;
+import cn.com.helei.bot.core.bot.constants.BotStatus;
+import cn.com.helei.bot.core.dto.AutoBotRuntimeInfo;
+import cn.com.helei.bot.core.entity.BotInfo;
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import cn.com.helei.bot.core.util.exception.BotMethodFormatException;
+import cn.com.helei.bot.core.util.exception.DepinBotInitException;
+import cn.com.helei.bot.core.util.exception.DepinBotStatusException;
+import cn.com.helei.bot.core.util.NamedThreadFactory;
+import cn.com.helei.bot.core.util.RestApiClientFactory;
+import cn.com.helei.bot.core.util.log.AppendLogger;
+import cn.hutool.core.util.RandomUtil;
+import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson.JSONObject;
+import io.netty.handler.codec.http.HttpMethod;
+import lombok.Getter;
+import lombok.Setter;
 
-/**
- * 上传账户基本信息
- * @param accountBaseInfoList
- * @returns {*}
- */
-export function uploadAccountBaseInfoList(accountBaseInfoList) {
-  return request({
-    url: '/accountBaseInfo/batchAdd',
-    method: 'post',
-    data: {
-      rawLines: accountBaseInfoList
-    }
-  })
-}
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.*;
+import java.util.function.Supplier;
 
-/**
- * 分页查询账户基本信息
- * @param {page, limit, filterMap}
- * @returns {*}
- */
-export function pageQueryAccountBaseInfo({ page, limit, filterMap }) {
-  return request({
-    url: '/accountBaseInfo/pageQuery',
-    method: 'post',
-    data: {
-      page,
-      limit,
-      filterMap
-    }
-  })
-}
-
-/**
- * 获取AccountBaseInfo 根据type分类的信息
- */
-export function queryAccountBaseInfoTypedInfo() {
-  return request({
-    url: '/accountBaseInfo/typedInfo',
-    method: 'get'
-  })
-}
-
-/**
- * 删除账户，根据id
- * @param ids
- * @returns {*}
- */
-export function deleteAccountBaseInfo(ids) {
-  return request({
-    url: '/accountBaseInfo/delete',
-    method: 'post',
-    data: {
-      ids: ids
-    }
-  })
-}
-<template>
-
-<!--  <div class="bot-account-config">-->
-<!--    <el-transfer-->
-<!--      style="text-align: left; display: inline-block"-->
-<!--      v-model=""-->
-<!--      filterable-->
-<!--      :left-default-checked="[2, 3]"-->
-<!--      :right-default-checked="[1]"-->
-<!--      :titles="['Source', 'Target']"-->
-<!--      :button-texts="['到左边', '到右边']"-->
-<!--      :render-content="renderPrintLineStr"-->
-<!--      :format="{-->
-<!--        noChecked: '${total}',-->
-<!--        hasChecked: '${checked}/${total}'-->
-<!--      }"-->
-<!--      :data="accountBaseInfoList">-->
-<!--      <el-button class="transfer-footer" slot="left-footer" size="small">操作</el-button>-->
-<!--      <el-button class="transfer-footer" slot="right-footer" size="small">操作</el-button>-->
-<!--    </el-transfer>-->
-<!--  </div>-->
-</template>
-
-<script>
-
-export default {
-  name: 'BotAccountConfig',
-  // props: {
-  //   accountBaseInfoList: []
-  // },
-  // methods: {
-  //   renderPrintLineStr(h, accountInfo) {
-  //     return accountInfo.id + ' [' + accountInfo.type + ']-[' + accountInfo.name + ']-' + accountInfo.email
-  //   }
-  // }
-}
-</script>
-
-<style scoped>
-.bot-account-config {
-
-}
-</style>
-<template>
-  <div class="bot-info-content clearfix">
-    <el-card class="bot-info-card">
-      <div slot="header" class="clearfix">
-        <span>About bot</span>
-      </div>
-
-      <div class="bot-profile">
-        <div class="box-center">
-          <pan-thumb :image="botInfo.image" :height="'100px'" :width="'100px'" :hoverable="false"/>
-        </div>
-
-        <div class="box-center">
-          <div class="bot-name text-center">{{ botInfo.name }}</div>
-          <div class="bot-role text-center text-muted">id: {{ botInfo.id }}</div>
-        </div>
-      </div>
-
-      <div class="bot-bio">
-        <div class="bot-education bot-bio-section">
-          <div class="bot-bio-section-header">
-            <i class="el-icon-collection-tag"/>
-            <el-tag v-for="tag in botInfo.tag" size="mini">{{ tag }}</el-tag>
-          </div>
-        </div>
-      </div>
-    </el-card>
-
-    <div class="bot-describe">
-      <h3>Bot介绍：</h3>
-      <aside>
-        {{ botInfo.describe }}
-      </aside>
-
-      <el-divider/>
-
-      <div class="bot-job-describe">
-        <h3>功能列表:</h3>
-
-        <el-collapse
-          v-for="(param, jobName) in botInfo.jobParams"
-          v-model="activeJobName"
-          accordion
-        >
-          <el-collapse-item
-            :name="jobName"
-          >
-            <template slot="title">
-              <el-button
-                :type="getJobTagType(param.jobType)"
-                size="mini"
-                style="margin-right: 8px"
-                icon="el-icon-s-help"
-                circle
-              />
-              {{ jobName }}
-            </template>
-
-            <div style="padding: 0 25px; width: 600px">
-
-              <aside>{{ param.description }}</aside>
-
-              <el-descriptions title="常规设置" :column="1" border>
-                <el-descriptions-item label="名称">{{ jobName }}</el-descriptions-item>
-                <el-descriptions-item label="类型">{{ param.jobType }}</el-descriptions-item>
-                <el-descriptions-item label="并发数" :span="2">{{ param.concurrentCount }}</el-descriptions-item>
-                <el-descriptions-item label="运行间隔">
-                  <div v-if="param.intervalInSecond !== undefined  && param.cronExpression !== ''">
-                    {{ param.intervalInSecond }}(秒)
-                  </div>
-                  <el-tag v-else-if="param.cronExpression !== undefined && param.cronExpression !== ''">
-                    {{ param.cronExpression }}
-                  </el-tag>
-                  <div v-else>
-                    无运行间隔配置
-                  </div>
-                </el-descriptions-item>
-                <el-descriptions-item label="功能介绍">{{ param.description }}</el-descriptions-item>
-              </el-descriptions>
-
-              <el-descriptions
-                title="Websocket设置"
-                v-if="isWebSocketConfig(param) && param.autoBotJobWSParam !== undefined"
-                :column="2"
-                border
-              >
-                <el-descriptions-item label="是否刷新ws连接">
-                  {{ param.autoBotJobWSParam.isRefreshWSConnection }}
-                </el-descriptions-item>
-                <el-descriptions-item label="运行无限重连">
-                  {{ param.autoBotJobWSParamwsUnlimitedRetry }}
-                </el-descriptions-item>
-                <el-descriptions-item label="重连次数限制">
-                  {{ param.autoBotJobWSParam.reconnectLimit }}
-                </el-descriptions-item>
-                <el-descriptions-item label="重连次数自减时间间隔" :span="2">
-                  {{ param.autoBotJobWSParam.reconnectCountDownSecond }}
-                </el-descriptions-item>
-                <el-descriptions-item label="websocket连接并发数" :span="2">
-                  {{ param.autoBotJobWSParam.wsConnectCount }}
-                </el-descriptions-item>
-                <el-descriptions-item label="心跳间隔" :span="2">
-                  {{ param.autoBotJobWSParamheartBeatIntervalSecond }}
-                </el-descriptions-item>
-              </el-descriptions>
-            </div>
-          </el-collapse-item>
-        </el-collapse>
-      </div>
-    </div>
-  </div>
-</template>
-
-<script>
-import PanThumb from '@/components/PanThumb/index.vue'
-import {Bot_JOB_TYPE} from "@/utils/system-enum";
-
-export default {
-  name: 'BotInfoCard',
-  components: {PanThumb},
-  props: {
-    botInfo: {
-      name: 'bot-name',
-      describe: 'bot-describe',
-      image: '',
-      tag: [
-        'depin',
-        'sol',
-        'ai'
-      ],
-      jobParams: {}
-    }
-  },
-  data() {
-    return {
-      activeJobName: ''
-    }
-  },
-  methods: {
-    isWebSocketConfig(param) {
-      return param.jobType === Bot_JOB_TYPE.WEB_SOCKET_CONNECT
-    },
-    getJobTagType(jobType) {
-      if (
-        jobType === Bot_JOB_TYPE.LOGIN
-        || jobType === Bot_JOB_TYPE.REGISTER
-        || jobType === Bot_JOB_TYPE.QUERY_REWARD) {
-        return 'success'
-      } else if (jobType === Bot_JOB_TYPE.TIMED_TASK) {
-        return 'primary'
-      } else if (jobType === Bot_JOB_TYPE.ONCE_TASK) {
-        return 'info'
-      } else if (jobType === Bot_JOB_TYPE.WEB_SOCKET_CONNECT) {
-        return 'warning'
-      }
-      return 'danger'
-    }
-  }
-}
-</script>
-
-<style scoped>
-.bot-info-content {
-  height: 350px;
-  margin-bottom: 8px;
-  border-radius: 5px;
-}
-
-.bot-info-card {
-  float: left;
-  margin-bottom: 20px;
-  height: 350px;
-  width: 300px
-}
-
-.bot-describe {
-  float: right;
-  height: 350px;
-  padding: 25px 20px;
-  width: calc(100% - 303px);
-  box-shadow: 0 0 10px rgba(0, 0, 0, 0.15); /* 设置阴影效果 */
-  border-radius: 5px;
-  background-color: #fff;
-
-  overflow-y: scroll;
-}
+public abstract class AbstractAutoBot {
 
 
-.box-center {
-  margin: 0 auto;
-  display: table;
-}
+    private static final ProxyInfo DEFAULT_PROXY = new ProxyInfo();
 
-.text-muted {
-  color: #777;
-}
+    protected final AppendLogger logger = new AppendLogger(getClass());
 
-.bot-profile {
-  .bot-name {
-    font-weight: bold;
-  }
+    @Getter
+    private final Map<String, AutoBotJobRuntimeParam> jobRuntimeParamMap = new ConcurrentHashMap<>();
 
-  .box-center {
-    padding-top: 10px;
-  }
-
-  .bot-role {
-    padding-top: 10px;
-    font-weight: 400;
-    font-size: 14px;
-  }
-}
-
-.bot-bio {
-  margin-top: 20px;
-  color: #606266;
-
-  span {
-    padding-left: 4px;
-  }
-
-  .bot-bio-section {
-    font-size: 14px;
-    padding: 15px 0;
-
-    .bot-bio-section-header {
-      border-top: 1px solid #dfe6ec;
-      padding-top: 10px;
-      margin-bottom: 10px;
-      font-weight: bold;
-    }
-  }
-}
-</style>
-<template>
-  <div class="components-container">
-
-    <el-row :span="24">
-      <bot-info-card :bot-info="botInfo"/>
-    </el-row>
-
-
-    <el-row :span="24">
-      <!--      <left-right-selector-->
-      <!--        :selection-title="'未选择账号'"-->
-      <!--        :selection-list-map="typedAccountListMap"-->
-      <!--        :selected-title="'已选择账号'"-->
-      <!--        :selected-list="bindAccountList"-->
-      <!--        :item-print-handler="itemPrintHandler"-->
-      <!--        @save-exchange="saveExchangeHandler"-->
-      <!--      />-->
-
-      <el-col>
-        <el-transfer
-          style="text-align: left; display: inline-block"
-          v-model="test"
-          filterable
-          :left-default-checked="[2, 3]"
-          :right-default-checked="[1]"
-          :titles="['Source', 'Target']"
-          :button-texts="['到左边', '到右边']"
-          :data="selectionList(this.currentType)">
-          <el-button class="transfer-footer" slot="left-footer" size="small">操作</el-button>
-          <el-button class="transfer-footer" slot="right-footer" size="small">操作</el-button>
-        </el-transfer>
-      </el-col>
-    </el-row>
-  </div>
-</template>
-
-<script>
-import BotInfoCard from '@/views/custom/bot/bot-config/components/bot-info-card.vue'
-import DndList from '@/components/DndList/index.vue'
-import LeftRightSelector from '@/views/custom/components/left-right-selector.vue'
-import {pageQueryAccountBaseInfo, queryAccountBaseInfoTypedInfo} from "@/api/custom/account-base-info";
-
-export default {
-  name: 'BotConfig',
-  components: {LeftRightSelector, DndList, BotInfoCard},
-  data() {
-    return {
-      test: [1],
-      botInfo: {},
-      defaultLimit: 10,
-      currentType: null,
-      typedContext: {
-        'default': {
-          pageDataMap: {
-            1: []
-          },
-          page: 1,
-          limit: 10,
-          total: 0
-        }
-      }
-    }
-  },
-  created() {
-    // 获取路由参数
-    this.botInfo = this.$route.query.botInfo
-    document.title += this.botInfo.id
-
-    // 获取账户分类信息
-    queryAccountBaseInfoTypedInfo().then(response => {
-      const typedInfo = response.data
-
-      for (let info of typedInfo) {
-        this.typedContext[info.key] = {
-          page: 1,
-          limit: this.defaultLimit,
-          total: info.value,
-          pageDataMap: {}
-        }
-
-        this.queryTypedABIPageData(1, this.defaultLimit, info.key)
-      }
-    })
-  },
-  methods: {
-    selectionList(type) {
-      let currentTypeContext = this.typedContext[type];
-      return currentTypeContext.pageDataMap[currentTypeContext.page];
-    },
     /**
-     * 查询account base info
-     *
-     * @param page
-     * @param limit
-     * @param type
+     * 执行异步任务的线程池
      */
-    queryTypedABIPageData(page, limit, type) {
-      // 有缓存，不请求新的数据
-      const pageDataMap = this.typedContext[type].pageDataMap;
-      if (
-        pageDataMap !== undefined && pageDataMap !== null
-        && pageDataMap[page] !== undefined && pageDataMap[page] !== null
-      ) {
-        return
-      }
+    @Getter
+    private final ExecutorService executorService;
 
-      // 获取账户信息
-      pageQueryAccountBaseInfo({
-        page: page,
-        limit: limit,
-        filterMap: {
-          type: type
+    /**
+     * 配置
+     */
+    @Getter
+    private final AutoBotConfig autoBotConfig;
+
+    /**
+     * 状态
+     */
+    private BotStatus status = BotStatus.NEW;
+
+    /**
+     * 代理并发控制
+     */
+    private final Map<ProxyInfo, Semaphore> networkSyncControllerMap;
+
+    /**
+     * bot运行时信息
+     */
+    @Getter
+    private final AutoBotRuntimeInfo autoBotRuntimeInfo;
+
+    /**
+     * 请求并发数量
+     */
+    @Getter
+    @Setter
+    private int requestConcurrentCount = 5;
+
+    /**
+     * bot api
+     */
+    @Getter
+    private final BotApi botApi;
+
+    /**
+     * bot信息
+     */
+    @Getter
+    private final BotInfo botInfo;
+
+
+    public AbstractAutoBot(
+            AutoBotConfig autoBotConfig,
+            BotApi botApi
+    ) {
+        if (StrUtil.isBlank(autoBotConfig.getBotKey())) {
+            throw new IllegalArgumentException("bot key不能为空");
         }
-      }).then(response => {
-        const pageInfo = response.data
-        pageDataMap[page] = pageInfo.list
 
-        for (let ac of pageDataMap[page]) {
-          ac.key = ac.id
+        this.autoBotConfig = autoBotConfig;
+        this.botApi = botApi;
+        this.networkSyncControllerMap = new ConcurrentHashMap<>();
+        this.autoBotRuntimeInfo = new AutoBotRuntimeInfo();
+
+        // 解析bot
+        this.botInfo = buildBotInfo();
+        this.executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory(botInfo.getName() + "-executor"));
+    }
+
+
+    public void init() {
+
+        logger.append(runtimeBotName());
+
+        updateState(BotStatus.INIT);
+
+        String botName = runtimeBotName();
+        try {
+            logger.info("开始初始化表");
+
+            // 检查对应分表是否存在
+            if (!botApi.getBotAccountContextService().checkAndCreateShardedTable(botInfo.getId(), getAutoBotConfig().getBotKey())) {
+                throw new RuntimeException("%s 运行失败,创建账户表失败".formatted(botName));
+            }
+
+            logger.info("初始化完成, 开启保存bot信息");
+            try {
+                Integer i = botApi.getBotInfoService().insertOrUpdate(botInfo);
+                logger.info("保存bot信息成功, " + i);
+            } catch (Exception e) {
+                throw new RuntimeException(botName + " 保存Bot信息失败", e);
+            }
+
+            doInit();
+
+            //更新状态
+            updateState(BotStatus.INIT_FINISH);
+        } catch (Exception e) {
+            logger.error("初始化发生错误", e);
+            updateState(BotStatus.INIT_ERROR);
+        }
+    }
+
+
+    /**
+     * 初始化方法
+     */
+    protected abstract void doInit() throws DepinBotInitException;
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<String> response str
+     */
+    public CompletableFuture<String> syncRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body
+    ) {
+        return syncRequest(proxy, url, method, headers, params, body, 1);
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<String> response str
+     */
+    public CompletableFuture<String> syncRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            int retryTimes
+    ) {
+        return syncRequest(proxy, url, method, headers, params, body, null, retryTimes);
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<Response> String
+     */
+    public CompletableFuture<String> syncRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            Supplier<String> requestStart
+    ) {
+        return syncRequest(
+                proxy,
+                url,
+                method,
+                headers,
+                params,
+                body,
+                requestStart,
+                1
+        );
+    }
+
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<Response> String
+     */
+    public CompletableFuture<String> syncRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            Supplier<String> requestStart,
+            int retryTimes
+    ) {
+        return syncCCHandler(proxy, requestStart, () -> {
+            try {
+                return RestApiClientFactory.getClient(proxy).request(
+                        url,
+                        method,
+                        headers,
+                        params,
+                        body,
+                        retryTimes
+                ).get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<Response> String
+     */
+    public CompletableFuture<List<String>> syncStreamRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            Supplier<String> requestStart
+    ) {
+        return syncCCHandler(proxy, requestStart, () -> {
+            try {
+                return RestApiClientFactory.getClient(proxy).streamRequest(
+                        url,
+                        method,
+                        headers,
+                        params,
+                        body
+                ).get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    public <R> CompletableFuture<R> syncCCHandler(
+            ProxyInfo proxy,
+            Supplier<String> requestStart,
+            Supplier<R> request
+    ) {
+
+        Semaphore networkController = networkSyncControllerMap
+                .compute(proxy == null ? DEFAULT_PROXY : proxy, (k, v) -> {
+                    if (v == null) {
+                        v = new Semaphore(requestConcurrentCount);
+                    }
+                    return v;
+                });
+
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                networkController.acquire();
+                // 随机延迟
+                TimeUnit.MILLISECONDS.sleep(RandomUtil.randomLong(1000, 3000));
+
+                String str = "开始";
+                if (requestStart != null) {
+                    str = requestStart.get();
+                }
+                logger.info("同步器允许发送请求 - " + str);
+
+                return request.get();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            } finally {
+                networkController.release();
+            }
+        }, executorService);
+    }
+
+    /**
+     * 打印BotRuntimeInfo
+     *
+     * @return string
+     */
+    public String printBotRuntimeInfo() {
+        StringBuilder sb = new StringBuilder();
+        getAutoBotRuntimeInfo().getKeyValueInfoMap().forEach((k, v) -> {
+            sb.append(k).append(": ").append(v).append("\n");
+        });
+        return sb.toString();
+    }
+
+    /**
+     * 获取app的配置目录
+     *
+     * @return String
+     */
+    public String getAppConfigDir() {
+        return "";
+//        return FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_APP_PATH, botInfo.getName());
+    }
+
+
+    /**
+     * 更新BotStatus
+     *
+     * @param newStatus 新状态
+     */
+    public synchronized void updateState(BotStatus newStatus) throws DepinBotStatusException {
+        boolean b = true;
+        if (newStatus.equals(BotStatus.SHUTDOWN)) {
+            status = BotStatus.SHUTDOWN;
+            b = false;
+        } else {
+            b = switch (status) {
+                //当前为NEW，新状态才能为NEW,SHUTDOWN
+                case NEW -> BotStatus.INIT.equals(newStatus);
+                //当前为INIT，新状态只能为INIT_FINISH、INIT_ERROR,SHUTDOWN
+                case INIT -> newStatus.equals(BotStatus.INIT_FINISH)
+                        || newStatus.equals(BotStatus.INIT_ERROR);
+                //当前为INIT_ERROR,新状态只能为ACCOUNT_LOADING, SHUTDOWN
+                case INIT_ERROR -> newStatus.equals(BotStatus.INIT);
+                //当前状态为INIT_FINISH，新状态只能为ACCOUNT_LIST_CONNECT, SHUTDOWN
+                case INIT_FINISH -> newStatus.equals(BotStatus.STARTING);
+                //当前状态为STARING，新状态只能为RUNNING,SHUTDOWN
+                case STARTING -> newStatus.equals(BotStatus.RUNNING);
+                //RUNNING，新状态只能为 SHUTDOWN
+                case RUNNING -> false;
+                case SHUTDOWN -> false;
+            };
         }
 
-        this.typedContext[type].total = pageInfo.total
 
-        if (this.currentType === null) this.currentType = type
-      })
-    }
-  }
-}
-</script>
-
-<style scoped>
-.components-container {
-  position: relative;
-  min-height: 100px;
-  background-color: #f0f2f5;
-}
-</style>
-<template>
-  <el-card class="box-card-style">
-    <div slot="header" class="clearfix">
-      <span class="box-card-title">{{ botSimpleInfo.name}}</span>
-      <el-button
-        size="mini"
-        type="box-card-"
-        icon="el-icon-plus"
-        style="float: right; "
-        @click="routeToBotConfig"
-        circle
-      />
-    </div>
-
-    <div class="clearfix">
-      <pan-thumb
-        class="box-card-image"
-        width="75px"
-        height="75px"
-        :image="imageContent"
-      >
-      </pan-thumb>
-
-      <div class="box-card-tag">
-        <el-tag
-          v-for="(value, jobName) in botSimpleInfo.jobParams"
-          style="margin: 4px"
-        >
-          {{ jobName }}
-        </el-tag>
-      </div>
-    </div>
-    <div>
-      <aside class="box-card-describe" >
-        {{ botSimpleInfo.describe + 'aknfdkjawndjanwkdnkjandjkaakmdwlkalkwmdklamdlkawmdlkjdnawk'}}
-      </aside>
-    </div>
-  </el-card>
-</template>
-
-<script>
-
-import PanThumb from '@/components/PanThumb/index.vue'
-import {getAppPathImageBase64} from '@/utils/image'
-
-export default {
-  name: 'BotSimpleCard',
-  components: { PanThumb },
-  props: {
-    botSimpleInfo: {
-      name: 'bot-name',
-      describe: 'bot-describe',
-      image: '',
-      jobParams: {}
-    }
-  },
-
-  data() {
-    return {
-      imageContent: ''
-    }
-  },
-  methods: {
-    routeToBotConfig() {
-      this.$router.push({
-        path: '/bot-config',
-        query: {
-          botInfo: this.botSimpleInfo
+        if (b) {
+            logger.info("Status change [%s] => [%s]".formatted(status, newStatus));
+            this.status = newStatus;
+        } else {
+            throw new DepinBotStatusException(String.format("%s Status不能从[%s]->[%s]", runtimeBotName(), status, newStatus));
         }
-      })
     }
-  },
-  created() {
-    getAppPathImageBase64(this.botSimpleInfo.image).then(response=>{
-      this.imageContent = response
-    })
-  }
-}
-</script>
-
-<style scoped>
-.box-card-style {
-  width: 380px;
-  margin: 15px;
-}
-
-.box-card-image {
-  float: left;
-}
-
-.box-card-tag {
-  display: inline-block;
-  height: 100px;
-  width: calc(100% - 83px);
-  float: right;
-  border-left: #5a5e66;
-  padding: 3px;
-
-}
-
-.box-card-describe{
-
-  font-size: 14px;
-  color: #666;
-  line-height: 1.6;
-  display: -webkit-box;
-  -webkit-line-clamp: 2; /* 限制显示2行 */
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 
 
-.box-card-title {
-  width: 70%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap; /* 如果需要多行省略可用下方样式替换 */
-  margin: 8px 0;
-  float: left;
+    public String runtimeBotName() {
+        return "Bot[%s]-[%s]".formatted(botInfo.getName(), autoBotConfig.getBotKey());
+    }
 
-  font-weight: bold;
-  font-size: 21px;
-}
-</style>
-<template>
-  <div class="mixin-components-container">
-    <el-row>
-      <el-card class="box-card">
-        <div slot="header" class="clearfix">
-          <span>Types</span>
-        </div>
-        <div style="margin-bottom:50px;">
-          <el-col :span="4" class="text-center">
-            <router-link class="pan-btn blue-btn" to="/documentation/index">
-              Depin
-            </router-link>
-          </el-col>
-          <el-col :span="4" class="text-center">
-            <router-link class="pan-btn light-blue-btn" to="/icon/index">
-              ETH
-            </router-link>
-          </el-col>
-          <el-col :span="4" class="text-center">
-            <router-link class="pan-btn pink-btn" to="/excel/export-excel">
-              Ai
-            </router-link>
-          </el-col>
-          <el-col :span="4" class="text-center">
-            <router-link class="pan-btn green-btn" to="/table/complex-table">
-              Daily
-            </router-link>
-          </el-col>
-          <el-col :span="4" class="text-center">
-            <router-link class="pan-btn tiffany-btn" to="/example/create">
-              SOL
-            </router-link>
-          </el-col>
-          <el-col :span="4" class="text-center">
-            <router-link class="pan-btn yellow-btn" to="/theme/index">
-              TESTNET
-            </router-link>
-          </el-col>
-        </div>
-      </el-card>
-    </el-row>
+    protected synchronized Map<String, AutoBotJobParam> getJobParams() {
+        return this.botInfo.getJobParams();
+    }
 
-    <div class="bot-info-content">
-      <bot-simple-card
-        v-for="info in botInfoList"
-        :bot-simple-info="info"
-      />
-    </div>
+    protected synchronized AutoBotJobParam getJobParam(String jobKey) {
+        return this.botInfo.getJobParams() == null ? null : this.botInfo.getJobParams().get(jobKey);
+    }
 
-    <div class="block">
-      <el-pagination
-        layout="prev, pager, next"
-        :total="listQuery.total">
-      </el-pagination>
-    </div>
-  </div>
-</template>
-
-<script>
-import PanThumb from '@/components/PanThumb'
-import MdInput from '@/components/MDinput'
-import DropdownMenu from '@/components/Share/DropdownMenu'
-import waves from '@/directive/waves/index.js'
-import BotSimpleCard from '@/views/custom/bot/bot-market/components/bot-simple-card.vue' // 水波纹指令
-import {pageQueryBot} from '@/api/custom/bot'
-
-export default {
-  name: 'BotMarket',
-  components: {
-    BotSimpleCard,
-    PanThumb,
-    MdInput,
-    DropdownMenu
-  },
-  directives: {
-    waves
-  },
-  created() {
-
-    pageQueryBot({
-      page: this.listQuery.page,
-      limit: this.listQuery.limit
-    }).then(response=>{
-      const pageInfo = response.data
-
-      if (pageInfo != null) {
-        this.listQuery.total = pageInfo.total
-        this.botInfoList = pageInfo.list
-      } else {
-        this.$message.warning('查询bot list失败')
-      }
-    })
-  },
-  data() {
-    return {
-      listQuery: {
-        page: 1,
-        limit: 10,
-        total: 0
-      },
-      botInfoList: [
-        {
-          id: 1,
-          name: 'test-bot-1',
-          describe: 'bot detailnakjwndjkawndjknwajkdnakjwndjkawndjkawndjanwkjdnakjndjkawndjaw',
-          image: 'https://wpimg.wallstcn.com/577965b9-bb9e-4e02-9f0c-095b41417191'
+    protected synchronized void setJobParam(String jobKey, AutoBotJobParam jobParam) {
+        if (this.botInfo.getJobParams().containsKey(jobKey)) {
+            throw new BotMethodFormatException("job名称[%s]重复".formatted(jobKey));
         }
-      ]
+        this.botInfo.getJobParams().put(jobKey, jobParam);
     }
-  }
-}
-</script>
 
-<style scoped>
-.bot-info-content{
-  display: flex;
-  justify-content: space-around;
-  flex-wrap: wrap;
-  margin-top: 20px;
+    protected abstract BotInfo buildBotInfo();
 }
-</style>
+package cn.com.helei.bot.core.bot.base;
+
+import cn.com.helei.bot.core.dto.config.AutoBotConfig;
+import cn.com.helei.bot.core.dto.ACListOptResult;
+import cn.com.helei.bot.core.dto.BotACJobResult;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import cn.com.helei.bot.core.supporter.persistence.impl.DBAccountPersistenceManager;
+import cn.com.helei.bot.core.util.exception.DepinBotInitException;
+import cn.com.helei.bot.core.supporter.persistence.AccountPersistenceManager;
+import cn.hutool.core.lang.Pair;
+import lombok.Getter;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.stream.Collectors;
+
+
+public abstract class AccountManageAutoBot extends AbstractAutoBot {
+
+    @Getter
+    private final List<AccountContext> accountContexts = new ArrayList<>();
+
+    /**
+     * 持久化管理器
+     */
+    private final AccountPersistenceManager persistenceManager;
+
+
+    public AccountManageAutoBot(AutoBotConfig autoBotConfig, BotApi botApi) {
+        super(autoBotConfig, botApi);
+
+        this.persistenceManager = new DBAccountPersistenceManager(botApi);
+    }
+
+
+    @Override
+    protected void doInit() throws DepinBotInitException {
+        // Step 1 初始化保存的线程
+        persistenceManager.init();
+
+        // Step 2 初始化账户
+        initAccounts();
+    }
+
+    /**
+     * 注册账户
+     *
+     * @return CompletableFuture<Result>
+     */
+    public abstract CompletableFuture<ACListOptResult> registerAccount();
+
+    /**
+     * 登录并获取token
+     *
+     * @return CompletableFuture<Result>
+     */
+    public abstract CompletableFuture<ACListOptResult> loginAndTakeTokenAccount();
+
+
+    /**
+     * 更新账户奖励信息
+     *
+     * @return CompletableFuture<Result>
+     */
+    public abstract CompletableFuture<ACListOptResult> updateAccountRewordInfo();
+
+
+    /**
+     * 获取jb name列表
+     *
+     * @return List<String>
+     */
+    public abstract Set<String> botJobNameList();
+
+    /**
+     * 运行指定job
+     *
+     * @param jobName jobName
+     * @return CompletableFuture<Result>
+     */
+    public abstract BotACJobResult startBotJob(String jobName);
+
+
+    /**
+     * 账号被加载后调用
+     *
+     * @param accountContexts accountContexts
+     */
+    protected void accountsLoadedHandler(List<AccountContext> accountContexts) {
+    }
+
+    /**
+     * 初始化账号方法
+     */
+    private void initAccounts() throws DepinBotInitException {
+        Integer botId = getBotInfo().getId();
+
+        try {
+            logger.info("开始加载账户数据");
+            // Step 1 获取持久化的
+            List<AccountContext> accountContexts = persistenceManager
+                    .loadAccountContexts(botId, getAutoBotConfig().getBotKey());
+
+            // Step 2 没有保存的数据
+            if (accountContexts == null || accountContexts.isEmpty()) {
+                logger.warn("没有账户数据");
+            } else {
+                logger.info("使用历史账户数据, 共:"+accountContexts.size());
+
+                // Step 3 加载到bot (字段修改监听)
+                registerAccountsInBot(accountContexts);
+
+                accountsLoadedHandler(accountContexts);
+
+                this.accountContexts.addAll(accountContexts);
+            }
+        } catch (Exception e) {
+            throw new DepinBotInitException("初始化账户发生错误", e);
+        }
+    }
+
+
+    /**
+     * 将账户加载到bot， 会注册监听，当属性发生改变时自动刷入磁盘
+     *
+     * @param accountContexts accountContexts
+     */
+    private void registerAccountsInBot(List<AccountContext> accountContexts) {
+        persistenceManager.registerPersistenceListener(accountContexts);
+    }
+
+
+
+    @NotNull
+    protected Pair<List<AccountContext>, Map<Integer, List<AccountContext>>> getUniAccountContexts() {
+        Map<Integer, List<AccountContext>> groupByABIId = getAccountContexts()
+                .stream()
+                .collect(Collectors.groupingBy(ac ->
+                        ac.getAccountBaseInfoId() == null ? -1 : ac.getAccountBaseInfoId())
+                );
+
+
+        List<AccountContext> accountContexts = groupByABIId.values().stream().map(List::getFirst).toList();
+
+        return new Pair<>(accountContexts, groupByABIId);
+    }
+
+}
+package cn.com.helei.bot.core.bot.base;
+
+import cn.com.helei.bot.core.bot.AccountWSClientBuilder;
+import cn.com.helei.bot.core.bot.WebSocketClientLauncher;
+import cn.com.helei.bot.core.bot.anno.BotApplication;
+import cn.com.helei.bot.core.bot.anno.BotMethod;
+import cn.com.helei.bot.core.bot.constants.BotJobType;
+import cn.com.helei.bot.core.bot.job.AutoBotJobParam;
+import cn.com.helei.bot.core.bot.job.AutoBotJobRuntimeParam;
+import cn.com.helei.bot.core.bot.job.AutoBotJobWSParam;
+import cn.com.helei.bot.core.dto.config.AutoBotConfig;
+import cn.com.helei.bot.core.constants.MapConfigKey;
+import cn.com.helei.bot.core.dto.ACListOptResult;
+import cn.com.helei.bot.core.dto.BotACJobResult;
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.entity.BotInfo;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import cn.com.helei.bot.core.supporter.netty.BaseBotWSClient;
+import cn.com.helei.bot.core.util.exception.BotMethodFormatException;
+import cn.com.helei.bot.core.util.exception.BotMethodInvokeException;
+import cn.com.helei.bot.core.util.exception.DepinBotInitException;
+import cn.hutool.core.lang.Pair;
+import cn.hutool.core.util.BooleanUtil;
+import cn.hutool.core.util.StrUtil;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
+import org.quartz.CronExpression;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.text.ParseException;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.function.BiFunction;
+import java.util.function.Function;
+
+
+import static cn.com.helei.bot.core.constants.MapConfigKey.INVITE_CODE_KEY;
+
+@Slf4j
+public abstract class AnnoDriveAutoBot<T> extends AccountManageAutoBot {
+
+    /**
+     * job并发控制信号量， jobName -> semaphore
+     */
+    private final ConcurrentMap<String, Semaphore> jobCCSemaphoreMap = new ConcurrentHashMap<>();
+
+    /**
+     * ws client 启动器
+     */
+    private final WebSocketClientLauncher webSocketClientLauncher = new WebSocketClientLauncher(this);
+
+    /**
+     * 注册方法
+     */
+    @Getter
+    private Method registerMethod;
+
+    /**
+     * 登录方法
+     */
+    @Getter
+    private Method loginMethod;
+
+    /**
+     * 奖励更新方法
+     */
+    @Getter
+    private Method updateRewordMethod;
+
+
+    public AnnoDriveAutoBot(
+            AutoBotConfig autoBotConfig,
+            BotApi botApi
+    ) {
+        super(autoBotConfig, botApi);
+    }
+
+    /**
+     * 构建bot info， 会解析注解查询db，给上层父类调用
+     *
+     * @return BotInfo
+     */
+    @Override
+    protected BotInfo buildBotInfo() {
+        // 解析bot 基本信息
+        return resolveAnnoBotInfo(getBotApi());
+    }
+
+    /**
+     * 注册type账号
+     *
+     * @return String
+     */
+    @Override
+    public CompletableFuture<ACListOptResult> registerAccount() {
+        if (registerMethod == null) {
+            return CompletableFuture.completedFuture(ACListOptResult.fail(
+                    getBotInfo().getId(),
+                    getBotInfo().getName(),
+                    BotJobType.REGISTER.name(),
+                    "未找到注册方法"
+            ));
+        }
+
+        Pair<List<AccountContext>, Map<Integer, List<AccountContext>>> pair = getUniAccountContexts();
+        List<AccountContext> uniAccountContexts = pair.getKey();
+        Map<Integer, List<AccountContext>> accountContextMap = pair.getValue();
+
+        return asyncForACList(
+                uniAccountContexts,
+                accountContext -> {
+                    if (BooleanUtil.isTrue(accountContext.isSignUp())) {
+                        // 账户注册过，
+                        String errorMsg = String.format("[%s]账户[%s]-email[%s]注册过", accountContext.getId(), accountContext.getName(),
+                                accountContext.getAccountBaseInfo().getEmail());
+
+                        log.warn(errorMsg);
+
+                        return CompletableFuture.completedFuture(Result.fail(errorMsg));
+                    } else if (registerMethod != null) {
+                        // 调用注册方法注册
+                        return invokeBotMethod(
+                                registerMethod,
+                                accountContext,
+                                accountContextMap.get(accountContext.getAccountBaseInfoId()),
+                                getAutoBotConfig().getConfig(INVITE_CODE_KEY)
+                        );
+                    } else {
+                        return CompletableFuture.completedFuture(Result.fail("未知错误"));
+                    }
+                },
+                (accountContext, result) -> {
+                    // 登录成功
+                    if (BooleanUtil.isTrue(result.getSuccess())) {
+                        //注册成功
+                        AccountContext.signUpSuccess(accountContext);
+                    }
+                    return result;
+                },
+                BotJobType.REGISTER.name()
+        );
+    }
+
+
+    @Override
+    protected void doInit() throws DepinBotInitException {
+        // 解析bot job 参数
+        Map<String, AutoBotJobParam> jobParamMap = resolveAnnoBotJobParams();
+        getBotInfo().setJobParams(jobParamMap);
+        getBotApi().getBotInfoService().insertOrUpdate(this.getBotInfo());
+
+        super.doInit();
+    }
+
+    /**
+     * 获取账号的token
+     *
+     * @return String
+     */
+    @Override
+    public CompletableFuture<ACListOptResult> loginAndTakeTokenAccount() {
+        if (loginMethod == null) {
+            return CompletableFuture.completedFuture(ACListOptResult.fail(
+                    getBotInfo().getId(),
+                    getBotInfo().getName(),
+                    BotJobType.LOGIN.name(),
+                    "未找到登录方法"
+            ));
+        }
+
+        return asyncForACList(
+                accountContext -> invokeBotMethod(
+                        loginMethod,
+                        accountContext
+                ),
+                (accountContext, result) -> {
+                    // 登录成功
+                    if (BooleanUtil.isTrue(result.getSuccess())) {
+                        String token = result.getData() == null ? null :
+                                (result.getData() instanceof String ? (String) result.getData() : null);
+
+                        // token不为空，设置到accountContext里
+                        if (StrUtil.isNotBlank(token)) {
+                            accountContext.setParam(MapConfigKey.TOKEN_KEY, token);
+                        } else {
+                            log.debug("账号[{}]-[{}]token为空", accountContext.getId(), accountContext.getName());
+                        }
+                    }
+                    return result;
+                },
+                BotJobType.LOGIN.name()
+        );
+    }
+
+
+    @Override
+    public CompletableFuture<ACListOptResult> updateAccountRewordInfo() {
+        if (updateRewordMethod == null) {
+            return CompletableFuture.completedFuture(ACListOptResult.fail(
+                    getBotInfo().getId(),
+                    getBotInfo().getName(),
+                    BotJobType.QUERY_REWARD.name(),
+                    "未找到奖励查询方法"
+            ));
+        }
+
+        Pair<List<AccountContext>, Map<Integer, List<AccountContext>>> pair = getUniAccountContexts();
+        List<AccountContext> uniAccountContexts = pair.getKey();
+        Map<Integer, List<AccountContext>> accountContextMap = pair.getValue();
+
+        return asyncForACList(
+                uniAccountContexts,
+                accountContext -> invokeBotMethod(
+                        updateRewordMethod,
+                        accountContext,
+                        accountContextMap.get(accountContext.getAccountBaseInfoId())
+                ),
+                (accountContext, result) -> result,
+                BotJobType.QUERY_REWARD.name()
+        );
+    }
+
+    @Override
+    public Set<String> botJobNameList() {
+        return getJobParams().keySet();
+    }
+
+    @Override
+    public BotACJobResult startBotJob(String jobName) {
+        return getBotApi().getBotJobService().registerJob(getJobRuntimeParamMap().get(jobName), getJobParam(jobName));
+    }
+
+    protected abstract T getInstance();
+
+
+    /**
+     * 异步遍历账户
+     *
+     * @param buildResultFuture buildResultFuture   具体执行的方法
+     * @param resultHandler     resultHandler   处理结果的方法
+     * @return CompletableFuture<ACListOptResult>
+     */
+    public CompletableFuture<ACListOptResult> asyncForACList(
+            Function<AccountContext, CompletableFuture<Result>> buildResultFuture,
+            BiFunction<AccountContext, BotACJobResult, BotACJobResult> resultHandler,
+            String jobName
+    ) {
+        return asyncForACList(getAccountContexts(), buildResultFuture, resultHandler, jobName);
+    }
+
+
+    /**
+     * 异步遍历账户
+     *
+     * @param buildResultFuture buildResultFuture   具体执行的方法
+     * @param resultHandler     resultHandler   处理结果的方法
+     * @return CompletableFuture<ACListOptResult>
+     */
+    public CompletableFuture<ACListOptResult> asyncForACList(
+            List<AccountContext> accountContexts,
+            Function<AccountContext, CompletableFuture<Result>> buildResultFuture,
+            BiFunction<AccountContext, BotACJobResult, BotACJobResult> resultHandler,
+            String jobName
+    ) {
+        // Step 1 遍历账户，获取执行结果
+        List<CompletableFuture<BotACJobResult>> futures = accountContexts.stream()
+                .map(accountContext -> {
+                    try {
+                        // 获取信号量
+                        getCcSemaphore(jobName).acquire();
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+
+                    BotACJobResult botACJobResult;
+                    CompletableFuture<Result> future;
+
+                    try {
+                        botACJobResult = new BotACJobResult(
+                                getBotInfo().getId(),
+                                getBotInfo().getName(),
+                                jobName,
+                                accountContext.getId()
+                        );
+
+                        future = buildResultFuture.apply(accountContext);
+
+                    } catch (Exception e) {
+                        getCcSemaphore(jobName).release();
+                        throw new RuntimeException(e);
+                    }
+
+                    return future.thenApplyAsync(botACJobResult::setResult, getExecutorService())
+                            .whenComplete((result, throwable) -> {
+                                // 释放信号量
+                                getCcSemaphore(jobName).release();
+                            });
+                }).toList();
+
+        // Step 2 等待执行完成，转换执行结果
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                .thenApplyAsync(unused -> {
+                    List<BotACJobResult> results = new ArrayList<>();
+
+                    int success = 0;
+                    for (int i = 0; i < futures.size(); i++) {
+                        CompletableFuture<BotACJobResult> future = futures.get(i);
+                        AccountContext accountContext = accountContexts.get(i);
+
+                        try {
+                            BotACJobResult result = future.get();
+                            BotACJobResult botACJobResult = resultHandler.apply(accountContext, result);
+
+                            if (BooleanUtil.isTrue(botACJobResult.getSuccess())) success++;
+
+                            results.add(botACJobResult);
+                        } catch (InterruptedException | ExecutionException e) {
+                            String errorMsg = String.format("[%s] %s 获取异步结果发生错误",
+                                    accountContext.getId(), accountContext.getSimpleInfo());
+
+                            log.error(errorMsg, e);
+
+                            results.add(
+                                    new BotACJobResult(
+                                            getBotInfo().getId(),
+                                            getBotInfo().getName(),
+                                            jobName,
+                                            accountContext.getId(),
+                                            false,
+                                            errorMsg,
+                                            null
+                                    )
+                            );
+                        }
+                    }
+
+                    return ACListOptResult.builder()
+                            .botId(getBotInfo().getId())
+                            .botName(getBotInfo().getName())
+                            .jobName(jobName)
+                            .successCount(success)
+                            .success(true)
+                            .results(results)
+                            .build();
+                });
+    }
+
+    /**
+     * 解析注解，添加botInfo
+     */
+    private BotInfo resolveAnnoBotInfo(BotApi botApi) {
+
+        BotApplication annotation = this.getClass().getAnnotation(BotApplication.class);
+
+        if (annotation != null) {
+            String botName = annotation.name();
+            if (StrUtil.isBlank(botName)) throw new IllegalArgumentException("bot name 不能为空");
+
+            BotInfo botInfo = null;
+
+            BotInfo dbBotInfo = botApi.getBotInfoService().query().eq("name", botName).one();
+
+            // 查询bot是否存在，不存在则创建
+            if (dbBotInfo == null) {
+                log.warn("不存在[{}]bot info, 自动创建...", botName);
+
+                botInfo = BotInfo.generateFromAnno(annotation);
+            } else {
+                botInfo = dbBotInfo;
+            }
+
+            return botInfo;
+        } else {
+            throw new IllegalArgumentException("bot 应该带有 @BotApplication注解");
+        }
+    }
+
+
+    /**
+     * 解析注解中的方法
+     */
+    private Map<String, AutoBotJobParam> resolveAnnoBotJobParams() {
+        Map<String, AutoBotJobParam> params = new HashMap<>();
+
+        // Step 1 遍历方法
+        for (Method method : getClass().getDeclaredMethods()) {
+            method.setAccessible(true);
+
+            // Step 2 找到方法中带有BotMethod注解的
+            if (method.isAnnotationPresent(BotMethod.class)) {
+                BotMethod botJobMethod = method.getAnnotation(BotMethod.class);
+
+                // Step 3 根据BotMethod注解 的jobType，方法分类
+                switch (botJobMethod.jobType()) {
+                    case REGISTER -> registerMethodHandler(method);
+                    case LOGIN -> loginMethodHandler(method);
+                    case QUERY_REWARD -> queryRewardMethodHandler(method, botJobMethod, params);
+                    case ONCE_TASK, TIMED_TASK -> timedTaskMethodHandler(method, botJobMethod, params);
+                    case WEB_SOCKET_CONNECT -> webSocketConnectMethodHandler(method, botJobMethod, params);
+                }
+            }
+        }
+
+        return params;
+    }
+
+    /**
+     * 注册方法处理器
+     *
+     * @param method method
+     */
+    private void registerMethodHandler(Method method) {
+        if (method.getReturnType() == Result.class
+                && method.getParameterCount() == 3
+                && method.getParameters()[0].getType() == AccountContext.class
+                && method.getParameters()[1].getType() == List.class
+                && method.getParameters()[2].getType() == String.class) {
+
+            if (this.registerMethod == null) {
+                this.registerMethod = method;
+            } else {
+                throw new BotMethodFormatException("注册方法只能有一个");
+            }
+        } else {
+            throw new BotMethodFormatException("注册方法错误, " +
+                    "应为 Result methodName(AccountContext accountContext, List<AccountContext> sameAccountBaseInfoIdLists, String inviteCode)");
+        }
+    }
+
+    /**
+     * 登录方法处理器
+     *
+     * @param method method
+     */
+    private void loginMethodHandler(Method method) {
+        if (method.getReturnType() == Result.class
+                && method.getParameterCount() == 1
+                && method.getParameters()[0].getType() == AccountContext.class
+        ) {
+
+            if (this.loginMethod == null) {
+                this.loginMethod = method;
+            } else {
+                throw new BotMethodFormatException("登录方法只能有一个");
+            }
+        } else {
+            throw new BotMethodFormatException("登录方法错误, " +
+                    "应为 Result methodName(AccountContext ac");
+        }
+    }
+
+    /**
+     * 奖励查询方法处理器
+     *
+     * @param method       method
+     * @param botJobMethod botJobMethod
+     * @param params       params
+     */
+    private void queryRewardMethodHandler(Method method, BotMethod botJobMethod, Map<String, AutoBotJobParam> params) {
+        if (method.getReturnType() == Result.class
+                && method.getParameterCount() == 2
+                && method.getParameters()[0].getType() == AccountContext.class
+                && method.getParameters()[1].getType() == List.class
+        ) {
+
+            if (this.updateRewordMethod == null) {
+                this.updateRewordMethod = method;
+            } else {
+                throw new BotMethodFormatException("收益查询方法只能有一个");
+            }
+
+            AutoBotJobParam queryRewardJob = buildAutoBotJobParam(method, botJobMethod);
+
+            params.put(BotJobType.QUERY_REWARD.name(), queryRewardJob);
+        } else {
+            throw new BotMethodFormatException("收益查询方法错误, " +
+                    "应为 Result methodName(AccountContext ac, List<AccountContext> sameAccountBaseInfoIdLists)");
+        }
+    }
+
+    /**
+     * 定时任务方法处理器
+     *
+     * @param method       method
+     * @param botJobMethod botJobMethod
+     * @param params       params
+     */
+    private void timedTaskMethodHandler(Method method, BotMethod botJobMethod, Map<String, AutoBotJobParam> params) {
+        if (method.getParameterCount() == 1
+                && method.getParameters()[0].getType() == AccountContext.class
+        ) {
+
+            AutoBotJobParam jobParam = buildAutoBotJobParam(method, botJobMethod);
+            String jobName = jobParam.getJobName();
+
+            params.put(jobName, jobParam);
+        } else {
+            throw new BotMethodFormatException("定时任务方法错误, " +
+                    "应为 Result methodName(AccountContext ac)");
+        }
+    }
+
+    /**
+     * Web socket 方法处理器
+     *
+     * @param method           method
+     * @param botJobMethodAnno botJobMethodAnno
+     * @param params           params
+     */
+    private void webSocketConnectMethodHandler(Method method, BotMethod botJobMethodAnno, Map<String, AutoBotJobParam> params) {
+        Class<?> returnType = method.getReturnType();
+
+        // 检查方法是否符合要求
+        if (BaseBotWSClient.class.isAssignableFrom(returnType)
+                && method.getParameterCount() == 1
+                && method.getParameters()[0].getType() == AccountContext.class
+        ) {
+            try {
+                // 符合要求，添加到jobMap
+                AutoBotJobParam jobParam = buildAutoBotJobParam(WebSocketClientLauncher.lanuchMethod, botJobMethodAnno);
+
+                String jobName = jobParam.getJobName();
+                AutoBotJobRuntimeParam runtimeParam = getJobRuntimeParamMap().get(jobName);
+
+                if (runtimeParam != null) {
+                    // 更改执行target，添加额外参数
+                    runtimeParam.setTarget(webSocketClientLauncher);
+                    runtimeParam.setExtraParams(new Object[]{jobParam, new AccountWSClientBuilder() {
+                        @Override
+                        public BaseBotWSClient<?, ?> build(AccountContext accountContext) throws InvocationTargetException, IllegalAccessException {
+                            Object invoke = method.invoke(getInstance(), accountContext);
+
+                            return (BaseBotWSClient<?, ?>) invoke;
+                        }
+                    }});
+                }
+
+                // 添加到jobMap
+                params.put(jobName, jobParam);
+            } catch (Exception e) {
+                throw new BotMethodFormatException(e);
+            }
+        } else {
+            throw new BotMethodFormatException("websocket 方法错误, 应为 BotWebSocketContext<?,?> methodName(AccountContext)");
+        }
+    }
+
+    /**
+     * 根据方法注解创建 AutoBotJob
+     *
+     * @param method           方法
+     * @param botJobMethodAnno 方法上的BotMethod注解
+     * @return AutoBotJobParam
+     */
+    private @NotNull AutoBotJobParam buildAutoBotJobParam(Method method, BotMethod botJobMethodAnno) {
+        AutoBotJobParam autoBotJobParam = null;
+
+        try {
+            Integer intervalInSecond = null;
+            CronExpression cronExpression = null;
+
+            if (botJobMethodAnno.intervalInSecond() != 0) {
+                intervalInSecond = botJobMethodAnno.intervalInSecond();
+            } else if (StrUtil.isNotBlank(botJobMethodAnno.cronExpression())) {
+                cronExpression = new CronExpression(botJobMethodAnno.cronExpression());
+            } else if (botJobMethodAnno.jobType() != BotJobType.ONCE_TASK) {
+                throw new IllegalArgumentException("定时任务需设置时间间隔或cron表达式");
+            }
+
+            String jobName = StrUtil.isBlank(botJobMethodAnno.jobName()) ? method.getName() : botJobMethodAnno.jobName();
+
+            // 设置job运行时参数
+            getJobRuntimeParamMap().put(
+                    jobName,
+                    AutoBotJobRuntimeParam.builder().bot(this).method(method).build()
+            );
+
+            // 构建job task参数
+            autoBotJobParam = new AutoBotJobParam(
+                    botJobMethodAnno.jobType(),
+                    jobName,
+                    botJobMethodAnno.description(),
+                    cronExpression,
+                    intervalInSecond,
+                    botJobMethodAnno.concurrentCount(),
+                    AutoBotJobWSParam.generateFromAnno(botJobMethodAnno.bowWsConfig())
+            );
+        } catch (ParseException e) {
+            throw new IllegalArgumentException(
+                    String.format("[%s]-[%s]BotJobMethod上错误的cron表达式[%s]",
+                            getBotInfo().getName(), method.getName(), botJobMethodAnno.cronExpression()),
+                    e
+            );
+        }
+
+        return autoBotJobParam;
+    }
+
+    /**
+     * 运行bot method
+     *
+     * @param method method
+     * @param args   args
+     * @return CompletableFuture<R>
+     */
+    private @NotNull CompletableFuture<Result> invokeBotMethod(Method method, Object... args) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return (Result) method.invoke(this, args);
+            } catch (IllegalAccessException | InvocationTargetException e) {
+                throw new BotMethodInvokeException(String.format(
+                        "执行[%s]-[%s]方法发生异常",
+                        getBotInfo().getName(),
+                        registerMethod.getName()
+                ), e);
+            }
+        }, getExecutorService());
+    }
+
+
+    /**
+     * 获取并发控制的信号量
+     *
+     * @param jobName jobName
+     * @return Semaphore
+     */
+    private Semaphore getCcSemaphore(String jobName) {
+        return jobCCSemaphoreMap.computeIfAbsent(jobName, key -> {
+            AutoBotJobParam autoBotJobParam = getJobParam(key);
+            if (autoBotJobParam == null) {
+                return new Semaphore(getRequestConcurrentCount());
+            }
+            return new Semaphore(autoBotJobParam.getConcurrentCount());
+        });
+    }
+}
+package cn.com.helei.bot.core.bot.view;
+
+import cn.com.helei.bot.core.bot.base.AccountManageAutoBot;
+import cn.com.helei.bot.core.dto.config.AutoBotConfig;
+import cn.com.helei.bot.core.bot.constants.BotStatus;
+import cn.com.helei.bot.core.util.exception.DepinBotStartException;
+import cn.com.helei.bot.core.supporter.commandMenu.CommandMenuNode;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import org.jline.reader.LineReader;
+import org.jline.reader.LineReaderBuilder;
+import org.jline.reader.impl.DefaultParser;
+import org.jline.terminal.Terminal;
+import org.jline.terminal.TerminalBuilder;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.Stack;
+import java.util.concurrent.CountDownLatch;
+
+
+/**
+ * 命令行交互的depin机器人
+ */
+@Slf4j
+@Getter
+public abstract class CommandLineAutoBot {
+
+    private final AutoBotConfig botConfig;
+
+    private final AccountManageAutoBot bot;
+
+    private final CommandMenuNode mainManu;
+
+    public CommandLineAutoBot(AccountManageAutoBot bot) {
+        this.bot = bot;
+        this.botConfig = bot.getAutoBotConfig();
+
+        this.mainManu = new CommandMenuNode(
+                "主菜单",
+                String.format("欢迎使用[%s]-bot", getBot().getBotInfo().getName()),
+                this::printBanner
+        );
+    }
+
+    /**
+     * 构建command菜单
+     */
+    protected abstract void buildMenuNode(CommandMenuNode mainManu);
+
+
+    /**
+     * 异步启动
+     */
+    private void asyncExecute(CountDownLatch startLatch) {
+        Thread commandInputThread = new Thread(() -> {
+            try {
+                doExecute();
+            } catch (Exception e) {
+                log.error("启动bot发生错误", e);
+            } finally {
+                startLatch.countDown();
+            }
+        }, "depin-bot-main");
+        commandInputThread.setDaemon(true);
+        commandInputThread.start();
+    }
+
+    /**
+     * 启动bot
+     *
+     * @throws DepinBotStartException DepinBotStartException
+     */
+    public void start() throws DepinBotStartException {
+        bot.init();
+
+        bot.updateState(BotStatus.STARTING);
+        log.info("{} 正在启动", bot.runtimeBotName());
+        try {
+            CountDownLatch startLatch = new CountDownLatch(1);
+            //启动命令行交互的线程
+            asyncExecute(startLatch);
+
+            log.info("{} 启动完毕", bot.runtimeBotName());
+
+            bot.updateState(BotStatus.RUNNING);
+            startLatch.await();
+
+        } catch (Exception e) {
+            bot.updateState(BotStatus.SHUTDOWN);
+            throw new DepinBotStartException("启动 %s 发生错误".formatted(bot.runtimeBotName()), e);
+        }
+    }
+
+
+    /**
+     * 运行机器人
+     *
+     * @throws IOException IOException
+     */
+    public void doExecute() throws IOException {
+        //Step 1 获取输入
+        CommandMenuNode mainMenuNode = getMenuNode();
+        Terminal terminal = TerminalBuilder.builder().system(true).build();
+        LineReader reader = LineReaderBuilder.builder().terminal(terminal).parser(new DefaultParser()).build();
+
+        Stack<CommandMenuNode> menuNodeStack = new Stack<>();
+        CommandMenuNode currentMenuNode = mainMenuNode;
+
+        //Step 2 不断监听控制台输入
+        while (true) {
+            boolean inputAccept = true;
+            //Step 2.1 获取输入
+            String choice;
+            try {
+                choice = reader.readLine("\n<\n" + getInvokeActionAndMenuNodePrintStr(currentMenuNode) + "请选择>").trim();
+            } catch (Exception e) {
+                log.error("进入菜单节点[{}]发生异常", currentMenuNode.getTittle(), e);
+                currentMenuNode = menuNodeStack.pop();
+                continue;
+            }
+
+            try {
+                //Step 2.2 退出
+                if ("exit".equals(choice)) {
+                    exitHandler();
+                    break;
+                }
+
+                //Step 2.3 选择操作
+                int option = Integer.parseInt(choice.trim());
+                if (option == 0) {
+                    //返回上一级菜单
+                    if (!menuNodeStack.isEmpty()) {
+                        currentMenuNode = menuNodeStack.pop();
+                    }
+                } else if (option > 0 && option <= currentMenuNode.getSubNodeList().size()) {
+                    //进入选择的菜单
+                    menuNodeStack.push(currentMenuNode);
+                    currentMenuNode = currentMenuNode.getSubNodeList().get(option - 1);
+                } else {
+                    inputAccept = false;
+                }
+
+                //终点节点，不进入，直接返回
+                if (currentMenuNode.isEnd()) {
+                    System.out.println(getInvokeActionAndMenuNodePrintStr(currentMenuNode));
+                    currentMenuNode = menuNodeStack.pop();
+                }
+            } catch (Exception e) {
+                inputAccept = false;
+            }
+
+            try {
+                if (!inputAccept && currentMenuNode.getResolveInput() != null) {
+                    currentMenuNode.getResolveInput().accept(choice);
+                }
+            } catch (Exception e) {
+                System.out.println("系统异常");
+            }
+        }
+    }
+
+
+    /**
+     * 获取菜单， 会放入额外的固定菜单
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode getMenuNode() {
+
+        buildMenuNode(mainManu);
+
+        return mainManu;
+    }
+
+    private String printBanner() {
+
+        return "" + bot.printBotRuntimeInfo();
+    }
+
+    /**
+     * 退出回调
+     */
+    protected void exitHandler() {
+    }
+
+    /**
+     * 执行Action回调，获取当前菜单打印的字符串
+     *
+     * @param currentMenuNode currentMenuNode
+     * @return String
+     */
+    public String getInvokeActionAndMenuNodePrintStr(CommandMenuNode currentMenuNode) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(currentMenuNode.getDescribe()).append("\n");
+
+        if (currentMenuNode.getAction() != null) {
+            sb.append(currentMenuNode.getAction().get()).append("\n");
+        }
+
+        if (currentMenuNode.isEnd()) return sb.toString();
+
+        sb.append("选项:\n");
+        List<CommandMenuNode> menuNodeList = currentMenuNode.getSubNodeList();
+        for (int i = 0; i < menuNodeList.size(); i++) {
+            sb.append(i + 1).append(". ").append(menuNodeList.get(i).getTittle()).append("\n");
+        }
+
+        sb.append("0. 返回上一级菜单\n");
+
+        return sb.toString();
+    }
+
+}
+package cn.com.helei.bot.core.entity;
+
+import cn.com.helei.bot.core.dto.ConnectStatusInfo;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenClass;
+import cn.com.helei.bot.core.util.excel.IntegerStringConverter;
+import cn.com.helei.bot.core.util.typehandler.LocalDateTimeTypeHandler;
+import cn.com.helei.bot.core.util.typehandler.MapTextTypeHandler;
+import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenField;
+import com.alibaba.excel.annotation.ExcelProperty;
+import com.alibaba.fastjson.annotation.JSONField;
+import com.baomidou.mybatisplus.annotation.*;
+
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
+
+import lombok.*;
+
+/**
+ * <p>
+ *
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Getter
+@Setter
+@TableName("t_bot_account_context")
+@NoArgsConstructor
+@Builder
+@AllArgsConstructor
+@PropertyChangeListenClass(isDeep = true)
+public class AccountContext {
+
+
+    @TableId(value = "id", type = IdType.AUTO)
+    private Integer id;
+
+    @TableField("bot_id")
+    private Integer botId;
+
+    @TableField("bot_key")
+    @ExcelProperty(value = "bot_key")
+    private String botKey;
+
+    @TableField("account_base_info_id")
+    @ExcelProperty(value = "account_base_info_id", converter = IntegerStringConverter.class)
+    private Integer accountBaseInfoId;
+
+    @TableField("twitter_id")
+    @ExcelProperty(value = "twitter_id", converter = IntegerStringConverter.class)
+    private Integer twitterId;
+
+    @TableField("discord_id")
+    @ExcelProperty(value = "discord_id", converter = IntegerStringConverter.class)
+    private Integer discordId;
+
+    @TableField("proxy_id")
+    @ExcelProperty(value = "proxy_id", converter = IntegerStringConverter.class)
+    private Integer proxyId;
+
+    @TableField("browser_env_id")
+    @ExcelProperty(value = "browser_env_id", converter = IntegerStringConverter.class)
+    private Integer browserEnvId;
+
+    @TableField("telegram_id")
+    @ExcelProperty(value = "telegram_id", converter = IntegerStringConverter.class)
+    private Integer telegramId;
+
+    @TableField("wallet_id")
+    @ExcelProperty(value = "wallet_id", converter = IntegerStringConverter.class)
+    private Integer walletId;
+
+    @TableField("reward_id")
+    private Integer rewardId;
+
+    /**
+     * 账号状态
+     * 0 表示初始状态
+     * 1 表示已注册
+     */
+    @TableField("status")
+    @PropertyChangeListenField
+    private Integer status;
+
+    @JSONField(serialize = true, deserialize = true)
+    @TableField(value = "params", typeHandler = MapTextTypeHandler.class)
+    @PropertyChangeListenField
+    private Map<String, Object> params = new HashMap<>();
+
+    @TableField(value = "insert_datetime", typeHandler = LocalDateTimeTypeHandler.class, fill = FieldFill.INSERT)
+    private LocalDateTime insertDatetime;
+
+    @TableField(value = "update_datetime", typeHandler = LocalDateTimeTypeHandler.class, fill = FieldFill.INSERT_UPDATE)
+    private LocalDateTime updateDatetime;
+
+    @TableField(value = "is_valid", fill = FieldFill.INSERT)
+    @TableLogic
+    private Integer isValid;
+
+
+    @TableField(exist = false)
+    @PropertyChangeListenField
+    private RewordInfo rewordInfo = new RewordInfo();
+
+    @TableField(exist = false)
+    private AccountBaseInfo accountBaseInfo;
+
+    @TableField(exist = false)
+    private TwitterAccount twitter;
+
+    @TableField(exist = false)
+    private DiscordAccount discord;
+
+    @TableField(exist = false)
+    private TelegramAccount telegram;
+
+    @TableField(exist = false)
+    private ProxyInfo proxy;
+
+    @TableField(exist = false)
+    private BrowserEnv browserEnv;
+
+    @TableField(exist = false)
+    private final ConnectStatusInfo connectStatusInfo = new ConnectStatusInfo();
+
+    public String getParam(String key) {
+        return params.get(key) == null ? "" : params.get(key).toString();
+    }
+
+    public void setParam(String key, Object value) {
+        params.put(key, value);
+    }
+
+    public void removeParam(String key) {
+        params.remove(key);
+    }
+
+    public String getName() {
+        if (accountBaseInfo == null) return "";
+        return accountBaseInfo.getName() == null ? accountBaseInfo.getEmail() : accountBaseInfo.getName();
+    }
+
+    public String getSimpleInfo() {
+        return String.format("%s-账户[%s]-代理[%s]", getId(), getName(), getProxy() == null ? "NO_PROXY" : getProxy().generateAddressStr());
+    }
+
+    public Boolean isSignUp() {
+        return status != null && status == 1;
+    }
+
+    public String getType() {
+        return accountBaseInfo == null ? null : accountBaseInfo.getType();
+    }
+
+    public static void signUpSuccess(AccountContext accountContext) {
+        accountContext.setStatus(1);
+    }
+}
+package cn.com.helei.bot.core.entity;
+
+import com.baomidou.mybatisplus.annotation.*;
+
+import lombok.*;
+
+import java.time.LocalDateTime;
+import java.util.Map;
+
+/**
+ * <p>
+ * CREATE TABLE "t_bot_instance" (
+ *   "id" INTEGER PRIMARY KEY AUTOINCREMENT,
+ *   "bot_id" INTEGER NOT NULL,
+ *   "bot_key" text NOT NULL,
+ *   "account_table_name" TEXT,
+ *   "params" TEXT,
+ *   "insert_datetime" TEXT,
+ *   "update_datetime" TEXT,
+ *   "is_valid" INTEGER(1),
+ *   UNIQUE ("bot_id" ASC, "bot_key" ASC)
+ * );
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-18
+ */
+@Getter
+@Setter
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+@TableName("t_bot_instance")
+public class BotInstance {
+
+    @TableId(value = "id", type = IdType.AUTO)
+    private Integer id;
+
+    @TableField("bot_id")
+    private Integer botId;
+
+    @TableField("bot_key")
+    private String botKey;
+
+    @TableField("account_table_name")
+    private String accountTableName;
+
+    @TableField("params")
+    private Map<String, Object> params;
+
+    @TableField(value = "insert_datetime", fill = FieldFill.INSERT)
+    private LocalDateTime insertDatetime;
+
+    @TableField(value = "update_datetime", fill = FieldFill.INSERT_UPDATE)
+    private LocalDateTime updateDatetime;
+
+    @TableField(value = "is_valid", fill = FieldFill.INSERT)
+    @TableLogic
+    private Integer isValid;
+}
+package cn.com.helei.bot.core.mvc.controller;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.mvc.service.IBotAccountContextService;
+import cn.com.helei.bot.core.mvc.vo.BotImportVO;
+import cn.com.helei.bot.core.mvc.vo.PageQuery;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * <p>
+ * 前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@RestController
+@RequestMapping("/accountContext")
+public class BotAccountContextController {
+
+    @Autowired
+    private IBotAccountContextService botAccountContextService;
+
+    @PostMapping("/batchAdd")
+    public Result batchAdd(@RequestBody BotImportVO importVO) {
+        return botAccountContextService.saveBotAccountContext(importVO.getBotId(), importVO.getBotKey(), importVO.getRawLines());
+    }
+
+    @PostMapping("/pageQuery")
+    public Result pageQuery(@RequestBody PageQuery query) {
+        return botAccountContextService.conditionPageQuery(query);
+    }
+}
+package cn.com.helei.bot.core.mvc.controller;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.mvc.service.IBotInfoService;
+import cn.com.helei.bot.core.mvc.vo.BotBindVO;
+import cn.com.helei.bot.core.mvc.vo.PageQuery;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+
+/**
+ * <p>
+ * 前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-07
+ */
+@RestController
+@RequestMapping("/bot")
+public class BotInfoController {
+
+    @Autowired
+    private IBotInfoService botInfoService;
+
+    @PostMapping("/pageQuery")
+    public Result pageQuery(@RequestBody PageQuery query) {
+        return botInfoService.pageQuery(query);
+    }
+
+    @PostMapping("/create")
+    public Result create(@RequestBody BotBindVO botBindVO) {
+        return botInfoService.bindBotAccountBaseInfo(botBindVO.getBotId(), botBindVO.getBotKey(),
+                botBindVO.getBindAccountBaseInfoList());
+    }
+}
+package cn.com.helei.bot.core.mvc.controller;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.mvc.service.IBotInstanceService;
+import cn.com.helei.bot.core.mvc.vo.PageQuery;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * <p>
+ *  前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-18
+ */
+@RestController
+@RequestMapping("/botInstance")
+public class BotInstanceController {
+
+    @Autowired
+    private IBotInstanceService botInstanceService;
+
+    @PostMapping("/pageQuery")
+    public Result pageQuery(PageQuery query) {
+        return botInstanceService.pageQuery(query);
+    }
+}
+package cn.com.helei.bot.core.mvc.mapper;
+
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.util.table_shard.strategy.BotIdBasedTableShardStrategy;
+import cn.com.helei.bot.core.util.table_shard.TableShard;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
+
+import java.util.List;
+
+import static cn.com.helei.bot.core.mvc.service.impl.BotAccountContextServiceImpl.BOT_ACCOUNT_CONTEXT_TABLE_PREFIX;
+
+/**
+ * <p>
+ * Mapper 接口
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@TableShard(
+        tableNamePrefix = BOT_ACCOUNT_CONTEXT_TABLE_PREFIX,
+        values = {"botId", "botKey"},
+        fieldFlag = true,
+        shardStrategy = BotIdBasedTableShardStrategy.class,
+        targetClass = AccountContext.class
+)
+public interface BotAccountContextMapper extends BaseMapper<AccountContext> {
+
+    Integer insertOrUpdate(AccountContext accountBaseInfo);
+
+    Boolean createIfTableNotExist(@Param("botId") Integer botId, @Param("botKey") String botKey);
+
+    List<AccountContext> multipleConditionQuery(AccountContext condition);
+
+    List<String> queryBotAccountTableNames(@Param("botId") Integer botId);
+}
+package cn.com.helei.bot.core.mvc.mapper;
+
+import cn.com.helei.bot.core.entity.BotInfo;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+
+import java.util.List;
+
+/**
+ * <p>
+ *  Mapper 接口
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-07
+ */
+public interface BotInfoMapper extends BaseMapper<BotInfo> {
+
+    Integer insertOrUpdate(BotInfo botInfo);
+
+    List<BotInfo> multipleConditionQuery(BotInfo condition);
+
+}
+package cn.com.helei.bot.core.mvc.mapper;
+
+import cn.com.helei.bot.core.entity.BotInstance;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+
+import java.util.List;
+
+/**
+ * <p>
+ *  Mapper 接口
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-18
+ */
+public interface BotInstanceMapper extends BaseMapper<BotInstance> {
+
+    List<BotInstance> multipleConditionQuery(BotInstance condition);
+
+    Integer insertOrUpdate(BotInstance botInstance);
+}
+package cn.com.helei.bot.core.mvc.service.impl;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.entity.BotInstance;
+import cn.com.helei.bot.core.mvc.mapper.BotAccountContextMapper;
+import cn.com.helei.bot.core.mvc.service.IBotAccountContextService;
+import cn.com.helei.bot.core.mvc.service.IBotInstanceService;
+import cn.com.helei.bot.core.mvc.util.ConditionBuildUtil;
+import cn.com.helei.bot.core.mvc.vo.PageQuery;
+import cn.com.helei.bot.core.supporter.botapi.ImportService;
+import cn.com.helei.bot.core.util.table_shard.strategy.BotIdBasedTableShardStrategy;
+import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.github.pagehelper.Page;
+import com.github.pagehelper.PageHelper;
+import com.github.pagehelper.PageInfo;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@Service
+public class BotAccountContextServiceImpl extends ServiceImpl<BotAccountContextMapper, AccountContext> implements IBotAccountContextService {
+
+    public static final String BOT_ACCOUNT_CONTEXT_TABLE_PREFIX = "t_bot_account_context";
+
+    @Autowired
+    private ImportService importService;
+
+    @Autowired
+    private BotIdBasedTableShardStrategy botIdBasedTableShardStrategy;
+
+    @Autowired
+    private IBotInstanceService botInstanceService;
+
+    @Override
+    public Integer insertOrUpdate(AccountContext accountContext) throws SQLException {
+        try {
+            accountContext.setInsertDatetime(LocalDateTime.now());
+            accountContext.setUpdateDatetime(LocalDateTime.now());
+            accountContext.setIsValid(1);
+
+            return baseMapper.insertOrUpdate(accountContext);
+        } catch (Exception e) {
+            throw new SQLException("insert or update [%s] error".formatted(accountContext));
+        }
+    }
+
+    @Override
+    public Integer insertOrUpdateBatch(List<AccountContext> accountContext) throws SQLException {
+        int successCount = 0;
+
+        for (AccountContext accountContent : accountContext) {
+            Integer count = insertOrUpdate(accountContent);
+            successCount += count == null ? 0 : count;
+        }
+
+        return successCount;
+    }
+
+    @Override
+    public Result saveBotAccountContext(Integer botId, String botKey, List<Map<String, Object>> rawLines) {
+        if (botId == null || StrUtil.isBlank(botKey)) {
+            return Result.fail("botId或botKey不能为空");
+        }
+
+        try {
+            importService.importBotAccountContextFromRaw(botId, botKey, rawLines);
+
+            return Result.ok();
+        } catch (Exception e) {
+            log.error("botId[{}]-botKey[{}] 报错账户信息失败", botId, botKey, e);
+            return Result.fail("保存失败, " + e.getMessage());
+        }
+    }
+
+    @Override
+    @Transactional
+    public Boolean checkAndCreateShardedTable(Integer botId, String botKey) throws SQLException {
+        if (botId == null || StrUtil.isBlank(botKey)) return false;
+
+        BotInstance query = BotInstance
+                .builder()
+                .botId(botId).botKey(botKey)
+                .build();
+
+        if (botInstanceService.exists(new QueryWrapper<>(query))) {
+            log.warn("[{}]-[{}] 已存在对应表", botId, botKey);
+            return true;
+        }
+
+        String tableName = botIdBasedTableShardStrategy.generateTableName(BOT_ACCOUNT_CONTEXT_TABLE_PREFIX, new Object[]{botId, botKey});
+        query.setAccountTableName(tableName);
+
+        try {
+            botInstanceService.insertOrUpdate(query);
+            getBaseMapper().createIfTableNotExist(botId, botKey);
+            return true;
+        } catch (Exception e) {
+            throw new SQLException("保存Bot实例信息失败", e);
+        }
+    }
+
+    @Override
+    public Result conditionPageQuery(PageQuery query) {
+        log.info("收到查询消息 [{}]", query);
+        Map<String, Object> filterMap = query.getFilterMap();
+
+        if (!filterMap.containsKey("botId") || !filterMap.containsKey("botKey")) {
+            log.error("没有携带参数[botId/botKey]");
+            return Result.fail("bot账户查询需包含botId/botKey参数");
+        }
+
+        try (Page<AccountContext> page = PageHelper.startPage(query.getPage(), query.getLimit())) {
+            AccountContext condition = ConditionBuildUtil.getMapContainsCondition(
+                    filterMap,
+                    "params",
+                    AccountContext.class
+            );
+
+            // 执行自定义查询
+            List<AccountContext> accountContexts = getBaseMapper().multipleConditionQuery(condition);
+
+            // 包装成 PageInfo 对象，便于返回分页结果
+            PageInfo<AccountContext> data = new PageInfo<>(accountContexts);
+
+            log.info("[{}]查询成功, {}条", query, accountContexts.size());
+
+            return Result.ok(data);
+        } catch (Exception e) {
+            log.error("error", e);
+            return Result.fail("error, " + e.getCause().getMessage());
+        }
+    }
+}
+package cn.com.helei.bot.core.mvc.service.impl;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.entity.BotInfo;
+import cn.com.helei.bot.core.entity.BrowserEnv;
+import cn.com.helei.bot.core.mvc.mapper.BotInfoMapper;
+import cn.com.helei.bot.core.mvc.service.IBotAccountContextService;
+import cn.com.helei.bot.core.mvc.service.IBotInfoService;
+import cn.com.helei.bot.core.mvc.service.IBrowserEnvService;
+import cn.com.helei.bot.core.mvc.util.ConditionBuildUtil;
+import cn.com.helei.bot.core.mvc.vo.PageQuery;
+import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.github.pagehelper.Page;
+import com.github.pagehelper.PageHelper;
+import com.github.pagehelper.PageInfo;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-07
+ */
+@Slf4j
+@Service
+public class BotInfoServiceImpl extends ServiceImpl<BotInfoMapper, BotInfo> implements IBotInfoService {
+
+    @Autowired
+    private IBotAccountContextService botAccountContextService;
+
+    @Autowired
+    private IBrowserEnvService browserEnvService;
+
+    @Override
+    public Integer insertOrUpdate(BotInfo botInfo) {
+        botInfo.setInsertDatetime(LocalDateTime.now());
+        botInfo.setUpdateDatetime(LocalDateTime.now());
+        botInfo.setIsValid(1);
+
+        return baseMapper.insertOrUpdate(botInfo);
+    }
+
+    @Override
+    public Result pageQuery(PageQuery query) {
+        log.info("收到查询消息 [{}]", query);
+        Map<String, Object> filterMap = query.getFilterMap();
+
+        try (Page<BotInfo> page = PageHelper.startPage(query.getPage(), query.getLimit())){
+            BotInfo condition = ConditionBuildUtil.getMapContainsCondition(
+                    filterMap,
+                    "params",
+                    BotInfo.class
+            );
+
+            // 执行自定义查询
+            List<BotInfo> botInfos = getBaseMapper().multipleConditionQuery(condition);
+
+            // 包装成 PageInfo 对象，便于返回分页结果
+            PageInfo<BotInfo> data = new PageInfo<>(botInfos);
+
+            log.info("[{}]查询成功, {}条", query, botInfos.size());
+
+            return Result.ok(data);
+        } catch (Exception e) {
+            log.error("error", e);
+            return Result.fail("error, " + e.getCause().getMessage());
+        }
+    }
+
+    @Override
+    public Result bindBotAccountBaseInfo(Integer botId, String botKey, List<Integer> bindAccountBaseInfoList) {
+
+        // Step 1 参数校验
+        if (botId == null || StrUtil.isBlank(botKey)) {
+            log.error("Bot[{}]-[{}]绑定账户时参数botId/botKey为空", botId, botKey);
+            return Result.fail("参数botId/botKey不能为空");
+        }
+
+        BotInfo dbBotInfo = query().eq("id", botId).one();
+        if (dbBotInfo == null) {
+            log.error("Bot[{}]-[{}] 不存在该bot", botId, botKey);
+            return Result.fail("不存在该bot");
+        }
+
+        if (bindAccountBaseInfoList == null) bindAccountBaseInfoList = List.of();
+
+        // Step 2 查看或创建对应的表
+        try {
+            botAccountContextService.checkAndCreateShardedTable(botId, botKey);
+        } catch (SQLException e) {
+            log.error("检查创建[{}]-[{}]对应表失败", botId, botKey);
+            return Result.fail("检查创建表失败");
+        }
+
+        // Step 3 插入或更新数据
+        List<BrowserEnv> browserEnvs = browserEnvService.getUselessBrowserEnv(bindAccountBaseInfoList.size());
+        AtomicInteger idx = new AtomicInteger();
+
+        List<AccountContext> accountContexts = bindAccountBaseInfoList.stream().map(abId -> {
+            AccountContext accountContext = new AccountContext();
+            accountContext.setBotId(botId);
+            accountContext.setBotKey(botKey);
+            accountContext.setAccountBaseInfoId(abId);
+            accountContext.setBrowserEnvId(browserEnvs.get(idx.getAndIncrement()).getId());
+
+            return accountContext;
+        }).toList();
+
+        Integer i = null;
+        try {
+            i = botAccountContextService.insertOrUpdateBatch(accountContexts);
+
+            log.info("保存Bot[{}]-[{}]账户成功. [{}/{}]", botId, botKey, i, accountContexts.size());
+            return Result.ok("保存Bot账户成功");
+        } catch (SQLException e) {
+            log.error("保存Bot[{}]-[{}]账户失败", botId, botKey, e);
+            return Result.fail("保存Bot账户失败, " + e.getCause().getMessage());
+        }
+    }
+}
+package cn.com.helei.bot.core.mvc.service.impl;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.BotInfo;
+import cn.com.helei.bot.core.entity.BotInstance;
+import cn.com.helei.bot.core.mvc.mapper.BotInstanceMapper;
+import cn.com.helei.bot.core.mvc.service.IBotInstanceService;
+import cn.com.helei.bot.core.mvc.util.ConditionBuildUtil;
+import cn.com.helei.bot.core.mvc.vo.PageQuery;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.github.pagehelper.Page;
+import com.github.pagehelper.PageHelper;
+import com.github.pagehelper.PageInfo;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-18
+ */
+@Slf4j
+@Service
+public class BotInstanceServiceImpl extends ServiceImpl<BotInstanceMapper, BotInstance> implements IBotInstanceService {
+
+    @Override
+    public Integer insertOrUpdate(BotInstance botInstance) {
+        botInstance.setInsertDatetime(LocalDateTime.now());
+        botInstance.setUpdateDatetime(LocalDateTime.now());
+        botInstance.setIsValid(1);
+
+        return baseMapper.insertOrUpdate(botInstance);
+    }
+
+    @Override
+    public Result pageQuery(PageQuery query) {
+
+        log.info("收到查询消息 [{}]", query);
+        Map<String, Object> filterMap = query.getFilterMap();
+
+        try (Page<BotInstance> page = PageHelper.startPage(query.getPage(), query.getLimit())) {
+            BotInstance condition = ConditionBuildUtil.getMapContainsCondition(
+                    filterMap,
+                    "params",
+                    BotInstance.class
+            );
+
+            // 执行自定义查询
+            List<BotInstance> botInstance = getBaseMapper().multipleConditionQuery(condition);
+
+            // 包装成 PageInfo 对象，便于返回分页结果
+            PageInfo<BotInstance> data = new PageInfo<>(botInstance);
+
+            log.info("[{}]查询成功, {}条", query, botInstance.size());
+
+            return Result.ok(data);
+        } catch (Exception e) {
+            log.error("error", e);
+            return Result.fail("error, " + e.getMessage());
+        }
+    }
+}
+package cn.com.helei.bot.core.mvc.service.impl;
+
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.BrowserEnv;
+import cn.com.helei.bot.core.mvc.mapper.BrowserEnvMapper;
+import cn.com.helei.bot.core.mvc.service.IBrowserEnvService;
+import cn.com.helei.bot.core.mvc.util.ConditionBuildUtil;
+import cn.com.helei.bot.core.mvc.vo.PageQuery;
+import cn.com.helei.bot.core.supporter.botapi.ImportService;
+import cn.com.helei.bot.core.util.pool.IdMarkPool;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.github.pagehelper.Page;
+import com.github.pagehelper.PageHelper;
+import com.github.pagehelper.PageInfo;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@Service
+public class BrowserEnvServiceImpl extends ServiceImpl<BrowserEnvMapper, BrowserEnv> implements IBrowserEnvService, InitializingBean {
+
+    @Autowired
+    private ImportService importService;
+
+    private IdMarkPool<BrowserEnv> pool;
+
+
+
+    @Override
+    public Integer insertOrUpdate(BrowserEnv browserEnv) {
+        browserEnv.setInsertDatetime(LocalDateTime.now());
+        browserEnv.setUpdateDatetime(LocalDateTime.now());
+        browserEnv.setIsValid(1);
+
+        return baseMapper.insertOrUpdate(browserEnv);
+    }
+
+    @Override
+    public Integer insertOrUpdateBatch(List<BrowserEnv> browserEnvs) {
+        int successCount = 0;
+        for (BrowserEnv browserEnv : browserEnvs) {
+            try {
+                Integer count = insertOrUpdate(browserEnv);
+                successCount += count == null ? 0 : count;;
+            } catch (Exception e) {
+                log.error("insert or update [{}] error", browserEnv, e);
+            }
+        }
+
+        return successCount;
+    }
+
+    @Override
+    public Result saveBrowserEnvs(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importService.importBrowserEnvFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail("导入浏览器环境失败," + e.getMessage());
+        }
+    }
+
+    @Override
+    public Result conditionPageQuery(PageQuery query) {
+        log.info("收到查询消息 [{}]", query);
+        Map<String, Object> filterMap = query.getFilterMap();
+
+        try (Page<BrowserEnv> page = PageHelper.startPage(query.getPage(), query.getLimit())){
+            BrowserEnv condition = ConditionBuildUtil.getMapContainsCondition(
+                    filterMap,
+                    "params",
+                    BrowserEnv.class
+            );
+
+            // 执行自定义查询
+            List<BrowserEnv> browserEnvs = getBaseMapper().multipleConditionQuery(condition);
+
+            // 包装成 PageInfo 对象，便于返回分页结果
+            PageInfo<BrowserEnv> data = new PageInfo<>(browserEnvs);
+
+            log.info("[{}]查询成功, {}条", query, browserEnvs.size());
+
+            return Result.ok(data);
+        } catch (Exception e) {
+            log.error("error", e);
+            return Result.fail("error, " + e.getCause().getMessage());
+        }
+    }
+
+    @Override
+    @Transactional
+    public Result delete(List<Integer> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return Result.ok();
+        }
+
+        if (removeBatchByIds(ids)) {
+            return Result.ok();
+        } else {
+            log.error("删除{}失败", ids);
+            return Result.fail("删除" + ids+ "失败");
+        }
+    }
+
+    @Override
+    public List<BrowserEnv> getUselessBrowserEnv(int count) {
+        return pool.getLessUsedItem(count);
+    }
+
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        log.info("loading Browser Env pool...");
+        this.pool = IdMarkPool.create(list(), BrowserEnv.class);
+        log.info("loading Browser Env pool success");
+    }
+}
