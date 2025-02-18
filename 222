@@ -1,276 +1,561 @@
-package cn.com.helei.bot.app.nodego;
+import request from '@/utils/custom_request'
 
-import cn.com.helei.bot.core.bot.anno.BotApplication;
-import cn.com.helei.bot.core.bot.anno.BotMethod;
-import cn.com.helei.bot.core.bot.base.AnnoDriveAutoBot;
-import cn.com.helei.bot.core.bot.constants.BotJobType;
-import cn.com.helei.bot.core.dto.Result;
-import cn.com.helei.bot.core.dto.config.AutoBotConfig;
-import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.supporter.botapi.BotApi;
-import cn.com.helei.bot.core.util.captcha.CloudFlareResolver;
-import cn.com.helei.bot.core.util.exception.RegisterException;
-import cn.hutool.core.util.StrUtil;
-import com.alibaba.fastjson.JSONObject;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-
-@Slf4j
-@BotApplication(name = "NodeGO", describe = "NodeGo自动机器人")
-public class NodeGoBot extends AnnoDriveAutoBot<NodeGoBot> {
-
-    private static final String PASSWORD_KEY = "password";
-
-    private static final String ACCESS_TOKEN_KEY = "accessToken";
-
-    private static final String REGISTER_WEBSITE_KEY = "0x4AAAAAAA4zgfgCoYChIZf4";
-
-    private static final String REGISTER_WEBSITE_URL = "https://app.nodego.ai/register";
-
-    private static final String REGISTER_API = "https://nodego.ai/api/auth/register";
-
-    private static final String LOGIN_API = "https://nodego.ai/api/auth/login";
-
-    private static final String CHECK_IN_API = "https://nodego.ai/api/user/checkin";
-
-    private static final String KEEP_ALIVE_API = "https://nodego.ai/api/user/nodes/ping";
-
-    private static final int KEEP_ALIVE_INTERVAL = 60;
-
-
-    private String twoCaptchaApiKey = "";
-
-    public NodeGoBot(AutoBotConfig autoBotConfig, BotApi botApi) {
-        super(autoBotConfig, botApi);
-        this.twoCaptchaApiKey = autoBotConfig.getConfig("2_CAPTCHA_API_KEY");
+/**
+ * 分页查询浏览器环境
+ * @param {page, limit}
+ * @returns {*}
+ */
+export function pageQueryBot({ page, limit, filterMap }) {
+  return request({
+    url: '/bot/pageQuery',
+    method: 'post',
+    data: {
+      page,
+      limit,
+      filterMap
     }
-
-    @Override
-    protected NodeGoBot getInstance() {
-        return this;
-    }
-
-    @BotMethod(jobType = BotJobType.REGISTER)
-    public Result autoRegister(AccountContext accountContext, String inviteCode) {
-        String email = accountContext.getAccountBaseInfo().getEmail();
-        String username = email.split("@")[0];
-        String password = accountContext.getParam(PASSWORD_KEY);
-
-        log.info("{} 开始打码获取token", username);
-        CompletableFuture<Result> future = CloudFlareResolver.cloudFlareResolve(
-                        accountContext.getProxy(),
-                        REGISTER_WEBSITE_URL,
-                        REGISTER_WEBSITE_KEY,
-                        twoCaptchaApiKey
-                )
-                .thenApplyAsync(tokenAndUA -> {
-                    log.info("{} 开始打码成功， result:[{}]", username, tokenAndUA);
-
-                    String token = tokenAndUA.getString("token");
-                    String userAgent = tokenAndUA.getString("userAgent");
-
-                    JSONObject body = new JSONObject();
-
-                    body.put("username", username);
-                    body.put("email", email);
-                    body.put("password", password);
-                    body.put("refBy", inviteCode);
-                    body.put("captcha", token);
-
-                    // 请求注册
-                    Map<String, String> headers = accountContext.getBrowserEnv().getHeaders();
-                    headers.put("User-Agent", userAgent);
-                    headers.put("Origin", "https://app.nodego.ai");
-                    headers.put("Accept", "application/json");
-                    headers.put("referer", "https://app.nodego.ai/");
-
-                    try {
-                        return syncRequest(
-                                accountContext.getProxy(),
-                                REGISTER_API,
-                                "post",
-                                headers,
-                                null,
-                                body,
-                                () -> accountContext.getSimpleInfo() + " 开始注册"
-                        ).get();
-                    } catch (InterruptedException | ExecutionException e) {
-                        throw new RegisterException(accountContext.getSimpleInfo() + " 注册失败, " + e.getMessage());
-                    }
-                })
-                .thenApplyAsync(registerResultStr -> {
-                    JSONObject registerResult = JSONObject.parseObject(registerResultStr);
-
-                    Integer statusCode = registerResult.getInteger("statusCode");
-                    if (statusCode == 201) {
-                        log.info("{} 注册成功, {}", accountContext.getSimpleInfo(), registerResultStr);
-
-                        accountContext.setParam(ACCESS_TOKEN_KEY, registerResult
-                                .getJSONObject("metadata").getString(ACCESS_TOKEN_KEY));
-
-//                        AccountContext.signUpSuccess(accountContext);
-
-                        return Result.ok();
-                    } else {
-                        throw new RegisterException("注册失败, " + registerResultStr);
-                    }
-                })
-                .exceptionallyAsync(throwable -> {
-                    log.error("{} 注册发生异常", accountContext.getSimpleInfo(), throwable);
-
-                    String exception = throwable.getMessage();
-                    if (exception.contains("{\"message\":\"Email already exists\",\"error\":\"Bad Request\",\"statusCode\":400}")) {
-                        log.warn("{} 已注册过", accountContext.getSimpleInfo());
-//                        AccountContext.signUpSuccess(accountContext);
-                        return Result.ok();
-                    }
-                    return Result.fail("注册发生异常, " + exception);
-                });
-
-        try {
-            return future.get();
-        } catch (ExecutionException | InterruptedException e) {
-            return Result.fail("未知错误, " + e.getMessage());
-        }
-    }
-
-
-    @BotMethod(jobType = BotJobType.LOGIN)
-    public Result login(AccountContext accountContext) {
-        if (accountContext.getParams().containsKey(ACCESS_TOKEN_KEY)) {
-            log.warn("{} 已存在token", accountContext.getSimpleInfo());
-            return Result.ok();
-        }
-
-        String email = accountContext.getAccountBaseInfo().getEmail();
-        String password = accountContext.getParam(PASSWORD_KEY);
-
-        log.info("{} 开始打码获取token", email);
-        CompletableFuture<Result> future = CloudFlareResolver.cloudFlareResolve(
-                        accountContext.getProxy(),
-                        REGISTER_WEBSITE_URL,
-                        REGISTER_WEBSITE_KEY,
-                        twoCaptchaApiKey
-                )
-                .thenApplyAsync(tokenAndUA -> {
-                    log.info("{} 开始打码成功， result:[{}]", email, tokenAndUA);
-
-                    String token = tokenAndUA.getString("token");
-                    String userAgent = tokenAndUA.getString("userAgent");
-
-                    // 请求注册
-                    Map<String, String> headers = accountContext.getBrowserEnv().getHeaders();
-                    headers.put("User-Agent", userAgent);
-                    headers.put("Origin", "https://app.nodego.ai");
-                    headers.put("Accept", "application/json");
-                    headers.put("referer", "https://app.nodego.ai/");
-
-
-                    JSONObject body = new JSONObject();
-                    body.put("email", email);
-                    body.put("password", password);
-                    body.put("captcha", token);
-                    try {
-                        return syncRequest(
-                                accountContext.getProxy(),
-                                LOGIN_API,
-                                "post",
-                                headers,
-                                null,
-                                body,
-                                () -> accountContext.getSimpleInfo() + " 开始登录"
-                        ).get();
-                    } catch (InterruptedException | ExecutionException e) {
-                        throw new RegisterException(accountContext.getSimpleInfo() + " 登录失败, " + e.getMessage());
-                    }
-                })
-                .thenApplyAsync(registerResultStr -> {
-                    JSONObject registerResult = JSONObject.parseObject(registerResultStr);
-
-                    Integer statusCode = registerResult.getInteger("statusCode");
-                    if (statusCode == 201) {
-                        log.info("{} 登录成功, {}", accountContext.getSimpleInfo(), registerResultStr);
-
-                        accountContext.setParam(ACCESS_TOKEN_KEY, registerResult
-                                .getJSONObject("metadata").getString(ACCESS_TOKEN_KEY));
-
-                        return Result.ok();
-                    } else {
-                        throw new RegisterException("登录失败, " + registerResultStr);
-                    }
-                })
-                .exceptionallyAsync(throwable -> {
-                    log.error("{} 登录发生异常, {}", accountContext.getSimpleInfo(), throwable.getMessage());
-                    return Result.fail("登录发生异常," + throwable.getMessage());
-                });
-
-        try {
-            return future.get();
-        } catch (ExecutionException | InterruptedException e) {
-            return Result.fail("未知错误, " + e.getMessage());
-        }
-    }
-
-
-    @BotMethod(
-            jobType = BotJobType.TIMED_TASK
-    )
-    public void keepAlivePing(AccountContext accountContext) {
-        String token = accountContext.getParam(ACCESS_TOKEN_KEY);
-        if (StrUtil.isBlank(token)) {
-            log.error("{} 没有登录", accountContext.getSimpleInfo());
-        }
-
-        Map<String, String> headers = accountContext.getBrowserEnv().getHeaders();
-        headers.put("Origin", "");
-        headers.put("Reffer", "");
-        headers.put("Auth", " " + token);
-
-        // 发送心跳
-        syncRequest(
-                accountContext.getProxy(),
-                KEEP_ALIVE_API,
-                "get",
-                headers,
-                null,
-                null,
-                () -> accountContext.getSimpleInfo() + " send keep alive ping"
-        ).exceptionallyAsync(throwable -> {
-            log.error("{} send keep alive field", accountContext.getSimpleInfo());
-            return null;
-        });
-    }
-
-    @BotMethod(
-            jobType = BotJobType.TIMED_TASK
-    )
-    public void checkIn(AccountContext accountContext) {
-        String token = accountContext.getParam(ACCESS_TOKEN_KEY);
-        if (StrUtil.isBlank(token)) {
-            log.error("{} 没有登录", accountContext.getSimpleInfo());
-        }
-
-        Map<String, String> headers = accountContext.getBrowserEnv().getHeaders();
-        headers.put("Origin", "");
-        headers.put("Reffer", "");
-        headers.put("Auth", " " + token);
-
-        // 发送心跳
-        syncRequest(
-                accountContext.getProxy(),
-                CHECK_IN_API,
-                "get",
-                headers,
-                null,
-                null,
-                () -> accountContext.getSimpleInfo() + " send keep alive ping"
-        ).exceptionallyAsync(throwable -> {
-            log.error("{} check in field", accountContext.getSimpleInfo());
-            return null;
-        });
-    }
+  })
 }
+
+/**
+ * 创建bot
+ * @param botId
+ * @param botKey
+ * @param accountIds
+ */
+export function createBot({botId, botKey, accountIds}) {
+  return request({
+    url: '/bot/create',
+    method: 'post',
+    data: {
+      botId,
+      botKey,
+      accountIds
+    }
+  })
+}
+import request from '@/utils/custom_request'
+
+
+/**
+ * 分页查询Bot账户的基本信息
+ * @param {page, limit, filterMap}
+ * @returns {*}
+ */
+export function pageQueryAccountContext({page, limit, filterMap}) {
+  return request({
+    url: '/accountContext/pageQuery',
+    method: 'post',
+    data: {
+      page,
+      limit,
+      filterMap
+    }
+  })
+}
+<template>
+  <div class="bot-info-content clearfix">
+    <el-card class="bot-info-card">
+      <div slot="header" class="clearfix">
+        <span>About bot</span>
+      </div>
+
+      <div class="bot-profile">
+        <div class="box-center">
+          <pan-thumb :image="botInfo.image" :height="'100px'" :width="'100px'" :hoverable="false" />
+        </div>
+
+        <div class="box-center">
+          <div class="bot-name text-center">{{ botInfo.name }}</div>
+          <div class="bot-role text-center text-muted">id: {{ botInfo.id }}</div>
+        </div>
+      </div>
+
+      <div class="bot-bio">
+        <div class="bot-education bot-bio-section">
+          <div class="bot-bio-section-header">
+            <i class="el-icon-collection-tag" />
+            <el-tag v-for="tag in botInfo.tag" size="mini">{{ tag }}</el-tag>
+          </div>
+        </div>
+      </div>
+    </el-card>
+
+    <div class="bot-describe">
+      <h3>Bot介绍：</h3>
+      <aside>
+        {{ botInfo.describe }}
+      </aside>
+
+      <el-divider />
+
+      <div class="bot-job-describe">
+        <h3>功能列表:</h3>
+
+        <el-collapse
+          v-for="(param, jobName) in botInfo.jobParams"
+          v-model="activeJobName"
+          accordion
+        >
+          <el-collapse-item
+            :name="jobName"
+          >
+            <template slot="title">
+              <el-button
+                :type="getJobTagType(param.jobType)"
+                size="mini"
+                style="margin-right: 8px"
+                icon="el-icon-s-help"
+                circle
+              />
+              {{ jobName }}
+            </template>
+
+            <div style="padding: 0 25px; width: 600px">
+
+              <aside>{{ param.description }}</aside>
+
+              <el-descriptions title="常规设置" :column="1" border>
+                <el-descriptions-item label="名称">{{ jobName }}</el-descriptions-item>
+                <el-descriptions-item label="类型">{{ param.jobType }}</el-descriptions-item>
+                <el-descriptions-item label="并发数" :span="2">{{ param.concurrentCount }}</el-descriptions-item>
+                <el-descriptions-item label="运行间隔">
+                  <div v-if="param.intervalInSecond !== undefined && param.cronExpression !== ''">
+                    {{ param.intervalInSecond }}(秒)
+                  </div>
+                  <el-tag v-else-if="param.cronExpression !== undefined && param.cronExpression !== ''">
+                    {{ param.cronExpression }}
+                  </el-tag>
+                  <div v-else>
+                    无运行间隔配置
+                  </div>
+                </el-descriptions-item>
+                <el-descriptions-item label="功能介绍">{{ param.description }}</el-descriptions-item>
+              </el-descriptions>
+
+              <el-descriptions
+                v-if="isWebSocketConfig(param) && param.autoBotJobWSParam !== undefined"
+                title="Websocket设置"
+                :column="2"
+                border
+              >
+                <el-descriptions-item label="是否刷新ws连接">
+                  {{ param.autoBotJobWSParam.isRefreshWSConnection }}
+                </el-descriptions-item>
+                <el-descriptions-item label="运行无限重连">
+                  {{ param.autoBotJobWSParamwsUnlimitedRetry }}
+                </el-descriptions-item>
+                <el-descriptions-item label="重连次数限制">
+                  {{ param.autoBotJobWSParam.reconnectLimit }}
+                </el-descriptions-item>
+                <el-descriptions-item label="重连次数自减时间间隔" :span="2">
+                  {{ param.autoBotJobWSParam.reconnectCountDownSecond }}
+                </el-descriptions-item>
+                <el-descriptions-item label="websocket连接并发数" :span="2">
+                  {{ param.autoBotJobWSParam.wsConnectCount }}
+                </el-descriptions-item>
+                <el-descriptions-item label="心跳间隔" :span="2">
+                  {{ param.autoBotJobWSParamheartBeatIntervalSecond }}
+                </el-descriptions-item>
+              </el-descriptions>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+import PanThumb from '@/components/PanThumb/index.vue'
+import { Bot_JOB_TYPE } from '@/utils/system-enum'
+
+export default {
+  name: 'BotInfoCard',
+  components: { PanThumb },
+  props: {
+    botInfo: {
+      name: 'bot-name',
+      describe: 'bot-describe',
+      image: '',
+      tag: [
+        'depin',
+        'sol',
+        'ai'
+      ],
+      jobParams: {}
+    }
+  },
+  data() {
+    return {
+      activeJobName: ''
+    }
+  },
+  methods: {
+    isWebSocketConfig(param) {
+      return param.jobType === Bot_JOB_TYPE.WEB_SOCKET_CONNECT
+    },
+    getJobTagType(jobType) {
+      if (
+        jobType === Bot_JOB_TYPE.LOGIN ||
+        jobType === Bot_JOB_TYPE.REGISTER ||
+        jobType === Bot_JOB_TYPE.QUERY_REWARD) {
+        return 'success'
+      } else if (jobType === Bot_JOB_TYPE.TIMED_TASK) {
+        return 'primary'
+      } else if (jobType === Bot_JOB_TYPE.ONCE_TASK) {
+        return 'info'
+      } else if (jobType === Bot_JOB_TYPE.WEB_SOCKET_CONNECT) {
+        return 'warning'
+      }
+      return 'danger'
+    }
+  }
+}
+</script>
+
+<style scoped>
+.bot-info-content {
+  height: 350px;
+  margin-bottom: 8px;
+  border-radius: 5px;
+}
+
+.bot-info-card {
+  float: left;
+  margin-bottom: 20px;
+  height: 350px;
+  width: 300px
+}
+
+.bot-describe {
+  float: right;
+  height: 350px;
+  padding: 25px 20px;
+  width: calc(100% - 303px);
+  min-width: 300px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.15); /* 设置阴影效果 */
+  border-radius: 5px;
+  background-color: #fff;
+
+  overflow-y: scroll;
+}
+
+.box-center {
+  margin: 0 auto;
+  display: table;
+}
+
+.text-muted {
+  color: #777;
+}
+
+.bot-profile {
+  .bot-name {
+    font-weight: bold;
+  }
+
+  .box-center {
+    padding-top: 10px;
+  }
+
+  .bot-role {
+    padding-top: 10px;
+    font-weight: 400;
+    font-size: 14px;
+  }
+}
+
+.bot-bio {
+  margin-top: 20px;
+  color: #606266;
+
+  span {
+    padding-left: 4px;
+  }
+
+  .bot-bio-section {
+    font-size: 14px;
+    padding: 15px 0;
+
+    .bot-bio-section-header {
+      border-top: 1px solid #dfe6ec;
+      padding-top: 10px;
+      margin-bottom: 10px;
+      font-weight: bold;
+    }
+  }
+}
+</style>
+<template>
+  <div class="components-container">
+
+    <el-row :span="24">
+      <bot-info-card :bot-info="botInfo"/>
+    </el-row>
+
+    <el-row :span="24">
+
+      <el-col class="account-selector">
+
+        <div>
+          <h3 style="padding: 0 15px">运行账户设置</h3>
+          <div class="center">
+            <el-input v-model="botKey" style="width: 430px;padding: 0" placeholder="请输入Bot名称"/>
+          </div>
+          <div class="center">
+            <el-transfer
+              v-model="selectedList"
+              style="text-align: left; display: inline-block"
+              :titles="['未添加', '已添加']"
+              :data="selectionList"
+              :format="{
+            noChecked:  '',
+            hasChecked: '${checked}/${total}'
+          }"
+              filterable
+            >
+              <span slot-scope="{ option }">{{ option.key }} - {{ option.name }}-{{ option.email }}</span>
+
+              <div slot="left-footer" style=" display: flex;justify-content: center;">
+                <el-pagination
+                  layout="prev, pager, next"
+                  background
+                  :page-size="defaultLimit"
+                  :total="typedContext[currentType] !== undefined ? typedContext[currentType].total : 0"
+                  @current-change="pageChangeHandler"
+                />
+              </div>
+
+              <div slot="right-footer">
+                <el-select
+                  v-model="currentType"
+                  placeholder=""
+                  size="mini"
+                  style="display: block"
+                  @change="typeChangeHandler"
+                >
+                  <el-option
+                    v-for="(value, key) in typedContext"
+                    :key="key"
+                    :label="key"
+                    :value="key"
+                  />
+                </el-select>
+              </div>
+            </el-transfer>
+          </div>
+
+          <div class="center">
+            <el-button type="success" @click="addBotHandler">
+              确定
+            </el-button>
+          </div>
+        </div>
+      </el-col>
+    </el-row>
+  </div>
+</template>
+
+<script>
+import BotInfoCard from '@/views/custom/bot/bot-config/components/bot-info-card.vue'
+import DndList from '@/components/DndList/index.vue'
+import LeftRightSelector from '@/views/custom/components/left-right-selector.vue'
+import {pageQueryAccountBaseInfo, queryAccountBaseInfoTypedInfo} from '@/api/custom/account-base-info'
+import {createBot} from "@/api/custom/bot";
+import Index from "@/views/dashboard/admin/components/TodoList/index.vue";
+
+export default {
+  name: 'BotConfig',
+  components: {Index, LeftRightSelector, DndList, BotInfoCard},
+  data() {
+    return {
+      botId: null,
+      botKey: null,
+      botInfo: {},
+      defaultLimit: 20,
+      currentType: null,
+      typedContext: {},
+      selectionList: [],
+
+      selectedList: [],
+      selectedQuery: {
+        page: 1,
+        limit: 50
+      }
+    }
+  },
+  computed: {
+    currentPage() {
+      const currentTypeContext = this.typedContext[this.currentType]
+
+      if (currentTypeContext === undefined) return 1
+
+      return currentTypeContext.page
+    }
+  },
+  created() {
+    // 获取路由参数
+    this.botInfo = this.$route.query.botInfo
+    this.botId = this.botInfo.id
+    this.botKey = this.$route.query.botKey
+
+    document.title += this.botInfo.id
+
+    // 获取账户分类信息
+    queryAccountBaseInfoTypedInfo().then(response => {
+      const typedInfo = response.data
+
+      for (const info of typedInfo) {
+        this.typedContext[info.key] = {
+          page: 1,
+          limit: this.defaultLimit,
+          total: info.value,
+          pageDataMap: {}
+        }
+
+        this.queryTypedABIPageData(1, this.defaultLimit, info.key)
+      }
+    })
+  },
+  methods: {
+
+    calPrintTotal(pageDataMap, start) {
+      let printTotal = []
+      for (let i = 1; i <= start; i++) {
+        printTotal = printTotal.concat(pageDataMap[i])
+      }
+
+      return printTotal
+    },
+    /**
+     * 查询account base info
+     *
+     * @param page
+     * @param limit
+     * @param type
+     */
+    queryTypedABIPageData(page, limit, type) {
+      // 有缓存，不请求新的数据
+      const pageDataMap = this.typedContext[type].pageDataMap
+      if (
+        pageDataMap !== undefined && pageDataMap !== null &&
+        pageDataMap[page] !== undefined && pageDataMap[page] !== null
+      ) {
+
+        this.selectionList = this.calPrintTotal(pageDataMap, page)
+
+        return
+      }
+
+      // 获取账户信息
+      pageQueryAccountBaseInfo({
+        page: page,
+        limit: limit,
+        filterMap: {
+          type: type
+        }
+      }).then(response => {
+        const pageInfo = response.data
+
+        pageDataMap[page] = pageInfo.list
+        this.selectionList = this.calPrintTotal(pageDataMap, page)
+        this.currentType = type
+
+        this.typedContext[type].page = page
+
+        for (const ac of pageDataMap[page]) {
+          ac.key = ac.id
+        }
+        this.typedContext[type].total = pageInfo.total
+      })
+    },
+
+    pageChangeHandler(page) {
+      this.queryTypedABIPageData(page, this.defaultLimit, this.currentType)
+    },
+    typeChangeHandler(type) {
+      this.queryTypedABIPageData(this.currentPage, this.defaultLimit, type)
+    },
+    addBotHandler() {
+      const botKey = this.botKey;
+      if (botKey === undefined || botKey === null || botKey === '') {
+        this.$message.warning("请输入bot名称")
+        return
+      }
+
+      const botId = this.botId;
+      if (botId === undefined || botId === null || botId === '') {
+        this.$message.error("请关闭页面重新进入")
+        return
+      }
+
+      this.$confirm('确定创建['+ botKey + ']吗', '提示', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }).then(() => {
+        createBot({
+          botId: botId,
+          botKey: botKey,
+          accountIds: this.selectedList
+        }).then(response => {
+          this.$message.success('创建Bot成功')
+        })
+      }).catch(() => {
+        this.$message({
+          type: 'info',
+          message: '已取消创建'
+        })
+      })
+    }
+  }
+}
+</script>
+
+<style scoped>
+.components-container {
+  position: relative;
+  min-height: 100px;
+  background-color: #f0f2f5;
+  padding: 10px;
+}
+
+.account-selector {
+  background-color: #fff;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.15); /* 设置阴影效果 */
+  border: 1px solid #e6ebf5;
+  border-radius: 10px;
+}
+
+.account-selector >>> .el-transfer-panel {
+  width: 400px;
+  border: 1px solid #e6ebf5;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #FFFFFF;
+  display: inline-block;
+  vertical-align: middle;
+  max-height: 100%;
+  -webkit-box-sizing: border-box;
+  box-sizing: border-box;
+  position: relative;
+}
+
+.account-selector >>> .el-transfer-panel__body {
+  height: calc(100% - 50px);
+  min-height: 296px;
+}
+
+.account-selector >>> .el-transfer-panel__footer {
+  margin: 10px auto 0;
+  padding: 6px 5px;
+}
+
+.center {
+  display: flex;
+  justify-content: center;
+  margin-top: 10px;
+}
+</style>
 
