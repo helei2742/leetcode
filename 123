@@ -1,1537 +1,1250 @@
-package cn.com.helei.bot.core.mvc.service;
-
-import cn.com.helei.bot.core.dto.Result;
-import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.mvc.vo.PageQuery;
-import com.baomidou.mybatisplus.extension.service.IService;
-
-import java.sql.SQLException;
-import java.util.List;
-import java.util.Map;
+import request from '@/utils/custom_request'
 
 /**
- * <p>
- * 服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
+ * 分页查询浏览器环境
+ * @param {page, limit}
+ * @returns {*}
  */
-public interface IBotAccountContextService extends IService<AccountContext> {
-    Integer insertOrUpdate(AccountContext accountBaseInfo) throws SQLException;
-
-    Integer insertOrUpdateBatch(List<AccountContext> twitterAccounts) throws SQLException;
-
-    Result saveBotAccountContext(Integer botId, String botKey, List<Map<String, Object>> acKVMap);
-
-    Boolean checkAndCreateShardedTable(Integer botId, String botKey) throws SQLException;
-
-    Result conditionPageQuery(PageQuery query);
+export function pageQueryBot({ page, limit, filterMap }) {
+  return request({
+    url: '/bot/pageQuery',
+    method: 'post',
+    data: {
+      page,
+      limit,
+      filterMap
+    }
+  })
 }
-package cn.com.helei.bot.core.mvc.service;
-
-import cn.com.helei.bot.core.dto.Result;
-import cn.com.helei.bot.core.entity.BotInfo;
-import cn.com.helei.bot.core.mvc.vo.PageQuery;
-import com.baomidou.mybatisplus.extension.service.IService;
-
-import java.util.List;
 
 /**
- * <p>
- *  服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-07
+ * 创建bot
+ * @param botId
+ * @param botKey
+ * @param accountIds
  */
-public interface IBotInfoService extends IService<BotInfo> {
-
-    Integer insertOrUpdate(BotInfo botInfo);
-
-    Result pageQuery(PageQuery query);
-
-    Result bindBotAccountBaseInfo(Integer botId, String botKey, List<Integer> bindAccountBaseInfoList);
-
+export function createBot({ botId, botKey, accountIds }) {
+  return request({
+    url: '/bot/create',
+    method: 'post',
+    data: {
+      botId,
+      botKey,
+      accountIds
+    }
+  })
 }
-package cn.com.helei.bot.core.mvc.service;
-
-import cn.com.helei.bot.core.dto.Result;
-import cn.com.helei.bot.core.entity.BotInstance;
-import cn.com.helei.bot.core.mvc.vo.PageQuery;
-import com.baomidou.mybatisplus.extension.service.IService;
 
 /**
- * <p>
- * 服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-18
+ * 查询Bot实例
  */
-public interface IBotInstanceService extends IService<BotInstance> {
-
-    Integer insertOrUpdate(BotInstance botInstance);
-
-    Result pageQuery(PageQuery query);
+export function pageQueryBotInstanceNetwork({ page, limit, filterMap }) {
+  return request({
+    url: '/botInstance/pageQuery',
+    method: 'post',
+    data: {
+      page,
+      limit,
+      filterMap
+    }
+  })
 }
-package cn.com.helei.bot.core.mvc.service;
-
-import cn.com.helei.bot.core.dto.Result;
-import cn.com.helei.bot.core.entity.BrowserEnv;
-import cn.com.helei.bot.core.mvc.vo.PageQuery;
-import com.baomidou.mybatisplus.extension.service.IService;
-
-import java.util.List;
-import java.util.Map;
+import request from '@/utils/custom_request'
 
 /**
- * <p>
- *  服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
+ * 分页查询Bot账户的基本信息
+ * @param {page, limit, filterMap}
+ * @returns {*}
  */
-public interface IBrowserEnvService extends IService<BrowserEnv> {
-
-    Integer insertOrUpdate(BrowserEnv browserEnv);
-
-    Integer insertOrUpdateBatch(List<BrowserEnv> browserEnvs);
-
-    Result saveBrowserEnvs(List<Map<String, Object>> rawLines);
-
-    Result conditionPageQuery(PageQuery query);
-
-    Result delete(List<Integer> ids);
-
-    List<BrowserEnv> getUselessBrowserEnv(int count);
+export function pageQueryAccountContext({ page, limit, filterMap }) {
+  return request({
+    url: '/accountContext/pageQuery',
+    method: 'post',
+    data: {
+      page,
+      limit,
+      filterMap
+    }
+  })
 }
-package cn.com.helei.bot.core.mvc.util;
-
-import cn.com.helei.bot.core.entity.AccountBaseInfo;
-
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.util.Arrays;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
-
-public class ConditionBuildUtil {
-
-    private final static Map<Class<?>, Map<String, Field>> classFieldMap = new ConcurrentHashMap<>();
-
-
-    public static <T> T getMapContainsCondition(
-            Map<String, Object> filterMap,
-            String mapParamsFieldName,
-            Class<T> tClass
-    ) throws NoSuchMethodException, InvocationTargetException, InstantiationException, IllegalAccessException {
-        Constructor<T> constructor = tClass.getConstructor();
-        T condition = constructor.newInstance();
-
-        if (filterMap == null || filterMap.isEmpty()) {
-            return condition;
-        }
-
-        Map<String, Field> fields = getClassFieldMap(tClass);
-        if (!fields.containsKey(mapParamsFieldName)) {
-            throw new IllegalAccessException("目标类字段没有[" + mapParamsFieldName + "]");
-        }
-
-        for (Map.Entry<String, Object> entry : filterMap.entrySet()) {
-            String key = entry.getKey();
-            Object value = entry.getValue();
-
-            if (fields.containsKey(key)) {
-                // 是原生字段
-                Field field = fields.get(key);
-                field.setAccessible(true);
-                try {
-                    field.set(condition, value);
-                } catch (IllegalAccessException e) {
-                    throw new IllegalAccessException("参数类型[%s]值[%s]设置错误".formatted(key, value));
-                }
-            } else {
-                // 是params里的字段
-                Field field = fields.get(mapParamsFieldName);
-                field.setAccessible(true);
-                Object obj = field.get(condition);
-                Map<String, Object> map = (Map<String, Object>) obj;
-                map.put(key, value);
-            }
-        }
-
-        return condition;
-    }
-
-    private static Map<String, Field> getClassFieldMap(Class<?> tClass) {
-        return classFieldMap.compute(tClass, (k, v) -> {
-            if (v == null) {
-                v = Arrays.stream(tClass.getDeclaredFields())
-                        .collect(Collectors.toMap(Field::getName, field -> field));
-            }
-            return v;
-        });
-    }
+export const Bot_JOB_TYPE = {
+  LOGIN: 'LOGIN',
+  REGISTER: 'REGISTER',
+  QUERY_REWARD: 'QUERY_REWARD',
+  TIMED_TASK: 'TIMED_TASK',
+  ONCE_TASK: 'ONCE_TASK',
+  WEB_SOCKET_CONNECT: 'WEB_SOCKET_CONNECT'
 }
-package cn.com.helei.bot.core.mvc.vo;
 
-import lombok.Data;
 
-import java.util.List;
-
-@Data
-public class BotBindVO {
-
-    private Integer botId;
-
-    private String botKey;
-
-    private List<Integer> bindAccountBaseInfoList;
+export const BOT_INSTANCE_STATUS = {
+  NEW: 'NEW',
+  STOPPED: 'STOPPED',
+  RUNNING: 'RUNNING'
 }
-package cn.com.helei.bot.core.mvc;
+<template>
+  <div>
+    <!--    头部搜索、添加、上传 bar-->
+    <div class="filter-container clearfix">
 
-import cn.com.helei.bot.core.dto.Result;
-import com.alibaba.fastjson.JSON;
-import jakarta.servlet.ServletOutputStream;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import lombok.extern.slf4j.Slf4j;
-import org.jetbrains.annotations.NotNull;
-import org.springframework.stereotype.Component;
-import org.springframework.web.bind.annotation.ResponseBody;
-import org.springframework.web.method.HandlerMethod;
-import org.springframework.web.servlet.HandlerExceptionResolver;
-import org.springframework.web.servlet.ModelAndView;
+      <el-dropdown
+        plain
+        split-button
+        class="filter-item"
+        style="margin-right: 5px"
+        type="info"
+        size="medium"
+      >
+        展示列
+        <el-dropdown-menu slot="dropdown">
+          <el-checkbox-group v-model="currentParams.selectedFilterHeader">
+            <el-dropdown-item v-for="item in headers">
+              <el-checkbox :label="item" disabled />
+            </el-dropdown-item>
 
+            <el-dropdown-item v-for="item in currentParams.customHeaders">
+              <el-checkbox :label="item" />
+            </el-dropdown-item>
+          </el-checkbox-group>
+        </el-dropdown-menu>
+      </el-dropdown>
 
-import java.io.IOException;
-import java.io.OutputStreamWriter;
+      <el-select
+        v-for="headerName in headers"
+        v-model="currentParams.headerFilterFieldValues[headerName]"
+        size="medium"
+        :placeholder="headerName"
+        clearable
+        style="width: 90px"
+        class="filter-item"
+        @clear="currentParams.headerFilterFieldValues[headerName] = undefined"
+      >
+        <el-option v-for="item in getFieldOptions(headerName)" :key="item" :label="item" :value="item" />
+      </el-select>
 
-@Slf4j
-@Component
-public class GlobalExceptionHandler implements HandlerExceptionResolver {
-    @Override
-    public ModelAndView resolveException(@NotNull HttpServletRequest request,
-                                         @NotNull HttpServletResponse response,
-                                         Object handler,
-                                         @NotNull Exception e) {
+      <el-button
+        v-waves
+        size="medium"
+        class="filter-item"
+        style="margin-left: 10px"
+        type="primary"
+        icon="el-icon-search"
+        @click="handleFilter"
+      >
+        Search
+      </el-button>
+      <el-button
+        v-if="useImportData"
+        size="medium"
+        class="filter-item"
+        style="margin-left: 10px;"
+        type="primary"
+        icon="el-icon-plus"
+        @click="addBatchRowData"
+      >
+        Add
+      </el-button>
+      <el-button
+        v-if="useImportData"
+        v-waves
+        size="medium"
+        class="filter-item"
+        type="success"
+        icon="el-icon-upload"
+        @click="handleUpload"
+      >
+        Upload
+      </el-button>
 
-        log.error("error", e);
-        //设置默认错误视图
-        ModelAndView mv = new ModelAndView();
-        mv.setViewName("error");
-        mv.addObject("code", 400);
-        mv.addObject("msg", "系统异常，请稍后重试");
+      <el-switch
+        v-model="useImportData"
+        class="filter-item"
+        style="float: right; top: 10px"
+        active-text="导入"
+        inactive-text="查看"
+      />
+    </div>
 
-        if (handler instanceof HandlerMethod handlerMethod) {
+    <!--    表格-->
+    <el-table
+      :data="filteredTableData"
+      border
+      stripe
+      fit
+      highlight-current-row
+      style="width: 100%;"
+      @selection-change="handleSelectionChange"
+    >
+      <el-table-column type="selection" width="55" fixed="left" />
 
-            //获取方法上的ResponseBody注解
-            ResponseBody responseBody = handlerMethod.getMethod().getDeclaredAnnotation(ResponseBody.class);
+      <el-table-column
+        v-if="currentParams.customHeaders.indexOf(idField) < 0"
+        type="index"
+        class-name="status-col"
+        style="color: #2ac06d"
+        min-width="75"
+      />
 
-            //没有该注解，说明返回视图
-            if (null == responseBody) {
-                return mv;
-            } else {
-                //有注解，返回JSON字符串，参数异常
-                Result resultInfo = new Result();
-                resultInfo.setSuccess(false);
-                resultInfo.setErrorMsg("系统异常, " + e.getCause().getMessage());
+      <el-table-column v-for="headName in fullHeaders" :label="headName" class-name="status-col" min-width="200">
+        <template slot="header">
+          {{ headName }}
+          <el-badge
+            v-if="headers.includes(headName)"
+            class="header-badge"
+            :value="''"
+            :max="99"
+            :is-dot="true"
+          />
+        </template>
 
-                //设置格式
-                response.setContentType("application/json;charset=utf-8");
+        <template slot-scope="scope">
+          <div v-if="!currentParams.editLineIndexMap[scope.$index]">{{ scope.row[headName] }}</div>
+          <el-input
+            v-else
+            v-model="scope.row[headName]"
+            size="mini"
+            placeholder="请输入内容"
+          />
+        </template>
+      </el-table-column>
 
-                //由于controller层也会返回数据，调用response.getWriter,
-                // 所以这里使用response.getOutputStream()避免报错
-                ServletOutputStream out = null;
-                OutputStreamWriter ow = null;
-                try {
-                    out = response.getOutputStream();
-                    ow = new OutputStreamWriter(out);
-                    ow.append(JSON.toJSONString(resultInfo));
-                    ow.flush();
-                } catch (IOException ioException) {
-                    log.error("unknown error", ioException);
-                } finally {
-                    try {
-                        if (out != null) {
-                            out.close();
-                        }
-                        if (ow != null)
-                            ow.close();
-                    } catch (IOException ioException) {
-                        log.error("unknown error", ioException);
-                    }
-                }
-            }
+      <el-table-column label="Status" class-name="status-col" width="75">
+        <template slot-scope="{row}">
+          <el-button
+            v-if="buildRowStatus(row)"
+            type="success"
+            icon="el-icon-check"
+            size="mini"
+            circle
+          />
+          <el-button
+            v-else
+            type="warning"
+            icon="el-icon-close"
+            size="mini"
+            circle
+          />
+        </template>
+      </el-table-column>
+
+      <el-table-column align="right" width="200" fixed="right">
+        <template #header>
+          <el-input
+            v-model="newHeaderName"
+            size="small"
+            placeholder="输入新列名"
+            style="display: inline-block;width: 60%"
+          />
+          <el-button type="primary" size="small" @click="addNewHeaderField">
+            Add
+          </el-button>
+        </template>
+
+        <template #default="scope">
+          <el-button
+            v-if="currentParams.editLineIndexMap[scope.$index]"
+            size="mini"
+            type="success"
+            :loading="currentParams.updatingLineIndexMap[scope.$index]"
+            :disabled="currentParams.updatingLineIndexMap[scope.$index]"
+            @click="confirmEditRow(scope.$index, scope.row)"
+          >
+            Confirm
+          </el-button>
+          <el-button
+            v-else
+            type="info"
+            size="mini"
+            @click="handleEdit(scope.$index, scope.row)"
+          >
+            Edit
+          </el-button>
+
+          <el-button
+            size="mini"
+            type="danger"
+            @click="handleDelete(scope.$index, scope.row)"
+          >
+            Delete
+          </el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+    <!--      v-show="filteredTableData() !== null && filteredTableData().length >0"-->
+
+    <!--分页条-->
+    <pagination
+      :total="currentParams.listQuery.total"
+      :page.sync="currentParams.listQuery.page"
+      :limit.sync="currentParams.listQuery.limit"
+      @pagination="pageChangeHandler"
+    />
+
+    <!--    添加界面-->
+    <dynamic-field-load-from
+      :ref="fieldLoadFromRef"
+      :field-names="headers"
+      :visible="addRowDataFromVisible"
+      @batch-data-import="batchDataImportHandler"
+    />
+  </div>
+</template>
+
+<script>
+import waves from '@/directive/waves' // waves directive
+import Pagination from '@/components/Pagination'
+import DynamicFieldLoadFrom from '@/views/custom/account/components/dynamic-field-load-from'
+import row from 'element-ui/packages/row'
+
+export default {
+  name: 'DynamicAddColTable',
+  components: { Pagination, DynamicFieldLoadFrom },
+  directives: { waves },
+  filters: {},
+  props: {
+    title: {
+      type: String,
+      default() {
+        return ''
+      }
+    },
+    headers: {
+      type: Array,
+      default() {
+        return []
+      }
+    },
+    idField: {
+      type: String,
+      default() {
+        return 'id'
+      }
+    },
+    batchQueryDataNetwork: {
+      type: Function,
+      default() {
+        return () => {
+        }
+      }
+    },
+    uploadDataNetwork: {
+      type: Function,
+      default() {
+        return () => {
+        }
+      }
+    },
+    deleteDataNetwork: {
+      type: Function,
+      default() {
+        return () => {
+        }
+      }
+    },
+    updateDataNetwork: {
+      type: Function,
+      default() {
+        return () => {
+        }
+      }
+    }
+  },
+  data() {
+    return {
+      importData: [],
+      data: [],
+
+      newHeaderName: '',
+      useImportData: false,
+      addRowDataFromVisible: false,
+
+      typedParam: {
+        import: {
+          filteredTableDataIdxes: new Set(),
+          headerFilterFieldValues: {},
+          editLineIndexMap: {},
+          editLineRowMap: {},
+          updatingLineIndexMap: {},
+          listQuery: {
+            page: 1,
+            limit: 20,
+            total: 0
+          },
+          selectedDataList: [],
+          customHeaders: [],
+          selectedFilterHeader: []
+        },
+        display: {
+          filteredTableDataIdxes: new Set(),
+          headerFilterFieldValues: {},
+          editLineIndexMap: {},
+          editLineRowMap: {},
+          updatingLineIndexMap: {},
+          listQuery: {
+            page: 1,
+            limit: 20,
+            total: 0
+          },
+          selectedDataList: [],
+          customHeaders: [],
+          selectedFilterHeader: []
+        }
+      }
+    }
+  },
+  computed: {
+    row() {
+      return row
+    },
+    fullHeaders() {
+      return this.headers.concat(this.currentParams.selectedFilterHeader)
+    },
+    fieldLoadFromRef() {
+      return 'dynamicFieldLoadFrom[' + this.headers + ']'
+    },
+    currentParams() {
+      return this.useImportData ? this.typedParam['import'] : this.typedParam['display']
+    },
+    currentData() {
+      return this.useImportData ? this.importData : this.data
+    },
+    filteredTableData() {
+      const curData = this.currentData
+
+      const res = []
+      for (let i = 0; i < curData.length; i++) {
+        if (!this.currentParams.filteredTableDataIdxes.has(i)) {
+          res.push(curData[i])
+        }
+      }
+
+      return res
+    }
+  },
+  created() {
+    this.queryDisplayData()
+  },
+  methods: {
+    handleDelete(idx, row) {
+      if (this.useImportData) {
+        this.importData.splice(idx, 1)
+      } else {
+        this.$confirm('是否删除该行数据?', '提示', {
+          confirmButtonText: '确定',
+          cancelButtonText: '取消',
+          type: 'warning'
+        }).then(() => {
+          const network = this.deleteDataNetwork(row)
+          if (network instanceof Promise) {
+            network
+              .then(response => {
+                this.$message.success('删除成功')
+                // this.currentData.splice(idx, 1)
+                this.queryDisplayData()
+              })
+              .catch(e => {
+                this.$message.error('删除失败, ' + e)
+              })
+          }
+        }).catch(() => {
+          this.$message({
+            type: 'info',
+            message: '已取消删除'
+          })
+        })
+      }
+    },
+    handleEdit(idx, row) {
+      this.$set(this.currentParams.editLineIndexMap, idx, true)
+      this.$set(this.currentParams.editLineRowMap, idx, JSON.parse(JSON.stringify(row)))
+    },
+    handleSelectionChange(rows) {
+      this.currentParams.selectedDataList = rows
+    },
+    handleFilter() {
+      // 导入，前端筛选，
+      this.currentParams.filteredTableDataIdxes.clear()
+
+      const currentData = this.currentData
+      for (let i = 0; i < currentData.length; i++) {
+        const line = currentData[i]
+        let flag = true
+        for (const headName of this.fullHeaders) {
+          const targetValue = this.currentParams.headerFilterFieldValues[headName]
+          const currentValue = line[headName]
+
+          if (targetValue !== undefined && targetValue !== currentValue) {
+            flag = false
+            break
+          }
         }
 
-        return null;
-    }
-}
-package cn.com.helei.bot.core.supporter.botapi.impl;
-
-import cn.com.helei.bot.core.config.SystemConfig;
-import cn.com.helei.bot.core.constants.ProxyProtocol;
-import cn.com.helei.bot.core.constants.ProxyType;
-import cn.com.helei.bot.core.entity.*;
-import cn.com.helei.bot.core.mvc.service.*;
-import cn.com.helei.bot.core.mvc.service.ITelegramAccountService;
-import cn.com.helei.bot.core.supporter.botapi.ImportService;
-import cn.com.helei.bot.core.util.excel.ExcelReadUtil;
-import cn.com.helei.bot.core.util.FileUtil;
-import cn.hutool.core.util.BooleanUtil;
-import cn.hutool.core.util.StrUtil;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.stereotype.Component;
-
-import java.io.IOException;
-import java.sql.SQLException;
-import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.stream.Collectors;
-
-import static cn.com.helei.bot.core.constants.MapConfigKey.USER_AGENT_KEY;
-
-@Slf4j
-@Component
-public class DBImportService implements ImportService {
-
-    public static final String DEFAULT_ACCOUNT_TYPE = "default";
-
-    @Autowired
-    @Lazy
-    private IBotAccountContextService botAccountContextService;
-
-    @Autowired
-    @Lazy
-    private IAccountBaseInfoService accountBaseInfoService;
-
-    @Autowired
-    @Lazy
-    private IProxyInfoService proxyInfoService;
-
-    @Autowired
-    @Lazy
-    private IBrowserEnvService browserEnvService;
-
-    @Autowired
-    @Lazy
-    private ITwitterAccountService twitterAccountService;
-
-    @Autowired
-    @Lazy
-    private IDiscordAccountService discordAccountService;
-
-    @Autowired
-    @Lazy
-    private ITelegramAccountService telegramAccountService;
-
-
-    @Override
-    public Integer importBotAccountContextFromExcel(Integer botId, String botKey, String fileBotConfigPath) {
-        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_APP_PATH, fileBotConfigPath);
-
-        try {
-            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(proxyFilePath);
-
-            return importBotAccountContextFromRaw(botId, botKey, rawLines);
-        } catch (Exception e) {
-            log.error("读取twitter account 文件[{}]发生异常", proxyFilePath, e);
-            return 0;
-        }
-    }
-
-    @Override
-    public Integer importBotAccountContextFromRaw(Integer botId, String botKey, List<Map<String, Object>> rawLines) throws SQLException {
-        List<AccountContext> accountContexts = rawLines.stream().map(map -> {
-                    Integer customBotId = autoCast(map.remove("bot_id"));
-                    String customBotKey = autoCast(map.remove("bot_key"));
-
-                    return AccountContext.builder()
-                            .botId(customBotId == null ? botId : customBotId)
-                            .botKey(StrUtil.isBlank(customBotKey) ? botKey : customBotKey)
-                            .accountBaseInfoId(toInteger(map.remove("account_base_info_id")))
-                            .twitterId(toInteger(map.remove("twitter_id")))
-                            .discordId(toInteger(map.remove("discord_id")))
-                            .proxyId(toInteger((map.remove("proxy_id"))))
-                            .browserEnvId(toInteger(map.remove("browser_env_id")))
-                            .telegramId(toInteger(map.remove("telegram_id")))
-                            .walletId(toInteger(map.remove("wallet_id")))
-                            .params(map)
-                            .build();
-                })
-                .toList();
-
-        // 没设置代理的根据配置填充代理
-//            tryFillProxy(accountContexts, proxyRepeat, proxyType);
-
-        // 没设置浏览器环境的根据设置填充环境
-        tryFillBrowserEnv(accountContexts);
-
-        return botAccountContextService.insertOrUpdateBatch(accountContexts);
-    }
-
-
-    @Override
-    public Integer importBrowserEnvFromExcel(String fileBotConfigPath) {
-        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
-
-        List<Map<String, Object>> headerList = ExcelReadUtil.readExcelToMap(proxyFilePath);
-
-        log.info("文件解析成功, 共[{}]个", headerList.size());
-        return importProxyFromRaw(headerList);
-    }
-
-    @Override
-    public Integer importBrowserEnvFromRaw(List<Map<String, Object>> rawLines) {
-
-        List<BrowserEnv> list = rawLines.stream().map(map -> {
-            Object userAgent = map.remove(USER_AGENT_KEY);
-            if (userAgent == null) return null;
-
-            BrowserEnv browserEnv = new BrowserEnv();
-            browserEnv.setUserAgent((String) userAgent);
-            browserEnv.setOtherHeader(map);
-            return browserEnv;
-        }).filter(Objects::nonNull).toList();
-
-        return browserEnvService.insertOrUpdateBatch(list);
-    }
-
-    @Override
-    public Integer importProxyFromExcel(String botConfigPath) {
-        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, botConfigPath);
-
-        int total = 0;
-
-        try {
-            List<Map<String, Object>> staticProxies = ExcelReadUtil.readExcelToMap(proxyFilePath, "static");
-
-            total += importProxyFromRaw(staticProxies);
-
-            List<Map<String, Object>> dynamicProxies = ExcelReadUtil.readExcelToMap(proxyFilePath, "dynamic");
-
-            total += importProxyFromRaw(dynamicProxies);
-
-            log.info("代理配置文件解析成功，static-proxy:[{}], dynamic-proxy:[{}]", staticProxies.size(), dynamicProxies.size());
-
-            return total;
-        } catch (Exception e) {
-            log.error("解析代理配置文件[{}]错误", proxyFilePath, e);
-
-            return 0;
-        }
-    }
-
-    @Override
-    public Integer importProxyFromRaw(List<Map<String, Object>> rawLines) {
-
-        List<ProxyInfo> list = rawLines.stream().map(map -> {
-            String proxyProtocol = autoCast(map.remove("proxy_protocol"));
-            if (proxyProtocol == null) proxyProtocol = autoCast(map.remove("proxyProtocol"));
-
-            Object port = map.remove("port");
-            return ProxyInfo.builder()
-                    .proxyType(ProxyType.STATIC)
-                    .host(autoCast(map.remove("host")))
-                    .port(port instanceof Integer ? (Integer) port : Integer.parseInt(autoCast(port)))
-                    .proxyProtocol(ProxyProtocol.valueOf(proxyProtocol.toUpperCase()))
-                    .username(autoCast(map.remove("username")))
-                    .password(autoCast(map.remove("password")))
-                    .params(map)
-                    .build();
-        }).toList();
-
-        return proxyInfoService.insertOrUpdateBatch(list);
-    }
-
-    @Override
-    public Map<String, Integer> importAccountBaseInfoFromExcel(String botConfigPath) {
-        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, botConfigPath);
-        Map<String, Integer> result = new HashMap<>();
-
-        try {
-            ExcelReadUtil.readExcelAsMap(
-                    proxyFilePath,
-                    (type, map) -> AccountBaseInfo.builder()
-                            .type(type)
-                            .name(autoCast(map.remove("name")))
-                            .email(autoCast(map.remove("email")))
-                            .password(autoCast(map.remove("password")))
-                            .params(map)
-                            .build(),
-                    (type, accountBaseInfos) -> CompletableFuture.runAsync(() -> {
-                        log.info("[{}] 账号基本信息读取完毕, 共[{}]", type, accountBaseInfos.size());
-                        Integer insertCount = accountBaseInfoService.insertOrUpdateBatch(accountBaseInfos);
-
-                        log.info("[{}] 账号基本信息保存成功, 新增[{}], 共[{}]", type, insertCount, accountBaseInfos.size());
-
-                        result.put(type, accountBaseInfos.size());
-                    })
-            );
-
-        } catch (IOException e) {
-            log.error("从文件导入账号基本信息出错", e);
-        }
-
-        return result;
-    }
-
-    @Override
-    public Integer importAccountBaseInfoFromRaw(List<Map<String, Object>> rawLines) {
-        log.info("导入账户基本信息，共[{}]条", rawLines.size());
-        List<AccountBaseInfo> list = rawLines.stream().map(map -> {
-            String type = autoCast(map.remove("type"));
-
-            return AccountBaseInfo.builder()
-                    .type(StrUtil.isBlank(type) ? DEFAULT_ACCOUNT_TYPE : type)
-                    .name(autoCast(map.remove("name")))
-                    .email(autoCast(map.remove("email")))
-                    .password(autoCast(map.remove("password")))
-                    .params(map)
-                    .build();
-        }).toList();
-
-        return accountBaseInfoService.insertOrUpdateBatch(list);
-    }
-
-    @Override
-    public Integer importTwitterFromExcel(String fileBotConfigPath) {
-        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
-
-        try {
-            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(proxyFilePath);
-
-            return importTwitterFromRaw(rawLines);
-        } catch (Exception e) {
-            log.error("读取twitter account 文件[{}]发生异常", proxyFilePath, e);
-            return 0;
-        }
-    }
-
-    @Override
-    public Integer importTwitterFromRaw(List<Map<String, Object>> rawLines) {
-        List<TwitterAccount> twitterAccounts = rawLines.stream().map(map -> TwitterAccount.builder()
-                .username(autoCast(map.remove("username")))
-                .password(autoCast(map.remove("password")))
-                .email(autoCast(map.remove("email")))
-                .emailPassword(autoCast(map.remove("email_password")))
-                .token(autoCast(map.remove("token")))
-                .f2aKey(autoCast(map.remove("f2a_key")))
-                .params(map)
-                .build()).toList();
-
-        return twitterAccountService.insertOrUpdateBatch(twitterAccounts);
-    }
-
-    @Override
-    public Integer importDiscordFromExcel(String fileBotConfigPath) {
-        String dirResourcePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
-
-        try {
-            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(dirResourcePath);
-
-            return importDiscordFromRaw(rawLines);
-        } catch (Exception e) {
-            log.error("读取discord account 文件[{}]发生异常", dirResourcePath, e);
-            return 0;
-        }
-    }
-
-    @Override
-    public Integer importDiscordFromRaw(List<Map<String, Object>> rawLines) {
-        List<DiscordAccount> discordAccounts = rawLines.stream().map(map -> DiscordAccount.builder()
-                .username(autoCast(map.remove("username")))
-                .password(autoCast(map.remove("password")))
-                .bindEmail(autoCast(map.remove("bind_email")))
-                .bindEmailPassword(autoCast(map.remove("bind_email_password")))
-                .token(autoCast(map.remove("token")))
-                .params(map)
-                .build()
-        ).toList();
-
-        return discordAccountService.insertOrUpdateBatch(discordAccounts);
-    }
-
-    @Override
-    public Integer importTelegramFormExcel(String fileBotConfigPath) {
-        String dirResourcePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
-
-        try {
-            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(dirResourcePath);
-
-            return importTelegramFormRaw(rawLines);
-        } catch (Exception e) {
-            log.error("读取telegram account 文件[{}]发生异常", dirResourcePath, e);
-            return 0;
-        }
-    }
-
-    @Override
-    public Integer importTelegramFormRaw(List<Map<String, Object>> rawLines) {
-
-        List<TelegramAccount> telegramAccounts = rawLines.stream().map(map -> TelegramAccount.builder()
-                .username(autoCast(map.remove("username")))
-                .password(autoCast(map.remove("password")))
-                .phonePrefix(autoCast(map.remove("phone_prefix")))
-                .phone(autoCast(map.remove("phone")))
-                .token(autoCast(map.remove("token")))
-                .params(map)
-                .build()
-        ).toList();
-
-
-        return telegramAccountService.insertOrUpdateBatch(telegramAccounts);
-    }
-
-
-    private static <T> T autoCast(Object obj) {
-        return obj == null ? null : (T) obj;
-    }
-
-    private static Integer toInteger(Object obj) {
-        return obj == null ? null : Integer.valueOf(obj.toString());
-    }
-
+        if (!flag) this.currentParams.filteredTableDataIdxes.add(i)
+      }
+
+      if (!this.useImportData) {
+        // 展示，发送请求获取新数据
+        this.queryDisplayData()
+      }
+    },
+    handleUpload() {
+      let uploadData = this.currentData
+      if (this.currentParams.selectedDataList !== null && this.currentParams.selectedDataList.length > 0) {
+        uploadData = this.currentParams.selectedDataList
+      }
+      const uploadDataNetwork = this.uploadDataNetwork(uploadData)
+      if (uploadDataNetwork instanceof Promise) {
+        uploadDataNetwork
+          .then(response => {
+            this.$message.success('上传成功')
+          })
+          .catch(e => {
+            this.$message.error('上传失败, ' + e)
+          })
+      }
+    },
     /**
-     * 填充代理
-     *
-     * @param accountContexts accountContexts
-     * @param proxyType       proxyType
+     * 批量添加数据
+     * @param payload
      */
-    private void tryFillProxy(List<AccountContext> accountContexts, Boolean proxyRepeat, ProxyType proxyType) {
-        ;// 创建 Page 对象，设置当前页和每页的条数
+    batchDataImportHandler(payload) {
+      console.log(payload)
+      const newDataArray = payload.filteredData
+      const customFields = payload.customFields
 
-        Page<ProxyInfo> page = new Page<>(1, accountContexts.size());
-        QueryWrapper<ProxyInfo> queryWrapper = new QueryWrapper<>(ProxyInfo.builder().proxyType(proxyType).build())
-                .select("id");
+      this.importData.push(...newDataArray)
 
-        List<ProxyInfo> allProxy = proxyInfoService.list(page, queryWrapper);
+      if (customFields !== undefined && customFields !== null && customFields.length > 0) {
+        this.currentParams.customHeaders = [...new Set([...this.currentParams.customHeaders, ...customFields])]
+      }
+    },
+    pageChangeHandler({ page, limit }) {
+      this.currentParams.listQuery.page = page
+      this.currentParams.listQuery.limit = limit
 
+      if (!this.useImportData) {
+        this.queryDisplayData()
+      }
+    },
+    confirmEditRow(index, row) {
+      this.$set(this.currentParams.updatingLineIndexMap, index, true)
 
-        // 筛选
-        Map<Integer, Integer> proxyUseCount = new HashMap<>();
-        Map<Integer, ProxyInfo> idMapProxy = allProxy.stream().collect(Collectors.toMap(ProxyInfo::getId, p -> {
-            proxyUseCount.put(p.getId(), 0);
-            return p;
-        }));
+      if (!this.useImportData) {
+        const originRow = this.currentParams.editLineRowMap[index]
 
-        Set<AccountContext> noProxyAccounts = new HashSet<>();
-
-        accountContexts.forEach(accountContext -> {
-
-            Integer proxyId = accountContext.getProxyId();
-
-            if (proxyId == null || !idMapProxy.containsKey(proxyId)) {
-                // 代理配置无效，给他添上
-                noProxyAccounts.add(accountContext);
-            } else if (proxyUseCount.getOrDefault(proxyId, 0) > 1 && BooleanUtil.isFalse(proxyRepeat)) {
-                // 代理被使用过,并且不允许重复使用
-                noProxyAccounts.add(accountContext);
-            } else {
-                proxyUseCount.put(proxyId, proxyUseCount.getOrDefault(proxyId, 0) + 1);
-            }
-        });
-
-
-        // 填充代理
-        List<Integer> ids = getLessUsedItem(proxyUseCount, noProxyAccounts.size());
-        ArrayList<AccountContext> list = new ArrayList<>(noProxyAccounts);
-        for (int i = 0; i < ids.size(); i++) {
-            list.get(i).setProxyId(ids.get(i));
-        }
-    }
-
-
-    /**
-     * 填充浏览器环境
-     *
-     * @param accountContexts accountContexts
-     */
-    private void tryFillBrowserEnv(List<AccountContext> accountContexts) {
-        Page<BrowserEnv> page = new Page<>(1, accountContexts.size());
-        QueryWrapper<BrowserEnv> queryWrapper = new QueryWrapper<BrowserEnv>().select("id");
-
-        List<BrowserEnv> allProxy = browserEnvService.list(page, queryWrapper);
-
-        Map<Integer, Integer> useCount = new HashMap<>();
-        Map<Integer, BrowserEnv> idMapEnv = allProxy.stream().collect(Collectors.toMap(BrowserEnv::getId, p -> {
-            useCount.put(p.getId(), 0);
-            return p;
-        }));
-
-
-        Set<AccountContext> noUseAccounts = new HashSet<>();
-
-        accountContexts.forEach(accountContext -> {
-            Integer browserEnvId = accountContext.getBrowserEnvId();
-
-            if (browserEnvId == null || !idMapEnv.containsKey(browserEnvId)) {
-                // 配置无效，给他添上
-                noUseAccounts.add(accountContext);
-            } else {
-                useCount.put(browserEnvId, useCount.getOrDefault(browserEnvId, 0) + 1);
-            }
-        });
-
-        // 填充浏览器环境
-        List<Integer> ids = getLessUsedItem(useCount, noUseAccounts.size());
-        ArrayList<AccountContext> list = new ArrayList<>(noUseAccounts);
-        for (int i = 0; i < ids.size(); i++) {
-            list.get(i).setBrowserEnvId(ids.get(i));
-        }
-    }
-
-
-    /**
-     * 获取最少使用的
-     *
-     * @param count 数量
-     * @return List<T>
-     */
-    private List<Integer> getLessUsedItem(Map<Integer, Integer> useCountMap, int count) {
-        if (useCountMap == null || useCountMap.isEmpty()) return Collections.emptyList();
-        int batchSize = Math.min(count, useCountMap.size());
-
-        List<Integer> res = new ArrayList<>(count);
-
-        int needCount = count;
-        while (needCount > 0) {
-            int currentSize = Math.min(needCount, batchSize);
-
-            List<Integer> batch = useCountMap.entrySet().stream()
-                    .sorted((e1, e2) -> e1.getValue().compareTo(e2.getValue()))
-                    .limit(currentSize)
-                    .map(e -> {
-                        useCountMap.compute(e.getKey(), (k, v) -> v == null ? 0 : v + 1);
-                        return e.getKey();
-                    }).toList();
-            res.addAll(batch);
-
-            needCount -= batch.size();
+        let isRPC = false
+        for (const key of Object.keys(row)) {
+          if (originRow[key] !== row[key]) {
+            isRPC = true
+            break
+          }
         }
 
-        return res;
-    }
-
-}
-package cn.com.helei.bot.core.supporter.botapi;
-
-
-import java.sql.SQLException;
-import java.util.List;
-import java.util.Map;
-
-public interface ImportService {
-
-    Integer importBotAccountContextFromExcel(Integer botId, String botKey, String fileBotConfigPath);
-
-    Integer importBotAccountContextFromRaw(Integer botId, String botKey, List<Map<String, Object>> rawLines) throws SQLException;
-
-
-    Map<String, Integer> importAccountBaseInfoFromExcel(String botConfigPath);
-
-    Integer importAccountBaseInfoFromRaw(List<Map<String, Object>> rawLines);
-
-
-    Integer importBrowserEnvFromExcel(String fileBotConfigPath);
-
-    Integer importBrowserEnvFromRaw(List<Map<String, Object>> rawLines);
-
-
-    Integer importProxyFromExcel(String botConfigPath);
-
-    Integer importProxyFromRaw(List<Map<String, Object>> rawLines);
-
-
-
-    Integer importTwitterFromExcel(String fileBotConfigPath);
-
-    Integer importTwitterFromRaw(List<Map<String, Object>> rawLines);
-
-
-    Integer importDiscordFromExcel(String fileBotConfigPath);
-
-    Integer importDiscordFromRaw(List<Map<String, Object>> rawLines);
-
-
-    Integer importTelegramFormExcel(String fileBotConfigPath);
-
-    Integer importTelegramFormRaw(List<Map<String, Object>> rawLines);
-}
-package cn.com.helei.bot.core.supporter.persistence.impl;
-
-
-import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.supporter.botapi.BotApi;
-import cn.com.helei.bot.core.supporter.persistence.AbstractPersistenceManager;
-import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeInvocation;
-import cn.com.helei.bot.core.util.NamedThreadFactory;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import lombok.extern.slf4j.Slf4j;
-
-import java.sql.SQLException;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
-@Slf4j
-public class DBAccountPersistenceManager extends AbstractPersistenceManager {
-
-    private final ExecutorService executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("database-"));
-
-    private final BotApi botApi;
-    ;
-
-    public DBAccountPersistenceManager(BotApi botApi) {
-        this.botApi = botApi;
-    }
-
-    @Override
-    public void init() {
-
-    }
-
-    @Override
-    public void persistenceAccountContexts(List<AccountContext> accountContexts) {
-        botApi.getBotAccountContextService().saveBatch(accountContexts);
-    }
-
-    @Override
-    public List<AccountContext> loadAccountContexts(Integer botId, String botKey) {
-        // Step 1 加载 projectId 对应的账号
-        AccountContext query = new AccountContext();
-        query.setBotId(botId);
-        query.setBotKey(botKey);
-        query.setParams(null);
-
-        List<AccountContext> accountContexts = botApi
-                .getBotAccountContextService().
-                list(new QueryWrapper<>(query));
-
-        // Step 2 遍历账号，补充对象
-        CompletableFuture<?>[] futures = accountContexts.stream()
-                .map(accountContext -> CompletableFuture.runAsync(
-                        () -> fillAccountInfo(accountContext), executorService))
-                .toArray(CompletableFuture[]::new);
-
-        // Step 3 等待所有任务完成
-        for (int i = 0; i < futures.length; i++) {
-            try {
-                futures[i].get();
-            } catch (InterruptedException | ExecutionException e) {
-                log.error("{} fill account context info error", i, e);
-            }
-        }
-
-        // Step 4 按类型分类账号
-        return accountContexts;
-    }
-
-    @Override
-    protected void propertyChangeHandler(PropertyChangeInvocation invocation) {
-        log.debug("对象属性改变了{} {}->{}", invocation.getPropertyName(), invocation.getOldValue(), invocation.getNewValue());
-
-        Object target = invocation.getTarget();
-        if (target instanceof AccountContext) {
-            try {
-                botApi.getBotAccountContextService().insertOrUpdate((AccountContext) target);
-            } catch (SQLException e) {
-                log.error("更新Bot Account Context[{}] error", target, e);
-            }
-        }
-    }
-
-
-    /**
-     * 查询填充账户信息
-     *
-     * @param accountContext accountContext
-     */
-    private void fillAccountInfo(AccountContext accountContext) {
-
-        // Step 2.1 绑定基础账号信息
-        if (accountContext.getAccountBaseInfoId() != null) {
-            accountContext.setAccountBaseInfo(botApi.getAccountBaseInfoService().getById(accountContext.getAccountBaseInfoId()));
-        }
-        // Step 2,2 绑定推特
-        if (accountContext.getTwitterId() != null) {
-            accountContext.setTwitter(botApi.getTwitterAccountService().getById(accountContext.getTwitterId()));
-        }
-        // Step 2,3 绑定 discord
-        if (accountContext.getDiscordId() != null) {
-            accountContext.setDiscord(botApi.getDiscordAccountService().getById(accountContext.getDiscordId()));
-        }
-        // Step 2.4 绑定代理
-        if (accountContext.getProxyId() != null) {
-            accountContext.setProxy(botApi.getProxyInfoService().getById(accountContext.getProxyId()));
-        }
-        // Step 2.5 绑定浏览器环境
-        if (accountContext.getBrowserEnvId() != null) {
-            accountContext.setBrowserEnv(botApi.getBrowserEnvService().getById(accountContext.getBrowserEnvId()));
-        }
-        // Step 2.6 绑定tg
-        if (accountContext.getTelegramId() != null) {
-
-        }
-        // Step 2.7 绑定钱包
-        if (accountContext.getWalletId() != null) {
-
-        }
-
-        // Step 2.8 绑定奖励信息
-        if (accountContext.getRewardId() != null) {
-            accountContext.setRewordInfo(botApi.getRewordInfoService().getById(accountContext.getRewardId()));
-        }
-    }
-}
-package cn.com.helei.bot.core.util.log;
-
-import org.jetbrains.annotations.NotNull;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-
-public class AppendLogger {
-
-    private final Logger log;
-
-    private final StringBuilder format = new StringBuilder();
-
-
-    public AppendLogger(Class<?> clazz) {
-        log = LoggerFactory.getLogger(clazz);
-    }
-
-    public AppendLogger append(Object context) {
-        if (!format.isEmpty()) format.append(" ");
-
-        format.append(context);
-
-        return this;
-    }
-
-    public void info(Object context) {
-        log.info("\033[32m" + getPrefix(context) + "\033[0m");
-    }
-
-    public void warn(Object context) {
-        log.warn("\033[33m" + getPrefix(context) + "\033[0m");
-    }
-
-    public void error(Object context) {
-        log.error("\033[31m" + getPrefix(context) + "\033[0m");
-    }
-
-    public void error(Object context, Exception e) {
-        log.error("\033[31m" + getPrefix(context) + "\033[0m", e);
-    }
-
-    private @NotNull String getPrefix(Object context) {
-        return format + " - " + context;
-    }
-}
-package cn.com.helei.bot.core.util.table_shard.strategy;
-
-import org.springframework.stereotype.Component;
-
-import java.util.Arrays;
-
-@Component
-public class BotIdBasedTableShardStrategy implements ITableShardStrategy {
-    @Override
-    public String generateTableName(String tableNamePrefix, Object[] value) {
-        verificationTableNamePrefix(tableNamePrefix);
-
-        if (value == null || value.length != 2 || value[0] == null || value[1] == null) {
-            throw new IllegalArgumentException("table shard params[%s] illegal".formatted(Arrays.toString(value)));
-        }
-
-        long bot_id = Long.parseLong(value[0].toString());
-        String bot_key = (String) value[1];
-
-        // 特殊字段过滤
-        bot_key = bot_key.replace("-", "_");
-
-        //此处可以缓存优化
-        return tableNamePrefix + "_" + bot_id + "_" + bot_key;
-    }
-}
-package cn.com.helei.bot.core.util.table_shard.strategy;
-
-import org.apache.commons.lang3.ObjectUtils;
-
-public interface ITableShardStrategy {
-
-    /**
-     * 生成分表名
-     *
-     * @param tableNamePrefix 表前缀名
-     * @param value           值
-     * @return String
-     */
-    String generateTableName(String tableNamePrefix, Object[] value);
-
-    /**
-     * 验证tableNamePrefix
-     *
-     * @param tableNamePrefix 表前缀名
-     */
-    default void verificationTableNamePrefix(String tableNamePrefix) {
-        if (ObjectUtils.isEmpty(tableNamePrefix)) {
-            throw new RuntimeException("tableNamePrefix is null");
-        }
-    }
-}
-package cn.com.helei.bot.core.util.table_shard;
-
-import cn.com.helei.bot.core.util.table_shard.strategy.ITableShardStrategy;
-
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
-
-@Target(value = {ElementType.TYPE,ElementType.METHOD})
-@Retention(RetentionPolicy.RUNTIME)
-public @interface TableShard {
-
-    // 表前缀名
-    String tableNamePrefix();
-
-    // 值
-    String[] values() default {};
-
-    // 是否是字段名，如果是需要解析请求参数改字段名的值（默认否）
-    boolean fieldFlag() default false;
-
-
-    Class<?> targetClass();
-
-    // 对应的分表策略类
-    Class<? extends ITableShardStrategy> shardStrategy();
-
-}
-package cn.com.helei.bot.core.util.table_shard;
-
-import cn.com.helei.bot.core.util.table_shard.strategy.ITableShardStrategy;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import org.apache.ibatis.binding.MapperMethod;
-import org.apache.ibatis.executor.statement.StatementHandler;
-import org.apache.ibatis.mapping.BoundSql;
-import org.apache.ibatis.mapping.MappedStatement;
-import org.apache.ibatis.mapping.ParameterMapping;
-import org.apache.ibatis.plugin.*;
-import org.apache.ibatis.reflection.DefaultReflectorFactory;
-import org.apache.ibatis.reflection.MetaObject;
-import org.apache.ibatis.reflection.ReflectorFactory;
-import org.apache.ibatis.reflection.SystemMetaObject;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.context.ApplicationContext;
-
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
-import java.sql.Connection;
-import java.util.HashMap;
-
-@Intercepts({
-        @Signature(
-                type = StatementHandler.class,
-                method = "prepare",
-                args = {Connection.class, Integer.class}
-        )
-})
-public class TableShardInterceptor implements Interceptor {
-
-    private static final ReflectorFactory defaultReflectorFactory = new DefaultReflectorFactory();
-    private static final Logger log = LoggerFactory.getLogger(TableShardInterceptor.class);
-
-    private final ApplicationContext applicationContext;
-
-    public TableShardInterceptor(ApplicationContext applicationContext) {
-        this.applicationContext = applicationContext;
-    }
-
-    @Override
-    public Object intercept(Invocation invocation) throws Throwable {
-
-        // MetaObject是mybatis里面提供的一个工具类，类似反射的效果
-        MetaObject metaObject = getMetaObject(invocation);
-        BoundSql boundSql = (BoundSql) metaObject.getValue("delegate.boundSql");
-        MappedStatement mappedStatement = (MappedStatement) metaObject.getValue("delegate.mappedStatement");
-
-        // 获取Mapper执行方法
-        Method method = invocation.getMethod();
-
-        // 获取分表注解
-        TableShard tableShard = getTableShard(method, mappedStatement);
-
-        // 如果method与class都没有TableShard注解或执行方法不存在，执行下一个插件逻辑
-        if (tableShard == null) {
-            return invocation.proceed();
-        }
-
-        //获取值
-        String[] values = tableShard.values();
-        //value是否字段名，如果是，需要解析请求参数字段名的值
-        boolean fieldFlag = tableShard.fieldFlag();
-
-        Class<?> targetClass = tableShard.targetClass();
-
-        if (fieldFlag) {
-            //获取请求参数
-            Object parameterObject = boundSql.getParameterObject();
-            Object[] valueObjects = new Object[values.length];
-
-            for (int i = 0; i < values.length; i++) {
-                String value = values[i];
-
-                // 1 传入QueryWrapper的情况
-                if (parameterObject instanceof MapperMethod.ParamMap paramMap) {
-                    // 根据字段名获取参数值
-                    valueObjects[i] = resolveValueObject(paramMap, boundSql, value, tableShard);
-                } else if (targetClass.isInstance(parameterObject)) {
-                    // 2 传入目标对象当query
-                    Field field = targetClass.getDeclaredField(value);
-                    field.setAccessible(true);
-                    valueObjects[i] = field.get(parameterObject);
-                } else if(parameterObject instanceof HashMap map) {
-
-                    valueObjects[i] = map.get(value);
-                }
-            }
-
-            // 替换表名
-            replaceSql(tableShard, valueObjects, metaObject, boundSql);
-        }
-        //执行下一个插件逻辑
-        return invocation.proceed();
-    }
-
-    private static Object resolveValueObject(MapperMethod.ParamMap paramMap, BoundSql boundSql, String value, TableShard tableShard) throws NoSuchFieldException, IllegalAccessException {
-        if (boundSql.getParameterMappings().isEmpty()) {
-            return paramMap.get(value);
-        }
-
-        for (ParameterMapping parameterMapping : boundSql.getParameterMappings()) {
-            String property = parameterMapping.getProperty();
-            if (property.endsWith("." + value)) {
-                String[] split = property.split("\\.");
-                Object o = paramMap.get(split[0]);
-
-                if (o instanceof QueryWrapper<?> queryWrapper) {
-                    Object entity = queryWrapper.getEntity();
-                    Class<?> targetClass = tableShard.targetClass();
-                    if (targetClass.isInstance(entity)) {
-                        Field field = targetClass.getDeclaredField(value);
-                        field.setAccessible(true);
-                        return field.get(entity);
-                    }
-                }
-                break;
-            }
-        }
-        return null;
-    }
-
-    /**
-     * @param target target
-     * @return Object
-     */
-    @Override
-    public Object plugin(Object target) {
-        // 当目标类是StatementHandler类型时，才包装目标类，否者直接返回目标本身, 减少目标被代理的次数
-        if (target instanceof StatementHandler) {
-            return Plugin.wrap(target, this);
+        this.$set(this.currentParams.editLineRowMap, index, row)
+        if (isRPC) {
+          const network = this.updateDataNetwork(row)
+          if (network instanceof Promise) {
+            network
+              .then(response => {
+                this.$message.success('上传成功')
+              })
+              .catch(e => {
+                this.$message.error('上传失败, ' + e)
+              })
+              .finally(() => {
+                this.$set(this.currentParams.editLineIndexMap, index, false)
+                this.$set(this.currentParams.updatingLineIndexMap, index, false)
+              })
+          } else {
+            this.$set(this.currentParams.editLineIndexMap, index, false)
+            this.$set(this.currentParams.updatingLineIndexMap, index, false)
+          }
         } else {
-            return target;
+          this.$set(this.currentParams.editLineIndexMap, index, false)
+          this.$set(this.currentParams.updatingLineIndexMap, index, false)
         }
-    }
+      } else {
+        this.$set(this.currentParams.editLineIndexMap, index, false)
+        this.$set(this.currentParams.updatingLineIndexMap, index, false)
+      }
+    },
+    addNewHeaderField() {
+      if (this.newHeaderName === null ||
+        this.newHeaderName === undefined ||
+        this.newHeaderName === ''
+      ) {
+        return
+      }
 
-    /**
-     * 基本数据类型验证，true是，false否
-     *
-     * @param object object
-     * @return boolean
-     */
-    private static boolean isBaseType(Object object) {
-        return object.getClass().isPrimitive()
-                || object instanceof String
-                || object instanceof Integer
-                || object instanceof Double
-                || object instanceof Float
-                || object instanceof Long
-                || object instanceof Boolean
-                || object instanceof Byte
-                || object instanceof Short;
-    }
+      if (this.currentParams.customHeaders.indexOf(this.newHeaderName) === -1 && this.headers.indexOf(this.newHeaderName) === -1) {
+        this.currentParams.customHeaders.push(this.newHeaderName)
+        this.currentParams.selectedFilterHeader.push(this.newHeaderName)
+      }
 
-    /**
-     * @param tableShard 分表注解
-     * @param values     值
-     * @param metaObject mybatis反射对象
-     * @param boundSql   sql信息对象
-     */
-    private void replaceSql(TableShard tableShard, Object[] values, MetaObject metaObject, BoundSql boundSql) {
-        String tableNamePrefix = tableShard.tableNamePrefix();
-        // 获取策略class
-        Class<? extends ITableShardStrategy> strategyClazz = tableShard.shardStrategy();
-        // 从spring ioc容器获取策略类
-        ITableShardStrategy tableShardStrategy = applicationContext.getBean(strategyClazz);
-        // 生成分表名
-        String shardTableName = tableShardStrategy.generateTableName(tableNamePrefix, values);
-        // 获取sql
-        String sql = boundSql.getSql();
-        // 完成表名替换
-        metaObject.setValue("delegate.boundSql.sql", sql.replaceAll(tableNamePrefix, shardTableName));
-    }
+      this.newHeaderName = ''
+    },
+    addBatchRowData() {
+      this.$refs[this.fieldLoadFromRef].toggleVisible()
+    },
+    getFieldOptions(headerName) {
+      const set = new Set()
+      const currentData = this.currentData
 
-    /**
-     * 获取MetaObject对象-mybatis里面提供的一个工具类，类似反射的效果
-     *
-     * @param invocation invocation
-     * @return MetaObject
-     */
-    private MetaObject getMetaObject(Invocation invocation) {
-        StatementHandler statementHandler = (StatementHandler) invocation.getTarget();
-        // MetaObject是mybatis里面提供的一个工具类，类似反射的效果
+      if (currentData === undefined || currentData === null) return {}
 
-        return MetaObject.forObject(statementHandler,
-                SystemMetaObject.DEFAULT_OBJECT_FACTORY,
-                SystemMetaObject.DEFAULT_OBJECT_WRAPPER_FACTORY,
-                defaultReflectorFactory
-        );
-    }
+      for (const line of currentData) {
+        const fieldValue = line[headerName]
 
-    /**
-     * 获取分表注解
-     *
-     * @param method          method
-     * @param mappedStatement mappedStatement
-     * @return TableShard
-     */
-    private TableShard getTableShard(Method method, MappedStatement mappedStatement) throws ClassNotFoundException {
-        String id = mappedStatement.getId();
-        // 获取Class
-        final String className = id.substring(0, id.lastIndexOf("."));
-        // 分表注解
-        TableShard tableShard = null;
-        // 获取Mapper执行方法的TableShard注解
-        tableShard = method.getAnnotation(TableShard.class);
-        // 如果方法没有设置注解，从Mapper接口上面获取TableShard注解
-        if (tableShard == null) {
-            // 获取TableShard注解
-            tableShard = Class.forName(className).getAnnotation(TableShard.class);
+        if (fieldValue !== undefined) {
+          set.add(fieldValue == null ? 'null' : fieldValue)
         }
-        return tableShard;
+      }
+
+      return set
+    },
+    buildRowStatus(row) {
+      return this.headers.every(header => row[header] !== undefined &&
+        row[header] !== null && row[header] !== '')
+    },
+    /**
+     * 网络请求获取数据
+     */
+    queryDisplayData() {
+      const display = this.typedParam.display
+
+      this.batchQueryDataNetwork(display.listQuery, display.headerFilterFieldValues, pageInfo => {
+        this.data = pageInfo.list
+
+        for (const item of this.data) {
+          for (const key of Object.keys(item)) {
+            if (this.headers.indexOf(key) === -1 && this.currentParams.customHeaders.indexOf(key) === -1) {
+              this.currentParams.customHeaders.push(key)
+            }
+          }
+        }
+
+        display.listQuery.total = pageInfo.total
+      })
     }
+  }
+}
+</script>
+<template>
+  <div class="components-container">
+
+    <el-row :span="24">
+      <bot-info-card :bot-info="botInfo" />
+    </el-row>
+
+    <el-row :span="24">
+
+      <el-col class="account-selector">
+
+        <div>
+          <h3 style="padding: 0 15px">运行账户设置</h3>
+          <div class="center">
+            <el-input v-model="botKey" style="width: 430px;padding: 0" placeholder="请输入Bot名称" />
+          </div>
+          <div class="center">
+            <el-transfer
+              v-model="selectedList"
+              style="text-align: left; display: inline-block"
+              :titles="['未添加', '已添加']"
+              :data="selectionList"
+              :format="{
+                noChecked: '',
+                hasChecked: '${checked}/${total}'
+              }"
+              filterable
+            >
+              <span slot-scope="{ option }">{{ option.key }} - {{ option.name }}-{{ option.email }}</span>
+
+              <div slot="left-footer" style=" display: flex;justify-content: center;">
+                <el-pagination
+                  layout="prev, pager, next"
+                  background
+                  :page-size="defaultLimit"
+                  :total="typedContext[currentType] !== undefined ? typedContext[currentType].total : 0"
+                  @current-change="pageChangeHandler"
+                />
+              </div>
+
+              <div slot="right-footer">
+                <el-select
+                  v-model="currentType"
+                  placeholder=""
+                  size="mini"
+                  style="display: block"
+                  @change="typeChangeHandler"
+                >
+                  <el-option
+                    v-for="(value, key) in typedContext"
+                    :key="key"
+                    :label="key"
+                    :value="key"
+                  />
+                </el-select>
+              </div>
+            </el-transfer>
+          </div>
+
+          <div class="center">
+            <el-button type="success" @click="addBotHandler">
+              确定
+            </el-button>
+          </div>
+        </div>
+      </el-col>
+    </el-row>
+  </div>
+</template>
+
+<script>
+import BotInfoCard from '@/views/custom/bot/bot-config/components/bot-info-card.vue'
+import DndList from '@/components/DndList/index.vue'
+import LeftRightSelector from '@/views/custom/components/left-right-selector.vue'
+import { pageQueryAccountBaseInfo, queryAccountBaseInfoTypedInfo } from '@/api/custom/account-base-info'
+import { createBot } from '@/api/custom/bot'
+import Index from '@/views/dashboard/admin/components/TodoList/index.vue'
+
+export default {
+  name: 'BotConfig',
+  components: { Index, LeftRightSelector, DndList, BotInfoCard },
+  data() {
+    return {
+      botId: null,
+      botKey: null,
+      botInfo: {},
+      defaultLimit: 20,
+      currentType: null,
+      typedContext: {},
+      selectionList: [],
+
+      selectedList: [],
+      selectedQuery: {
+        page: 1,
+        limit: 50
+      }
+    }
+  },
+  computed: {
+    currentPage() {
+      const currentTypeContext = this.typedContext[this.currentType]
+
+      if (currentTypeContext === undefined) return 1
+
+      return currentTypeContext.page
+    }
+  },
+  created() {
+    // 获取路由参数
+    this.botInfo = this.$route.query.botInfo
+    this.botId = this.botInfo.id
+    this.botKey = this.$route.query.botKey
+
+    document.title += this.botInfo.id
+
+    // 获取账户分类信息
+    queryAccountBaseInfoTypedInfo().then(response => {
+      const typedInfo = response.data
+
+      for (const info of typedInfo) {
+        this.typedContext[info.key] = {
+          page: 1,
+          limit: this.defaultLimit,
+          total: info.value,
+          pageDataMap: {}
+        }
+
+        this.queryTypedABIPageData(1, this.defaultLimit, info.key)
+      }
+    })
+  },
+  methods: {
+
+    calPrintTotal(pageDataMap, start) {
+      let printTotal = []
+      for (let i = 1; i <= start; i++) {
+        printTotal = printTotal.concat(pageDataMap[i])
+      }
+
+      return printTotal
+    },
+    /**
+     * 查询account base info
+     *
+     * @param page
+     * @param limit
+     * @param type
+     */
+    queryTypedABIPageData(page, limit, type) {
+      // 有缓存，不请求新的数据
+      const pageDataMap = this.typedContext[type].pageDataMap
+      if (
+        pageDataMap !== undefined && pageDataMap !== null &&
+        pageDataMap[page] !== undefined && pageDataMap[page] !== null
+      ) {
+        this.selectionList = this.calPrintTotal(pageDataMap, page)
+
+        return
+      }
+
+      // 获取账户信息
+      pageQueryAccountBaseInfo({
+        page: page,
+        limit: limit,
+        filterMap: {
+          type: type
+        }
+      }).then(response => {
+        const pageInfo = response.data
+
+        pageDataMap[page] = pageInfo.list
+        this.selectionList = this.calPrintTotal(pageDataMap, page)
+        this.currentType = type
+
+        this.typedContext[type].page = page
+
+        for (const ac of pageDataMap[page]) {
+          ac.key = ac.id
+        }
+        this.typedContext[type].total = pageInfo.total
+      })
+    },
+
+    pageChangeHandler(page) {
+      this.queryTypedABIPageData(page, this.defaultLimit, this.currentType)
+    },
+    typeChangeHandler(type) {
+      this.queryTypedABIPageData(this.currentPage, this.defaultLimit, type)
+    },
+    addBotHandler() {
+      const botKey = this.botKey
+      if (botKey === undefined || botKey === null || botKey === '') {
+        this.$message.warning('请输入bot名称')
+        return
+      }
+
+      const botId = this.botId
+      if (botId === undefined || botId === null || botId === '') {
+        this.$message.error('请关闭页面重新进入')
+        return
+      }
+
+      this.$confirm('确定创建[' + botKey + ']吗', '提示', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }).then(() => {
+        createBot({
+          botId: botId,
+          botKey: botKey,
+          accountIds: this.selectedList
+        }).then(response => {
+          this.$message.success('创建Bot成功')
+        })
+      }).catch(() => {
+        this.$message({
+          type: 'info',
+          message: '已取消创建'
+        })
+      })
+    }
+  }
+}
+</script>
+
+<style scoped>
+.components-container {
+  position: relative;
+  min-height: 100px;
+  background-color: #f0f2f5;
+  padding: 10px;
+}
+
+.account-selector {
+  background-color: #fff;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.15); /* 设置阴影效果 */
+  border: 1px solid #e6ebf5;
+  border-radius: 10px;
+}
+
+.account-selector >>> .el-transfer-panel {
+  width: 400px;
+  border: 1px solid #e6ebf5;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #FFFFFF;
+  display: inline-block;
+  vertical-align: middle;
+  max-height: 100%;
+  -webkit-box-sizing: border-box;
+  box-sizing: border-box;
+  position: relative;
+}
+
+.account-selector >>> .el-transfer-panel__body {
+  height: calc(100% - 50px);
+  min-height: 296px;
+}
+
+.account-selector >>> .el-transfer-panel__footer {
+  margin: 10px auto 0;
+  padding: 6px 5px;
+}
+
+.center {
+  display: flex;
+  justify-content: center;
+  margin-top: 10px;
+}
+</style>
+
+<template>
+  <div class="mixin-components-container">
+    <el-row>
+      <el-card class="box-card">
+        <div slot="header" class="clearfix">
+          <span>Types</span>
+        </div>
+        <div style="margin-bottom:50px;">
+          <el-col :span="4" class="text-center">
+            <router-link class="pan-btn blue-btn" to="/documentation/index">
+              Depin
+            </router-link>
+          </el-col>
+          <el-col :span="4" class="text-center">
+            <router-link class="pan-btn light-blue-btn" to="/icon/index">
+              ETH
+            </router-link>
+          </el-col>
+          <el-col :span="4" class="text-center">
+            <router-link class="pan-btn pink-btn" to="/excel/export-excel">
+              Ai
+            </router-link>
+          </el-col>
+          <el-col :span="4" class="text-center">
+            <router-link class="pan-btn green-btn" to="/table/complex-table">
+              Daily
+            </router-link>
+          </el-col>
+          <el-col :span="4" class="text-center">
+            <router-link class="pan-btn tiffany-btn" to="/example/create">
+              SOL
+            </router-link>
+          </el-col>
+          <el-col :span="4" class="text-center">
+            <router-link class="pan-btn yellow-btn" to="/theme/index">
+              TESTNET
+            </router-link>
+          </el-col>
+        </div>
+      </el-card>
+    </el-row>
+
+    <div class="bot-info-content">
+      <bot-simple-card
+        v-for="info in botInfoList"
+        :bot-simple-info="info"
+      />
+    </div>
+
+    <div class="block">
+      <el-pagination
+        layout="prev, pager, next"
+        :total="listQuery.total"
+      />
+    </div>
+  </div>
+</template>
+
+<script>
+import PanThumb from '@/components/PanThumb'
+import MdInput from '@/components/MDinput'
+import DropdownMenu from '@/components/Share/DropdownMenu'
+import waves from '@/directive/waves/index.js'
+import BotSimpleCard from '@/views/custom/bot/bot-market/components/bot-simple-card.vue' // 水波纹指令
+import { pageQueryBot } from '@/api/custom/bot'
+
+export default {
+  name: 'BotMarket',
+  components: {
+    BotSimpleCard,
+    PanThumb,
+    MdInput,
+    DropdownMenu
+  },
+  directives: {
+    waves
+  },
+  data() {
+    return {
+      listQuery: {
+        page: 1,
+        limit: 10,
+        total: 0
+      },
+      botInfoList: [
+        {
+          id: 1,
+          name: 'test-bot-1',
+          describe: 'bot detailnakjwndjkawndjknwajkdnakjwndjkawndjkawndjanwkjdnakjndjkawndjaw',
+          image: 'https://wpimg.wallstcn.com/577965b9-bb9e-4e02-9f0c-095b41417191'
+        }
+      ]
+    }
+  },
+  created() {
+    pageQueryBot({
+      page: this.listQuery.page,
+      limit: this.listQuery.limit
+    }).then(response => {
+      const pageInfo = response.data
+
+      if (pageInfo != null) {
+        this.listQuery.total = pageInfo.total
+        this.botInfoList = pageInfo.list
+      } else {
+        this.$message.warning('查询bot list失败')
+      }
+    })
+  }
+}
+</script>
+
+<style scoped>
+.bot-info-content{
+  padding: 0 25px 0px;
+  display: flex;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+</style>
+<template>
+  <div class="bot-runtime-display-card">
+    <div class="card-header clearfix">
+      <div style="display:flex; float: left">
+        <el-image class="head-image"/>
+        <div style="font-weight: 700;font-size: 16px">
+          {{ botInstance.botKey }}
+        </div>
+      </div>
+
+      <div style="float: right">
+        <i class="el-icon-setting icon-button"/>
+      </div>
+    </div>
+
+    <div class="data-print-line"/>
+
+    <div class="card-detail">
+
+      <div class="card-detail-content">
+        <el-tabs tabPosition="bottom">
+          <el-tab-pane
+            v-for="(jobParam, jobName) in botInstance.botInfo.jobParams"
+          >
+            <span style="color: #9da3ae;" slot="label"> {{ jobName }}</span>
+            <div class="card-detail-content-graph">
+
+            </div>
+          </el-tab-pane>
+        </el-tabs>
+      </div>
+
+      <el-button v-if="botInstance.status === BOT_INSTANCE_STATUS.STOPPED"
+                 @click="startBotClickHandler"
+                 class="start-button" icon="el-icon-video-play" type="success" plain>
+        Start Bot
+      </el-button>
+      <el-button v-else-if="botInstance.status === BOT_INSTANCE_STATUS.RUNNING"
+                 @click="stopBotClickHandler"
+                 class="start-button" icon="el-icon-video-pause" type="danger">
+        Stop Bot
+      </el-button>
+      <el-button v-else
+                 @click="configBotClickHandler"
+                 class="start-button" icon="el-icon-s-operation" type="info" plain>
+        Config Bot
+      </el-button>
+    </div>
+  </div>
+</template>
+
+<script>
+
+import {BOT_INSTANCE_STATUS} from "@/utils/system-enum";
+
+export default {
+  name: 'BotRuntimeDisplayCard',
+  computed: {
+    BOT_INSTANCE_STATUS() {
+      return BOT_INSTANCE_STATUS
+    }
+  },
+  props: {
+    botInstance: {
+      type: Object,
+      default() {
+        return {
+          botKey: 'TestName',
+          status: null
+        }
+      }
+    }
+  },
+  methods: {
+    startBotClickHandler() {
+      this.$emit("start-bot", {botId: this.botInstance.botId, botInstance: this.botInstance})
+    },
+    stopBotClickHandler() {
+      this.$emit("stop-bot", {botId: this.botInstance.botId, botInstance: this.botInstance})
+    },
+    configBotClickHandler() {
+      this.$emit("config-bot", {botId: this.botInstance.botId, botInstance: this.botInstance})
+    }
+  }
+}
+</script>
+
+<style scoped>
+.bot-runtime-display-card {
+  width: 416px;
+  height: 398px;
+  background-color: #202735;
+  padding: 24px;
+
+  margin-left: 12px;
+
+  color: #9da3ae;
+  border-radius: 10px;
+}
+
+.card-header {
+  height: 48px;
+}
+
+.data-print-line {
+  height: 48px;
+  margin-top: 16px;
 
 }
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="cn.com.helei.bot.core.mvc.mapper.BotAccountContextMapper">
 
-    <!-- 通用查询映射结果 -->
-    <resultMap id="BaseResultMap" type="cn.com.helei.bot.core.entity.AccountContext">
-        <id column="id" property="id"/>
-        <result column="bot_id" property="botId"/>
-        <result column="bot_key" property="botKey"/>
-        <result column="account_base_info_id" property="accountBaseInfoId"/>
-        <result column="twitter_id" property="twitterId"/>
-        <result column="discord_id" property="discordId"/>
-        <result column="proxy_id" property="proxyId"/>
-        <result column="browser_env_id" property="browserEnvId"/>
-        <result column="telegram_id" property="telegramId"/>
-        <result column="wallet_id" property="walletId"/>
-        <result column="reward_id" property="rewardId"/>
-        <result column="status" property="status"/>
-        <result column="params" property="params"/>
-        <result column="insert_datetime" property="insertDatetime"/>
-        <result column="update_datetime" property="updateDatetime"/>
-        <result column="is_valid" property="isValid"/>
-    </resultMap>
+.card-detail {
+  height: 222px;
+  margin-top: 16px;
+}
 
-    <insert id="createIfTableNotExist" parameterType="java.lang.String">
-        CREATE TABLE IF NOT EXISTS t_bot_account_context(
-            "id"                   INTEGER PRIMARY KEY AUTOINCREMENT,
-            "bot_id"               INTEGER NOT NULL,
-            "bot_key"              TEXT NOT NULL,
-            "account_base_info_id" INTEGER,
-            "twitter_id"           INtEGER,
-            "discord_id"           INTEGER,
-            "proxy_id"             INTEGER,
-            "browser_env_id"       INTEGER,
-            "telegram_id"          INTEGER,
-            "wallet_id"            INTEGER,
-            "reward_id"            INTEGER,
-            "status"               INTEGER,
-            "usable"               INTEGER(1),
-            "params"               TEXT,
-            "insert_datetime"      TEXT,
-            "update_datetime"      TEXT,
-            "is_valid"             INTEGER(1),
-            UNIQUE (bot_key, account_base_info_id, proxy_id)
-            );
+.head-image {
+  height: 48px;
+  width: 48px;
+  margin-right: 8px;
+}
 
-    </insert>
+.icon-button {
+  width: 24px;
+  height: 24px;
+  color: #9da3ae;
+  font-size: 20px;
 
-    <insert id="insertOrUpdate" parameterType="cn.com.helei.bot.core.entity.AccountContext">
+  cursor: pointer;
+}
 
-        INSERT INTO t_bot_account_context
-        (bot_id, bot_key, account_base_info_id, twitter_id, discord_id, proxy_id, browser_env_id, telegram_id,
-         wallet_id,
-         reward_id, status, params, insert_datetime, update_datetime, is_valid)
-        VALUES (#{botId}, #{botKey}, #{accountBaseInfoId}, #{twitterId}, #{discordId}, #{proxyId}, #{browserEnvId},
-                #{telegramId},
-                #{walletId}, #{rewardId}, #{status}, #{params}, #{insertDatetime}, #{updateDatetime},
-                #{isValid})
-        ON CONFLICT(bot_key, account_base_info_id, proxy_id) DO
-        UPDATE SET
-            bot_id = excluded.bot_id,
-            twitter_id = excluded.twitter_id,
-            discord_id = excluded.discord_id,
-            proxy_id = excluded.proxy_id,
-            browser_env_id = excluded.browser_env_id,
-            telegram_id = excluded.telegram_id,
-            wallet_id = excluded.wallet_id,
-            reward_id = excluded.reward_id,
-            status = excluded.status,
-            params = excluded.params,
-            update_datetime = excluded.update_datetime;
-    </insert>
+.icon-button:hover {
+  transform: scale(1.2); /* 鼠标悬浮时放大 */
+  color: #007BFF; /* 鼠标悬浮时改变颜色 */
+}
 
-    <select id="queryBotAccountTableNames" resultType="java.lang.String">
-        SELECT
-            name
-        FROM
-            sqlite_master
-        WHERE
-            type='table'
-        AND
-            name LIKE 't_bot_account_context'
-        <if test="botId == null">
-            _%
-        </if>
-        <if test="botId != null">
-            #{botId}_%
-        </if>
-    </select>
+.card-detail-content {
+  height: 184px;
+}
 
-    <select id="multipleConditionQuery"
-            parameterType="cn.com.helei.bot.core.entity.AccountContext"
-            resultType="cn.com.helei.bot.core.entity.AccountContext">
-        select
-        t.id,
-        t.bot_id as botId, t.bot_key as botKey, t.account_base_info_id as accountBaseInfoId,
-        t.twitter_id as twitterId, t.discord_id as discordId, t.proxy_id as proxyId,
-        t.browser_env_id as browsserEnvId, t.telegram_id as telegramId,
-        t.wallet_id as walletId, t.reward_id as rewardId, t.status,
-        t.params,
-        t.insert_datetime as insertDatetime,
-        t.update_datetime as updateDatetime,
-        t.is_valid as isValid
-        from
-        t_bot_account_context as t
-        <if test="params != null and !params.isEmpty()">
-            left join json_each(t.params) json_each
-        </if>
-        <where>
-            is_valid = 1
-            <if test="id != null">
-                and t.id = #{id}
-            </if>
-            <if test="botId != null">
-                and t.bot_id = #{botId}
-            </if>
-            <if test="botKey != null">
-                and t.bot_key = #{botKey}
-            </if>
-            <if test="accountBaseInfoId != null">
-                and t.account_base_info_id = #{accountBaseInfoId}
-            </if>
-            <if test="twitterId != null">
-                and t.twitter_id = #{twitterId}
-            </if>
-            <if test="discordId != null">
-                and t.discord_id = #{discordId}
-            </if>
-            <if test="proxyId != null">
-                and t.proxy_id = #{proxyId}
-            </if>
-            <if test="browserEnvId != null">
-                and t.browser_env_id = #{browsserEnvId}
-            </if>
-            <if test="telegramId != null">
-                and t.telegram_id = #{telegramId}
-            </if>
-            <if test="walletId != null">
-                and t.wallet_id = #{walletId}
-            </if>
-            <if test="status != null">
-                and t.status = #{status}
-            </if>
-            <if test="params != null and !params.isEmpty()">
-                and
-                <foreach collection="params" item='entry' index='key' separator='AND'>
-                    json_each.key = #{key} and json_each.value = #{entry}
-                </foreach>
-            </if>
-        </where>
-    </select>
+.card-detail-content-graph {
+  height: 130px;
+  padding: 9px;
+  background-color: #495060;
+}
 
-</mapper>
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="cn.com.helei.bot.core.mvc.mapper.BotInfoMapper">
+.start-button {
+  width: 368px;
+  height: 44px;
 
-    <!-- 通用查询映射结果 -->
-    <resultMap id="BaseResultMap" type="cn.com.helei.bot.core.entity.BotInfo">
-        <id column="id" property="id" />
-        <result column="name" property="name" />
-        <result column="describe" property="describe" />
-        <result column="image" property="image" />
-        <result column="limit_project_ids" property="limitProjectIds" />
-        <result column="job_params" property="jobParams" />
-        <result column="params" property="params" />
-        <result column="insert_datetime" property="insertDatetime" />
-        <result column="update_datetime" property="updateDatetime" />
-        <result column="is_valid" property="isValid" />
-    </resultMap>
+  font-size: 16px;
+  font-weight: 500;
+}
+</style>
+<template>
+  <div class="my-bot">
+    <div class="top-tool-bar"/>
+
+    <div class="bot-info-content">
 
 
-    <insert id="insertOrUpdate" parameterType="cn.com.helei.bot.core.entity.BotInfo">
-        INSERT INTO t_bot_info
-            (name, describe, limit_project_ids, image, job_params, params, insert_datetime, update_datetime, is_valid)
-        VALUES (#{name}, #{describe}, #{limitProjectIds}, #{image}, #{jobParams}, #{params}, #{insertDatetime}, #{updateDatetime},
-                #{isValid})
-            ON CONFLICT(name)
-        DO
-        UPDATE SET
-            describe = excluded.describe,
-            limit_project_ids = excluded.limit_project_ids,
-            image = excluded.image,
-            job_params = excluded.job_params,
-            params = excluded.params,
-            update_datetime = excluded.update_datetime;
-    </insert>
+      <bot-runtime-display-card
+        v-for="instance in botInstanceList"
+        :bot-instance="instance"
+      />
 
-    <select id="multipleConditionQuery"
-            parameterType="cn.com.helei.bot.core.entity.BotInfo"
-            resultType="cn.com.helei.bot.core.entity.BotInfo">
-        select
-        t.id as id,
-        t.name,
-        t.describe,
-        t.image,
-        t.job_params as jobParams,
-        t.params,
-        t.insert_datetime as insertDatetime,
-        t.update_datetime as updateDatetime,
-        t.is_valid as isValid
-        from
-        t_bot_info as t
-        <if test="params != null and !params.isEmpty()">
-            left join json_each(t.params) json_each
-        </if>
-        <where>
-            is_valid = 1
-            <if test="name != null">
-                and t.name = #{name}
-            </if>
-            <if test="describe != null">
-                and t.describe = #{describe}
-            </if>
-            <if test="image != null">
-                and t.image = #{image}
-            </if>
-            <if test="jobParams != null and !params.isEmpty()">
-                and t.job_params = #{jobParams}
-            </if>
-            <if test="params != null and !params.isEmpty()">
-                and
-                <foreach collection="params" item='entry' index='key' separator='AND'>
-                    json_each.key = #{key} and json_each.value = #{entry}
-                </foreach>
-            </if>
-        </where>
-    </select>
-</mapper>
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="cn.com.helei.bot.core.mvc.mapper.BotInstanceMapper">
+    </div>
+  </div>
 
-    <!-- 通用查询映射结果 -->
-    <resultMap id="BaseResultMap" type="cn.com.helei.bot.core.entity.BotInstance">
-        <id column="id" property="id" />
-        <result column="bot_id" property="botId" />
-        <result column="bot_key" property="botKey" />
-        <result column="account_table_name" property="accountTableName" />
-        <result column="params" property="params" />
-        <result column="insert_datetime" property="insertDatetime" />
-        <result column="update_datetime" property="updateDatetime" />
-        <result column="is_valid" property="isValid" />
-    </resultMap>
+</template>
 
-    <insert id="insertOrUpdate" parameterType="cn.com.helei.bot.core.entity.BotInstance">
-        INSERT INTO t_bot_instance
-        (bot_id, bot_key, account_table_name, params, insert_datetime, update_datetime, is_valid)
-        VALUES (#{botId}, #{botKey}, #{accountTableName}, #{params}, #{insertDatetime}, #{updateDatetime},
-                #{isValid})
-            ON CONFLICT(bot_id, bot_key)
-        DO
-        UPDATE SET
-            account_table_name = excluded.account_table_name,
-            params = excluded.params,
-            params = excluded.params,
-            update_datetime = excluded.update_datetime;
-    </insert>
+<script>
 
+import BotRuntimeDisplayCard from '@/views/custom/bot/my-bot/components/bot-runtime-display-card.vue'
+import {pageQueryBotInstanceNetwork} from "@/api/custom/bot";
 
-    <select id="multipleConditionQuery"
-            parameterType="cn.com.helei.bot.core.entity.BotInfo"
-            resultType="cn.com.helei.bot.core.entity.BotInfo">
-        select
-        t.id as id,
-        t.bot_id as botId,
-        t.bot_key as botKey,
-        t.account_table_name as accountTableName,
-        t.params,
-        t.insert_datetime as insertDatetime,
-        t.update_datetime as updateDatetime,
-        t.is_valid as isValid
-        from
-        t_bot_instance as t
-        <if test="params != null and !params.isEmpty()">
-            left join json_each(t.params) json_each
-        </if>
-        <where>
-            is_valid = 1
-            <if test="botId != null">
-                and t.bot_id = #{botId}
-            </if>
-            <if test="botKey != null">
-                and t.bot_key = #{botKey}
-            </if>
-            <if test="accountTableName != null">
-                and t.account_table_name = #{accountTableName}
-            </if>
-            <if test="params != null and !params.isEmpty()">
-                and
-                <foreach collection="params" item='entry' index='key' separator='AND'>
-                    json_each.key = #{key} and json_each.value = #{entry}
-                </foreach>
-            </if>
-        </where>
-    </select>
-</mapper>
+export default {
+  name: 'MyBot',
+  components: {BotRuntimeDisplayCard},
+  data() {
+    return {
+      botInstanceList: [],
+      listQuery: {
+        page: 1,
+        limit: 9,
+        total: 0
+      }
+    }
+  },
+  created() {
+    // Step 1 查询实例列表
+    this.queryAllBotInstance()
+  },
+  methods: {
+    queryAllBotInstance() {
+      pageQueryBotInstanceNetwork({
+        page: this.listQuery.page,
+        limit: this.listQuery.limit
+      }).then(response => {
+        const pageInfo = response.data
+        this.listQuery.total = pageInfo.total
+        this.botInstanceList = pageInfo.list
+      })
+    }
+  }
+}
+</script>
+
+<style scoped>
+.my-bot {
+  margin-top: 10px;
+  background: linear-gradient(to bottom, #324157, #121826);
+
+  padding: 32px;
+
+  min-height: 100vh;
+}
+
+.top-tool-bar {
+  height: 44px;
+  padding: 16px;
+}
+
+.bot-info-content {
+  display: flex;
+  justify-items: flex-start;
+}
+</style>
