@@ -1,566 +1,343 @@
-package cn.com.helei.bot.core.bot.base;
+package cn.com.helei.bot.app.depin_3_dos;
 
-import cn.com.helei.bot.core.bot.job.AutoBotJobParam;
-import cn.com.helei.bot.core.bot.job.AutoBotJobRuntimeParam;
-import cn.com.helei.bot.core.dto.config.AutoBotConfig;
-import cn.com.helei.bot.core.bot.constants.BotStatus;
-import cn.com.helei.bot.core.dto.AutoBotRuntimeInfo;
-import cn.com.helei.bot.core.entity.BotInfo;
-import cn.com.helei.bot.core.entity.ProxyInfo;
-import cn.com.helei.bot.core.supporter.botapi.BotApi;
-import cn.com.helei.bot.core.util.exception.BotMethodFormatException;
-import cn.com.helei.bot.core.util.exception.DepinBotInitException;
-import cn.com.helei.bot.core.util.exception.DepinBotStatusException;
-import cn.com.helei.bot.core.util.NamedThreadFactory;
-import cn.com.helei.bot.core.util.RestApiClientFactory;
-import cn.com.helei.bot.core.util.log.AppendLogger;
-import cn.hutool.core.util.RandomUtil;
+import cn.com.helei.bot.core.bot.anno.BotMethod;
+import cn.com.helei.bot.core.bot.constants.BotJobType;
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.entity.AccountBaseInfo;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.entity.RewordInfo;
+import cn.com.helei.bot.core.supporter.mail.constants.MailProtocolType;
+import cn.com.helei.bot.core.supporter.mail.factory.MailReaderFactory;
+import cn.com.helei.bot.core.supporter.mail.reader.MailReader;
+import cn.com.helei.bot.core.util.exception.LoginException;
+import cn.com.helei.bot.core.util.exception.RegisterException;
+import cn.hutool.core.util.BooleanUtil;
 import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 import io.netty.handler.codec.http.HttpMethod;
-import lombok.Getter;
-import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.select.Elements;
 
+import javax.mail.Message;
+import javax.mail.internet.MimeMultipart;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.*;
-import java.util.function.Supplier;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicReference;
 
-public abstract class AbstractAutoBot {
+@Slf4j
+public class ThreeDosApi {
 
+    private static final String REGISTER_API = "https://api.dashboard.3dos.io/api/auth/register";
 
-    private static final ProxyInfo DEFAULT_PROXY = new ProxyInfo();
+    private static final String LOGIN_API = "";
 
-    protected final AppendLogger logger = new AppendLogger(getClass());
+    private static final String KEEP_ALIVE_API = "https://m8k9mykqqj.us-east-1.awsapprunner.com/api/harvest-data";
 
-    @Getter
-    private final Map<String, AutoBotJobRuntimeParam> jobRuntimeParamMap = new ConcurrentHashMap<>();
+    private static final String REWORD_QUERY_API = "https://api.dashboard.3dos.io/api/profile/me";
 
-    /**
-     * 执行异步任务的线程池
-     */
-    @Getter
-    private final ExecutorService executorService;
+    private static final String HARVESTED_DATA = "Skip to content\\nNavigation Menu\\nairdropinsiders\\nType / to search\\nOverview\\nRepositories\\n156\\nProjects\\nPackages\\nStars\\n2\\n\uD83C\uDFE0\\nWorking from home\\nINSIDERS\\nairdropinsiders\\nWe show you how to make Free Money here on Crypto, Testnet, Airdrops\\nEdit profile\\n 1.1k followers · 20 following\\nhttps://t.me/AirdropInsiderID\\nhttps://t.me/airdropinsideridchat\\nAchievements\\nType \\nLanguage \\nSort \\n New\\nKiteAi-Auto-Bot Public\\n\\nAn automated interaction bot for Kite AI platform with multi-wallet and proxy support\\n\\nnodejs\\nbot\\nkiteai\\nkiteai-bot\\nkiteai-auto-bot\\n JavaScript  45  18 Updated \\n Star\\nSingulabs-Auto-Bot Public\\n\\nMulti-wallet automation tool for AI image comparison tasks. This bot supports multiple wallets and proxy configurations for distributed operation.\\n\\nnodejs\\nbot\\nairdrop\\nsingulabs\\nsingulabs-bot\\nsingulabs-auto-bot\\n JavaScript  20  6 Updated \\n Star\\nBlockpad-Auto-Bot Public\\n\\nA Node.js bot for automating tasks on BlockPad testnet with multi-account and proxy support\\n\\nnodejs\\nbot\\nblockpad\\nblockpad-auto-reff\\nblockpad-auto-bot\\n JavaScript  8  3 Updated \\n Star\\nBlockpad-AutoReff-Bot Private\\n\\nAn automated bot for creating BlockPad accounts using referral codes\\n\\nnodejs\\nbot\\nblockpad\\nblockpadfun\\nblockpad-bot\\nblockpad-auto-reff\\n JavaScript Updated \\n Star\\nNodeGo-Auto-Bot Public\\n\\nAutomated bot for NodeGo platform with support for multiple accounts and proxy configurations (HTTP/SOCKS).\\n\\nnodejs\\nbot\\njs\\nairdrop\\nnodegoai\\nnodegoai-bot\\nnodego\\n JavaScript  43  13 Updated \\n Star\\nSparkchain-Auto-Bot Public\\n\\nA WebSocket-based bot for automating Sparkchain connections with support for multiple accounts and proxy rotation.\\n\\nnodejs\\nbot\\nsparkchain\\nsparkchain-bot\\nsparkchain-auto-bot\\n JavaScript  14  6 Updated \\n Star\\nkaleido-auto-reff Public\\n\\nAuto Reff Bot Kaleidofinance.xyz\\n\\nnodejs\\nbot\\nautoreff\\nkaleido-finance\\nkaleido-bot\\nkaleido-finance-bot\\nkaleido-auto-reff\\n JavaScript  18  10 Updated \\n Star\\nKaleidoFinance-Auto-Bot Public\\n\\nKaleidoFinance Auto Bot [BETA VERSION]\\n\\nnodejs\\nbot\\nkaleido\\nkaleido-finance\\nkaleido-bot\\nkaleido-auto\\n JavaScript  59  131 Updated \\n Star\\nNaoris-Auto-Bot Public\\n\\nNaoris Network Auto Bot\\n\\nnodejs\\nbot\\nnaoris-network\\nnaoris-network-bot\\nnaoris-bot\\nnaoris-network-farm\\n JavaScript  62  17 Updated \\n Star\\nLayerEdge-Auto-Bot Public\\nlayeredge\\nlayeredge-bot\\nlayer-edge-bot\\nlayeredgeai\\nlayer-edge\\n JavaScript  66  29 MIT License Updated \\n Star\\nMeowtopia-Auto-Bot Public\\nmeowtopia\\nmeowtopia-kaiabot\\nmeowtopia-bot\\nmeowtopia-auto-bot\\n JavaScript  18  1 MIT License Updated \\n Star\\nDeSpeed-Auto-Bot Public\\nnodejs\\nbot\\ndepin\\ndespeed\\ndespeed-ai\\ndespeed-depin\\ndespeed-auto\\n JavaScript  19  5 Updated \\n Star\\nDepined-Auto-Bot Public\\ndepinedorg-bot\\ndepined-bot\\ndepinedbot\\ndepined-org-bot\\n JavaScript  34  16 Updated \\n Star\\nMinionLab-Auto-Bot Public\\nnodejs\\nbot\\nminion-lab\\nminionlab-bot\\nminion-lab-bot\\n JavaScript  13  5 Updated \\n Star\\nFractionAi-Auto-Bot Public\\nfraction-ai\\nfractionai-bot\\nfraction-ai-bot\\nfractionai-auto-bot\\n JavaScript  26  5 MIT License Updated \\n Star\\nMango-Testnet-Auto-Bot Public archive\\nmango-testnet\\nmango-testnet-bot\\nmango-testnet-auto\\nmango-testnet-auto-bot\\n JavaScript  58  30 MIT License Updated \\n Star\\nOpenLedger-Heartbeat-Bot Public\\nopenledger-bot\\nopenledger-auto\\nopenledger-auto-hearbeat\\nopenledgerbot\\n Python  26  9 Updated \\n Star\\nSoSoValue-Auto-Reff-Bot Public\\nsosovalue-bot\\nsosovaluebot\\nsosovalue-auto\\nsosovalue-auto-reff\\n JavaScript  24  4 MIT License Updated \\n Star\\nOpenLedger-Auto-Bot Public\\n\\nOpenLedger Auto Bot\\n\\nopenledger-bot\\nopen-ledger-bot\\nopenledger-auto-bot\\n JavaScript  22  8 Updated \\n Star\\nTaker-Auto-Bot Public\\n\\nAuto Reff + Auto Task\\n\\ntaker-xy\\ntaker-bot\\ntaker-farm\\n Python  15  1 Updated \\n Star\\nPlazaFinance-New Public\\nplazafinance-bot\\nplaza-finance-bot\\nplazafinance-auto\\n JavaScript  7  1 MIT License Updated \\n Star\\nAnimix-Auto-Bot Public\\nanimix-bot\\nanimix-auto\\nanimix-tg\\nanimix-bot-tg\\n JavaScript  9  4 MIT License Updated \\n Star\\nNodepay-Auto-Referral-Bot Public\\nnodepay\\nnodepay-bot\\nnodepay-farmer\\nnodepay-multifarmer\\nnodepay-autofarm\\nnodepayauto\\nnodepay-farm\\n Python  24  3 Updated \\n Star\\nDfsuionAi-AutoReff Public\\ndfusion-bot\\ndfusion-ai-autp-reff\\ndfusion-ai-bot\\n JavaScript  7 MIT License Updated \\n Star\\nCentic-Auto-Claim Public\\ncentic-io-bot\\ncentic-bot\\ncentic-io\\n JavaScript  9  2 MIT License Updated \\n Star\\nDfusions-Auto-Bot Public\\ndfsuion-ai-bot\\ndfsuions-ai\\ndfusion-bot\\n JavaScript  11  1 MIT License Updated \\n Star\\nVChars-Auto-Bot Public\\nvchars-ai\\nvchars-ai-bot\\nvcharsai-bot\\nvchars-ai-vana\\n JavaScript  4  1 MIT License Updated \\n Star\\nHivera-Auto-Bot Public\\nhivera-ai-bot\\nhiveraai-bot\\nhivera-bot\\nhivera-ai\\n JavaScript  8  2 MIT License Updated \\n Star\\nStreamAi-Bot Public\\nstream-ai-bot\\nallstrream-bot\\n JavaScript  8 MIT License Updated \\n Star\\nplazafinance-auto-bot Public\\nplazafinance-bot\\nplazafinance\\nplaza-finance-bot\\nplazafinance-farm\\n Python  6  2 Updated \\n Star\\nPrevious Next\\nFooter\\n© 2025 GitHub, Inc.\\nFooter navigation\\nTerms\\nPrivacy\\nSecurity\\nStatus\\nDocs\\nContact\\nManage cookies\\nDo not share my personal information";
 
-    /**
-     * 配置
-     */
-    @Getter
-    private final AutoBotConfig autoBotConfig;
+    private static final String HARVESTED_URL = "https://github.com/airdropinsiders?tab=repositories";
 
-    /**
-     * 状态
-     */
-    private BotStatus status = BotStatus.NEW;
+    private static final String PASSWORD_KEY = "password";
 
-    /**
-     * 代理并发控制
-     */
-    private final Map<ProxyInfo, Semaphore> networkSyncControllerMap;
+    private static final String SECRET_KEY = "secret";
 
-    /**
-     * bot运行时信息
-     */
-    @Getter
-    private final AutoBotRuntimeInfo autoBotRuntimeInfo;
+    private static final String TOKEN_KEY = "token";
 
-    /**
-     * 请求并发数量
-     */
-    @Getter
-    @Setter
-    private int requestConcurrentCount = 5;
+    private static final String MAIL_FROM = "3DOS <noreply@3dos.io>";
 
-    /**
-     * bot api
-     */
-    @Getter
-    private final BotApi botApi;
+    private static final String MAIL_CSS_SELECTOR = "body > div > div.content > div > a";
 
-    /**
-     * bot信息
-     */
-    @Getter
-    private final BotInfo botInfo;
+    private static final MailReader mailReader = MailReaderFactory.getMailReader(MailProtocolType.imap,
+            "imap.gmail.com", "993", true);
 
+    private final ThreeDosBot bot;
 
-    public AbstractAutoBot(
-            AutoBotConfig autoBotConfig,
-            BotApi botApi
-    ) {
-        if (StrUtil.isBlank(autoBotConfig.getBotKey())) {
-            throw new IllegalArgumentException("bot key不能为空");
-        }
-
-        this.autoBotConfig = autoBotConfig;
-        this.botApi = botApi;
-        this.networkSyncControllerMap = new ConcurrentHashMap<>();
-        this.autoBotRuntimeInfo = new AutoBotRuntimeInfo();
-
-        // 解析bot
-        this.botInfo = buildBotInfo();
-        this.executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory(botInfo.getName() + "-executor"));
+    public ThreeDosApi(ThreeDosBot bot) {
+        this.bot = bot;
     }
 
+    @BotMethod(jobType = BotJobType.REGISTER)
+    public Result register(AccountContext exampleAC, List<AccountContext> sameABIIdList, String inviteCode) {
 
-    public void init() {
+        JSONObject body = new JSONObject();
+        body.put("country_id", "233");
+        body.put("acceptTerms", true);
+        body.put("referred_by", inviteCode);
 
-        logger.append(runtimeBotName());
+        AccountBaseInfo accountBaseInfo = exampleAC.getAccountBaseInfo();
+        body.put("email", accountBaseInfo.getEmail());
+        body.put("password", exampleAC.getParam(PASSWORD_KEY));
 
-        updateState(BotStatus.INIT);
+        Map<String, String> headers = exampleAC.getBrowserEnv().generateHeaders();
+        headers.put("Origin", "https://dashboard.3dos.io");
+        headers.put("Referer", "https://dashboard.3dos.io/");
 
-        String botName = runtimeBotName();
+
         try {
-            logger.info("开始初始化表");
+            CompletableFuture<Boolean> future = bot.syncRequest(
+                    exampleAC.getProxy(),
+                    REGISTER_API,
+                    HttpMethod.POST,
+                    headers,
+                    null,
+                    body,
+                    () -> exampleAC.getSimpleInfo() + " 开始注册"
+            ).thenApplyAsync(responseStr -> {
+                JSONObject result = JSONObject.parseObject(responseStr);
 
-            // 检查对应分表是否存在
-            if (!botApi.getBotAccountContextService().checkAndCreateShardedTable(botInfo.getId(), getAutoBotConfig().getBotKey())) {
-                throw new RuntimeException("%s 运行失败,创建账户表失败".formatted(botName));
-            }
-
-            logger.info("初始化完成, 开启保存bot信息");
-            try {
-                Integer i = botApi.getBotInfoService().insertOrUpdate(botInfo);
-                logger.info("保存bot信息成功, " + i);
-            } catch (Exception e) {
-                throw new RuntimeException(botName + " 保存Bot信息失败", e);
-            }
-
-            doInit();
-
-            //更新状态
-            updateState(BotStatus.INIT_FINISH);
-        } catch (Exception e) {
-            logger.error("初始化发生错误", e);
-            updateState(BotStatus.INIT_ERROR);
-        }
-    }
-
-
-    /**
-     * 初始化方法
-     */
-    protected abstract void doInit() throws DepinBotInitException;
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<String> response str
-     */
-    public CompletableFuture<String> syncRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body
-    ) {
-        return syncRequest(proxy, url, method, headers, params, body, 1);
-    }
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<String> response str
-     */
-    public CompletableFuture<String> syncRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body,
-            int retryTimes
-    ) {
-        return syncRequest(proxy, url, method, headers, params, body, null, retryTimes);
-    }
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<Response> String
-     */
-    public CompletableFuture<String> syncRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body,
-            Supplier<String> requestStart
-    ) {
-        return syncRequest(
-                proxy,
-                url,
-                method,
-                headers,
-                params,
-                body,
-                requestStart,
-                1
-        );
-    }
-
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<Response> String
-     */
-    public CompletableFuture<String> syncRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body,
-            Supplier<String> requestStart,
-            int retryTimes
-    ) {
-        return syncCCHandler(proxy, requestStart, () -> {
-            try {
-                return RestApiClientFactory.getClient(proxy).request(
-                        url,
-                        method,
-                        headers,
-                        params,
-                        body,
-                        retryTimes
-                ).get();
-            } catch (InterruptedException | ExecutionException e) {
-                throw new RuntimeException(e);
-            }
-        });
-    }
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<Response> String
-     */
-    public CompletableFuture<List<String>> syncStreamRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body,
-            Supplier<String> requestStart
-    ) {
-        return syncCCHandler(proxy, requestStart, () -> {
-            try {
-                return RestApiClientFactory.getClient(proxy).streamRequest(
-                        url,
-                        method,
-                        headers,
-                        params,
-                        body
-                ).get();
-            } catch (InterruptedException | ExecutionException e) {
-                throw new RuntimeException(e);
-            }
-        });
-    }
-
-    public <R> CompletableFuture<R> syncCCHandler(
-            ProxyInfo proxy,
-            Supplier<String> requestStart,
-            Supplier<R> request
-    ) {
-
-        Semaphore networkController = networkSyncControllerMap
-                .compute(proxy == null ? DEFAULT_PROXY : proxy, (k, v) -> {
-                    if (v == null) {
-                        v = new Semaphore(requestConcurrentCount);
+                if (BooleanUtil.isTrue(result.getBoolean("flag"))) {
+                    bot.logger.info(exampleAC.getSimpleInfo() + "注册成功");
+                    return true;
+                } else {
+                    JSONArray data = result.getJSONArray("data");
+                    for (int i = 0; i < data.size(); i++) {
+                        if ("The email has already been taken.".equals(data.getString(i))) {
+                            bot.logger.warn(exampleAC.getSimpleInfo() + "邮箱已被注册");
+                            return true;
+                        }
                     }
-                    return v;
-                });
-
-
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                networkController.acquire();
-                // 随机延迟
-                TimeUnit.MILLISECONDS.sleep(RandomUtil.randomLong(1000, 3000));
-
-                String str = "开始";
-                if (requestStart != null) {
-                    str = requestStart.get();
+                    throw new RegisterException(exampleAC.getSimpleInfo() + "注册失败, " + responseStr);
                 }
-                logger.info("同步器允许发送请求 - " + str);
+            }, bot.getExecutorService());
 
-                return request.get();
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            } finally {
-                networkController.release();
+            future.get();
+            return Result.ok();
+        } catch (Exception e) {
+            bot.logger.error(exampleAC.getSimpleInfo() + "注册失败，", e.getCause());
+            return Result.fail("注册失败, " + e.getMessage());
+        }
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK)
+    public void checkEmail(AccountContext accountContext) {
+        AccountBaseInfo accountBaseInfo = accountContext.getAccountBaseInfo();
+
+        bot.logger.info("开始验证邮箱 " + accountBaseInfo.getEmail());
+        String emailPassword = (String) accountBaseInfo.getParams().get("imap_password");
+        emailPassword = emailPassword.replace(" ", "").replace(" ", "");
+
+        AtomicReference<String> link = new AtomicReference<>("");
+        mailReader.stoppableReadMessage(
+                accountBaseInfo.getEmail(),
+                emailPassword,
+                3,
+                message -> {
+                    String newValue = resolveLinkFromMessage(message);
+                    link.set(newValue);
+                    return StrUtil.isNotBlank(newValue);
+                }
+        );
+
+        if (StrUtil.isNotBlank(link.get())) {
+            bot.logger.info("邮箱[%s]验证链接获取成功, %s".formatted(accountBaseInfo.getEmail(), link));
+            try {
+                bot.syncRequest(
+                        accountContext.getProxy(),
+                        link.get(),
+                        HttpMethod.GET,
+                        accountContext.getBrowserEnv().generateHeaders(),
+                        null,
+                        null,
+                        () -> "点击邮箱[%s]验证链接[%s]".formatted(accountBaseInfo.getEmail(), link),
+                        3
+                ).get();
+
+            } catch (InterruptedException | ExecutionException e) {
+                bot.logger.error("[%s]邮箱验证失败".formatted(accountBaseInfo.getEmail()), e);
             }
-        }, executorService);
+        } else {
+            bot.logger.error("[%s]验证链接提取失败".formatted(accountBaseInfo.getEmail()));
+        }
     }
 
-    /**
-     * 打印BotRuntimeInfo
-     *
-     * @return string
-     */
-    public String printBotRuntimeInfo() {
-        StringBuilder sb = new StringBuilder();
-        getAutoBotRuntimeInfo().getKeyValueInfoMap().forEach((k, v) -> {
-            sb.append(k).append(": ").append(v).append("\n");
+
+    private String resolveLinkFromMessage(Message message) {
+        try {
+            boolean b = Arrays.stream(message.getFrom())
+                    .anyMatch(address -> MAIL_FROM.equals(address.toString()));
+            if (!b) return null;
+
+            MimeMultipart mimeMultipart = (MimeMultipart) message.getContent();
+
+            String htmlStr = mimeMultipart.getBodyPart(1).getContent().toString();
+
+            Document document = Jsoup.parse(htmlStr);
+            // 使用 CSS 选择器提取 a 标签内容
+            Elements linkElement = document.select(MAIL_CSS_SELECTOR);
+            return linkElement.attr("href");
+        } catch (Exception e) {
+            throw new RuntimeException("从邮件提取链接出错", e);
+        }
+    }
+
+    public Result login(AccountContext exampleAC) {
+        JSONObject body = new JSONObject();
+        body.put("email", exampleAC.getAccountBaseInfo().getEmail());
+        body.put("password", exampleAC.getParam(PASSWORD_KEY));
+
+        Map<String, String> headers = exampleAC.getBrowserEnv().generateHeaders();
+        headers.put("Origin", "https://dashboard.3dos.io");
+        headers.put("Referer", "https://dashboard.3dos.io/");
+
+        CompletableFuture<String> tokenFuture = bot.syncRequest(
+                exampleAC.getProxy(),
+                LOGIN_API,
+                HttpMethod.POST,
+                headers,
+                null,
+                body,
+                () -> exampleAC.getSimpleInfo() + " 开始登录"
+        ).thenApplyAsync(responseStr -> {
+            JSONObject result = JSONObject.parseObject(responseStr);
+
+            if (BooleanUtil.isTrue(result.getBoolean("flag"))) {
+                bot.logger.info(exampleAC.getSimpleInfo() + "登录成功");
+                return result.getJSONObject("data").getString(TOKEN_KEY);
+            }
+            throw new LoginException("登录获取token失败," + responseStr);
         });
-        return sb.toString();
-    }
 
-    /**
-     * 获取app的配置目录
-     *
-     * @return String
-     */
-    public String getAppConfigDir() {
-        return "";
-//        return FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_APP_PATH, botInfo.getName());
-    }
-
-
-    /**
-     * 更新BotStatus
-     *
-     * @param newStatus 新状态
-     */
-    public synchronized void updateState(BotStatus newStatus) throws DepinBotStatusException {
-        boolean b = true;
-        if (newStatus.equals(BotStatus.SHUTDOWN)) {
-            status = BotStatus.SHUTDOWN;
-            b = false;
-        } else {
-            b = switch (status) {
-                //当前为NEW，新状态才能为NEW,SHUTDOWN
-                case NEW -> BotStatus.INIT.equals(newStatus);
-                //当前为INIT，新状态只能为INIT_FINISH、INIT_ERROR,SHUTDOWN
-                case INIT -> newStatus.equals(BotStatus.INIT_FINISH)
-                        || newStatus.equals(BotStatus.INIT_ERROR);
-                //当前为INIT_ERROR,新状态只能为ACCOUNT_LOADING, SHUTDOWN
-                case INIT_ERROR -> newStatus.equals(BotStatus.INIT);
-                //当前状态为INIT_FINISH，新状态只能为ACCOUNT_LIST_CONNECT, SHUTDOWN
-                case INIT_FINISH -> newStatus.equals(BotStatus.STARTING);
-                //当前状态为STARING，新状态只能为RUNNING,SHUTDOWN
-                case STARTING -> newStatus.equals(BotStatus.RUNNING);
-                //RUNNING，新状态只能为 SHUTDOWN
-                case RUNNING -> false;
-                case SHUTDOWN -> false;
-            };
+        try {
+            String token = tokenFuture.get();
+            bot.logger.info("%s 登录成功, token: %s".formatted(exampleAC.getSimpleInfo(), token));
+            return Result.ok(token);
+        } catch (InterruptedException | ExecutionException e) {
+            bot.logger.error("%s 登录失败, %s".formatted(exampleAC.getSimpleInfo(), e.getCause().getMessage()));
+            return Result.fail("登录失败, " + e.getMessage());
         }
+    }
 
+    public void keepLive(AccountContext accountContext) {
+        JSONObject body = new JSONObject();
+        body.put("apiSecret", accountContext.getParam(SECRET_KEY));
+        body.put("harvestedData", HARVESTED_DATA);
+        body.put("url", HARVESTED_URL);
 
-        if (b) {
-            logger.info("Status change [%s] => [%s]".formatted(status, newStatus));
-            this.status = newStatus;
-        } else {
-            throw new DepinBotStatusException(String.format("%s Status不能从[%s]->[%s]", runtimeBotName(), status, newStatus));
+        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
+
+        CompletableFuture<String> request = bot.syncRequest(
+                accountContext.getProxy(),
+                KEEP_ALIVE_API,
+                HttpMethod.POST,
+                headers,
+                null,
+                body,
+                () -> accountContext.getSimpleInfo() + "发生心跳..."
+        );
+
+        try {
+            String responseStr = request.get();
+            bot.logger.info("%s 发送心跳成功, %s".formatted(accountContext.getSimpleInfo(), responseStr));
+        } catch (InterruptedException | ExecutionException e) {
+            bot.logger.error("%s 发送心跳失败, %s".formatted(accountContext.getSimpleInfo(),
+                    e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
         }
     }
 
 
-    public String runtimeBotName() {
-        return "Bot[%s]-[%s]".formatted(botInfo.getName(), autoBotConfig.getBotKey());
-    }
-
-    protected synchronized Map<String, AutoBotJobParam> getJobParams() {
-        return this.botInfo.getJobParams();
-    }
-
-    protected synchronized AutoBotJobParam getJobParam(String jobKey) {
-        return this.botInfo.getJobParams() == null ? null : this.botInfo.getJobParams().get(jobKey);
-    }
-
-    protected synchronized void setJobParam(String jobKey, AutoBotJobParam jobParam) {
-        if (this.botInfo.getJobParams().containsKey(jobKey)) {
-            throw new BotMethodFormatException("job名称[%s]重复".formatted(jobKey));
+    public Result queryReward(AccountContext exampleAC, List<AccountContext> sameABIIdList) {
+        String token = exampleAC.getParam(TOKEN_KEY);
+        if (StrUtil.isBlank(token)) {
+            bot.logger.warn("%s token为空".formatted(exampleAC.getSimpleInfo()));
+            return Result.fail("token为空");
         }
-        this.botInfo.getJobParams().put(jobKey, jobParam);
-    }
 
-    protected abstract BotInfo buildBotInfo();
+        Map<String, String> headers = exampleAC.getBrowserEnv().generateHeaders();
+        headers.put("Authorization", "Bearer " + token);
+        headers.put("Origin", "https://dashboard.3dos.io");
+        headers.put("Referer", "https://dashboard.3dos.io/");
+
+        CompletableFuture<String> query = bot.syncRequest(
+                exampleAC.getProxy(),
+                REWORD_QUERY_API,
+                HttpMethod.POST,
+                headers,
+                null,
+                new JSONObject(),
+                () -> exampleAC.getSimpleInfo() + " 开始查询奖励"
+        );
+
+        try {
+            String responseStr = query.get();
+
+            JSONObject result = JSONObject.parseObject(responseStr);
+            JSONObject data = result.getJSONObject("data");
+
+            for (AccountContext ac : sameABIIdList) {
+                RewordInfo rewordInfo = ac.getRewordInfo();
+                rewordInfo.setDailyPoints(data.getDouble("todays_earning"));
+                rewordInfo.setTotalPoints(data.getDouble("loyalty_points"));
+            }
+
+            bot.logger.info("%s 奖励查询成功".formatted(exampleAC.getSimpleInfo()));
+            return Result.ok();
+        } catch (InterruptedException | ExecutionException e) {
+            String errorMsg = e.getCause() == null ? e.getMessage() : e.getCause().getMessage();
+            bot.logger.info("%s 奖励查询失败, %s".formatted(exampleAC.getSimpleInfo(), errorMsg));
+            return Result.fail("奖励查询失败, " + errorMsg);
+        }
+    }
 }
-package cn.com.helei.bot.core.bot.base;
+package cn.com.helei.bot.app.depin_3_dos;
 
+import cn.com.helei.bot.core.bot.anno.BotApplication;
+import cn.com.helei.bot.core.bot.anno.BotMethod;
+import cn.com.helei.bot.core.bot.base.AnnoDriveAutoBot;
+import cn.com.helei.bot.core.bot.constants.BotJobType;
+import cn.com.helei.bot.core.dto.Result;
 import cn.com.helei.bot.core.dto.config.AutoBotConfig;
-import cn.com.helei.bot.core.dto.ACListOptResult;
-import cn.com.helei.bot.core.dto.BotACJobResult;
 import cn.com.helei.bot.core.entity.AccountContext;
 import cn.com.helei.bot.core.supporter.botapi.BotApi;
-import cn.com.helei.bot.core.supporter.persistence.impl.DBAccountPersistenceManager;
-import cn.com.helei.bot.core.util.exception.DepinBotInitException;
-import cn.com.helei.bot.core.supporter.persistence.AccountPersistenceManager;
-import cn.hutool.core.lang.Pair;
-import lombok.Getter;
-import org.jetbrains.annotations.NotNull;
 
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.stream.Collectors;
+import java.util.List;
 
+@BotApplication(name = "three_dos_bot")
+public class ThreeDosBot extends AnnoDriveAutoBot<ThreeDosBot> {
 
-public abstract class AccountManageAutoBot extends AbstractAutoBot {
+    private final ThreeDosApi threeDosApi;
 
-    @Getter
-    private final List<AccountContext> accountContexts = new ArrayList<>();
-
-    /**
-     * 持久化管理器
-     */
-    private final AccountPersistenceManager persistenceManager;
-
-
-    public AccountManageAutoBot(AutoBotConfig autoBotConfig, BotApi botApi) {
+    public ThreeDosBot(AutoBotConfig autoBotConfig, BotApi botApi) {
         super(autoBotConfig, botApi);
-
-        this.persistenceManager = new DBAccountPersistenceManager(botApi);
+        this.threeDosApi = new ThreeDosApi(this);
     }
 
+    @BotMethod(jobType = BotJobType.REGISTER, jobName = "自动注册")
+    public Result autoRegister(AccountContext exampleAC, List<AccountContext> sameABIIdList, String inviteCode) {
+        return threeDosApi.register(exampleAC, sameABIIdList, inviteCode);
+    }
+
+    @BotMethod(jobType = BotJobType.LOGIN, jobName = "自动获取token")
+    public Result login(AccountContext accountContext) {
+        return threeDosApi.login(accountContext);
+    }
+
+    @BotMethod(jobType = BotJobType.QUERY_REWARD, jobName = "奖励查询", intervalInSecond = 300)
+    public Result queryReward(AccountContext exampleAC, List<AccountContext> sameABIIdList) {
+        return threeDosApi.queryReward(exampleAC, sameABIIdList);
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK)
+    public void checkEmail(AccountContext accountContext) {
+        threeDosApi.checkEmail(accountContext);
+    }
+
+    @BotMethod(jobType = BotJobType.TIMED_TASK, intervalInSecond = 30)
+    public void keepLivePing(AccountContext accountContext) {
+        threeDosApi.keepLive(accountContext);
+    }
 
     @Override
-    protected void doInit() throws DepinBotInitException {
-        // Step 1 初始化保存的线程
-        persistenceManager.init();
-
-        // Step 2 初始化账户
-        initAccounts();
+    protected ThreeDosBot getInstance() {
+        return this;
     }
-
-    /**
-     * 注册账户
-     *
-     * @return CompletableFuture<Result>
-     */
-    public abstract CompletableFuture<ACListOptResult> registerAccount();
-
-    /**
-     * 登录并获取token
-     *
-     * @return CompletableFuture<Result>
-     */
-    public abstract CompletableFuture<ACListOptResult> loginAndTakeTokenAccount();
-
-
-    /**
-     * 更新账户奖励信息
-     *
-     * @return CompletableFuture<Result>
-     */
-    public abstract CompletableFuture<ACListOptResult> updateAccountRewordInfo();
-
-
-    /**
-     * 获取jb name列表
-     *
-     * @return List<String>
-     */
-    public abstract Set<String> botJobNameList();
-
-    /**
-     * 运行指定job
-     *
-     * @param jobName jobName
-     * @return CompletableFuture<Result>
-     */
-    public abstract BotACJobResult startBotJob(String jobName);
-
-
-    /**
-     * 账号被加载后调用
-     *
-     * @param accountContexts accountContexts
-     */
-    protected void accountsLoadedHandler(List<AccountContext> accountContexts) {
-    }
-
-    /**
-     * 初始化账号方法
-     */
-    private void initAccounts() throws DepinBotInitException {
-        Integer botId = getBotInfo().getId();
-
-        try {
-            logger.info("开始加载账户数据");
-            // Step 1 获取持久化的
-            List<AccountContext> accountContexts = persistenceManager
-                    .loadAccountContexts(botId, getAutoBotConfig().getBotKey());
-
-            // Step 2 没有保存的数据
-            if (accountContexts == null || accountContexts.isEmpty()) {
-                logger.warn("没有账户数据");
-            } else {
-                logger.info("使用历史账户数据, 共:"+accountContexts.size());
-
-                // Step 3 加载到bot (字段修改监听)
-                registerAccountsInBot(accountContexts);
-
-                accountsLoadedHandler(accountContexts);
-
-                this.accountContexts.addAll(accountContexts);
-            }
-        } catch (Exception e) {
-            throw new DepinBotInitException("初始化账户发生错误", e);
-        }
-    }
-
-
-    /**
-     * 将账户加载到bot， 会注册监听，当属性发生改变时自动刷入磁盘
-     *
-     * @param accountContexts accountContexts
-     */
-    private void registerAccountsInBot(List<AccountContext> accountContexts) {
-        persistenceManager.registerPersistenceListener(accountContexts);
-    }
-
-
-
-    @NotNull
-    protected Pair<List<AccountContext>, Map<Integer, List<AccountContext>>> getUniAccountContexts() {
-        Map<Integer, List<AccountContext>> groupByABIId = getAccountContexts()
-                .stream()
-                .collect(Collectors.groupingBy(ac ->
-                        ac.getAccountBaseInfoId() == null ? -1 : ac.getAccountBaseInfoId())
-                );
-
-
-        List<AccountContext> accountContexts = groupByABIId.values().stream().map(List::getFirst).toList();
-
-        return new Pair<>(accountContexts, groupByABIId);
-    }
-
 }
 package cn.com.helei.bot.core.bot.base;
 
@@ -686,12 +463,21 @@ public abstract class AnnoDriveAutoBot<T> extends AccountManageAutoBot {
                         return CompletableFuture.completedFuture(Result.fail(errorMsg));
                     } else if (registerMethod != null) {
                         // 调用注册方法注册
+                        List<AccountContext> accountContexts = accountContextMap.get(accountContext.getAccountBaseInfoId());
+
                         return invokeBotMethod(
                                 registerMethod,
                                 accountContext,
-                                accountContextMap.get(accountContext.getAccountBaseInfoId()),
+                                accountContexts,
                                 getAutoBotConfig().getConfig(INVITE_CODE_KEY)
-                        );
+                        ).thenApplyAsync(result -> {
+                            if (result.getSuccess()) {
+                                for (AccountContext ac : accountContexts) {
+                                    AccountContext.signUpSuccess(ac);
+                                }
+                            }
+                            return result;
+                        });
                     } else {
                         return CompletableFuture.completedFuture(Result.fail("未知错误"));
                     }
@@ -711,11 +497,6 @@ public abstract class AnnoDriveAutoBot<T> extends AccountManageAutoBot {
 
     @Override
     protected void doInit() throws DepinBotInitException {
-        // 解析bot job 参数
-        Map<String, AutoBotJobParam> jobParamMap = resolveAnnoBotJobParams();
-        getBotInfo().setJobParams(jobParamMap);
-        getBotApi().getBotInfoService().insertOrUpdate(this.getBotInfo());
-
         super.doInit();
     }
 
@@ -927,13 +708,31 @@ public abstract class AnnoDriveAutoBot<T> extends AccountManageAutoBot {
 
             BotInfo dbBotInfo = botApi.getBotInfoService().query().eq("name", botName).one();
 
+            // 解析bot job 参数
+            Map<String, AutoBotJobParam> jobParamMap = resolveAnnoBotJobParams();
+
             // 查询bot是否存在，不存在则创建
             if (dbBotInfo == null) {
-                log.warn("不存在[{}]bot info, 自动创建...", botName);
-
                 botInfo = BotInfo.generateFromAnno(annotation);
+
+                botInfo.setJobParams(jobParamMap);
+
+                logger.warn("不存在bot info, 自动创建...");
+
+                try {
+                    if (botApi.getBotInfoService().insertOrUpdate(botInfo) == 1) {
+                        // 保存成还需查询botId
+                        botInfo = botApi.getBotInfoService().query().eq("name", botName).one();
+                        logger.info("保存bot信息成功, id:" + botInfo.getId());
+                    }
+                } catch (Exception e) {
+                    throw new RuntimeException(botName + " 保存Bot信息失败", e);
+                }
             } else {
                 botInfo = dbBotInfo;
+
+                botInfo.setJobParams(jobParamMap);
+                getBotApi().getBotInfoService().insertOrUpdate(botInfo);
             }
 
             return botInfo;
@@ -1201,405 +1000,39 @@ public abstract class AnnoDriveAutoBot<T> extends AccountManageAutoBot {
         });
     }
 }
-package cn.com.helei.bot.core.bot.view;
+package cn.com.helei.bot.core.constants;
 
-import cn.com.helei.bot.core.bot.base.AccountManageAutoBot;
-import cn.com.helei.bot.core.dto.config.AutoBotConfig;
-import cn.com.helei.bot.core.bot.constants.BotStatus;
-import cn.com.helei.bot.core.util.exception.DepinBotStartException;
-import cn.com.helei.bot.core.supporter.commandMenu.CommandMenuNode;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-import org.jline.reader.LineReader;
-import org.jline.reader.LineReaderBuilder;
-import org.jline.reader.impl.DefaultParser;
-import org.jline.terminal.Terminal;
-import org.jline.terminal.TerminalBuilder;
-
-import java.io.IOException;
-import java.util.List;
-import java.util.Stack;
-import java.util.concurrent.CountDownLatch;
-
-
-/**
- * 命令行交互的depin机器人
- */
-@Slf4j
-@Getter
-public abstract class CommandLineAutoBot {
-
-    private final AutoBotConfig botConfig;
-
-    private final AccountManageAutoBot bot;
-
-    private final CommandMenuNode mainManu;
-
-    public CommandLineAutoBot(AccountManageAutoBot bot) {
-        this.bot = bot;
-        this.botConfig = bot.getAutoBotConfig();
-
-        this.mainManu = new CommandMenuNode(
-                "主菜单",
-                String.format("欢迎使用[%s]-bot", getBot().getBotInfo().getName()),
-                this::printBanner
-        );
-    }
-
-    /**
-     * 构建command菜单
-     */
-    protected abstract void buildMenuNode(CommandMenuNode mainManu);
-
-
-    /**
-     * 异步启动
-     */
-    private void asyncExecute(CountDownLatch startLatch) {
-        Thread commandInputThread = new Thread(() -> {
-            try {
-                doExecute();
-            } catch (Exception e) {
-                log.error("启动bot发生错误", e);
-            } finally {
-                startLatch.countDown();
-            }
-        }, "depin-bot-main");
-        commandInputThread.setDaemon(true);
-        commandInputThread.start();
-    }
-
-    /**
-     * 启动bot
-     *
-     * @throws DepinBotStartException DepinBotStartException
-     */
-    public void start() throws DepinBotStartException {
-        bot.init();
-
-        bot.updateState(BotStatus.STARTING);
-        log.info("{} 正在启动", bot.runtimeBotName());
-        try {
-            CountDownLatch startLatch = new CountDownLatch(1);
-            //启动命令行交互的线程
-            asyncExecute(startLatch);
-
-            log.info("{} 启动完毕", bot.runtimeBotName());
-
-            bot.updateState(BotStatus.RUNNING);
-            startLatch.await();
-
-        } catch (Exception e) {
-            bot.updateState(BotStatus.SHUTDOWN);
-            throw new DepinBotStartException("启动 %s 发生错误".formatted(bot.runtimeBotName()), e);
-        }
-    }
-
-
-    /**
-     * 运行机器人
-     *
-     * @throws IOException IOException
-     */
-    public void doExecute() throws IOException {
-        //Step 1 获取输入
-        CommandMenuNode mainMenuNode = getMenuNode();
-        Terminal terminal = TerminalBuilder.builder().system(true).build();
-        LineReader reader = LineReaderBuilder.builder().terminal(terminal).parser(new DefaultParser()).build();
-
-        Stack<CommandMenuNode> menuNodeStack = new Stack<>();
-        CommandMenuNode currentMenuNode = mainMenuNode;
-
-        //Step 2 不断监听控制台输入
-        while (true) {
-            boolean inputAccept = true;
-            //Step 2.1 获取输入
-            String choice;
-            try {
-                choice = reader.readLine("\n<\n" + getInvokeActionAndMenuNodePrintStr(currentMenuNode) + "请选择>").trim();
-            } catch (Exception e) {
-                log.error("进入菜单节点[{}]发生异常", currentMenuNode.getTittle(), e);
-                currentMenuNode = menuNodeStack.pop();
-                continue;
-            }
-
-            try {
-                //Step 2.2 退出
-                if ("exit".equals(choice)) {
-                    exitHandler();
-                    break;
-                }
-
-                //Step 2.3 选择操作
-                int option = Integer.parseInt(choice.trim());
-                if (option == 0) {
-                    //返回上一级菜单
-                    if (!menuNodeStack.isEmpty()) {
-                        currentMenuNode = menuNodeStack.pop();
-                    }
-                } else if (option > 0 && option <= currentMenuNode.getSubNodeList().size()) {
-                    //进入选择的菜单
-                    menuNodeStack.push(currentMenuNode);
-                    currentMenuNode = currentMenuNode.getSubNodeList().get(option - 1);
-                } else {
-                    inputAccept = false;
-                }
-
-                //终点节点，不进入，直接返回
-                if (currentMenuNode.isEnd()) {
-                    System.out.println(getInvokeActionAndMenuNodePrintStr(currentMenuNode));
-                    currentMenuNode = menuNodeStack.pop();
-                }
-            } catch (Exception e) {
-                inputAccept = false;
-            }
-
-            try {
-                if (!inputAccept && currentMenuNode.getResolveInput() != null) {
-                    currentMenuNode.getResolveInput().accept(choice);
-                }
-            } catch (Exception e) {
-                System.out.println("系统异常");
-            }
-        }
-    }
-
-
-    /**
-     * 获取菜单， 会放入额外的固定菜单
-     *
-     * @return CommandMenuNode
-     */
-    private CommandMenuNode getMenuNode() {
-
-        buildMenuNode(mainManu);
-
-        return mainManu;
-    }
-
-    private String printBanner() {
-
-        return "" + bot.printBotRuntimeInfo();
-    }
-
-    /**
-     * 退出回调
-     */
-    protected void exitHandler() {
-    }
-
-    /**
-     * 执行Action回调，获取当前菜单打印的字符串
-     *
-     * @param currentMenuNode currentMenuNode
-     * @return String
-     */
-    public String getInvokeActionAndMenuNodePrintStr(CommandMenuNode currentMenuNode) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(currentMenuNode.getDescribe()).append("\n");
-
-        if (currentMenuNode.getAction() != null) {
-            sb.append(currentMenuNode.getAction().get()).append("\n");
-        }
-
-        if (currentMenuNode.isEnd()) return sb.toString();
-
-        sb.append("选项:\n");
-        List<CommandMenuNode> menuNodeList = currentMenuNode.getSubNodeList();
-        for (int i = 0; i < menuNodeList.size(); i++) {
-            sb.append(i + 1).append(". ").append(menuNodeList.get(i).getTittle()).append("\n");
-        }
-
-        sb.append("0. 返回上一级菜单\n");
-
-        return sb.toString();
-    }
-
+public enum BotInstanceStatus {
+    NEW,
+    STOPPED,
+    RUNNING
 }
-package cn.com.helei.bot.core.entity;
-
-import cn.com.helei.bot.core.dto.ConnectStatusInfo;
-import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenClass;
-import cn.com.helei.bot.core.util.excel.IntegerStringConverter;
-import cn.com.helei.bot.core.util.typehandler.LocalDateTimeTypeHandler;
-import cn.com.helei.bot.core.util.typehandler.MapTextTypeHandler;
-import cn.com.helei.bot.core.supporter.propertylisten.PropertyChangeListenField;
-import com.alibaba.excel.annotation.ExcelProperty;
-import com.alibaba.fastjson.annotation.JSONField;
-import com.baomidou.mybatisplus.annotation.*;
-
-import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.Map;
-
-import lombok.*;
+package cn.com.helei.bot.core.constants;
 
 /**
- * <p>
- *
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
+ * Depin Bot 状态
  */
-@Getter
-@Setter
-@TableName("t_bot_account_context")
-@NoArgsConstructor
-@Builder
-@AllArgsConstructor
-@PropertyChangeListenClass(isDeep = true)
-public class AccountContext {
+public enum BotRunTimeStatus {
+    NEW,
 
+    INIT,
+    INIT_ERROR,
+    INIT_FINISH,
 
-    @TableId(value = "id", type = IdType.AUTO)
-    private Integer id;
-
-    @TableField("bot_id")
-    private Integer botId;
-
-    @TableField("bot_key")
-    @ExcelProperty(value = "bot_key")
-    private String botKey;
-
-    @TableField("account_base_info_id")
-    @ExcelProperty(value = "account_base_info_id", converter = IntegerStringConverter.class)
-    private Integer accountBaseInfoId;
-
-    @TableField("twitter_id")
-    @ExcelProperty(value = "twitter_id", converter = IntegerStringConverter.class)
-    private Integer twitterId;
-
-    @TableField("discord_id")
-    @ExcelProperty(value = "discord_id", converter = IntegerStringConverter.class)
-    private Integer discordId;
-
-    @TableField("proxy_id")
-    @ExcelProperty(value = "proxy_id", converter = IntegerStringConverter.class)
-    private Integer proxyId;
-
-    @TableField("browser_env_id")
-    @ExcelProperty(value = "browser_env_id", converter = IntegerStringConverter.class)
-    private Integer browserEnvId;
-
-    @TableField("telegram_id")
-    @ExcelProperty(value = "telegram_id", converter = IntegerStringConverter.class)
-    private Integer telegramId;
-
-    @TableField("wallet_id")
-    @ExcelProperty(value = "wallet_id", converter = IntegerStringConverter.class)
-    private Integer walletId;
-
-    @TableField("reward_id")
-    private Integer rewardId;
-
-    /**
-     * 账号状态
-     * 0 表示初始状态
-     * 1 表示已注册
-     */
-    @TableField("status")
-    @PropertyChangeListenField
-    private Integer status;
-
-    @JSONField(serialize = true, deserialize = true)
-    @TableField(value = "params", typeHandler = MapTextTypeHandler.class)
-    @PropertyChangeListenField
-    private Map<String, Object> params = new HashMap<>();
-
-    @TableField(value = "insert_datetime", typeHandler = LocalDateTimeTypeHandler.class, fill = FieldFill.INSERT)
-    private LocalDateTime insertDatetime;
-
-    @TableField(value = "update_datetime", typeHandler = LocalDateTimeTypeHandler.class, fill = FieldFill.INSERT_UPDATE)
-    private LocalDateTime updateDatetime;
-
-    @TableField(value = "is_valid", fill = FieldFill.INSERT)
-    @TableLogic
-    private Integer isValid;
-
-
-    @TableField(exist = false)
-    @PropertyChangeListenField
-    private RewordInfo rewordInfo = new RewordInfo();
-
-    @TableField(exist = false)
-    private AccountBaseInfo accountBaseInfo;
-
-    @TableField(exist = false)
-    private TwitterAccount twitter;
-
-    @TableField(exist = false)
-    private DiscordAccount discord;
-
-    @TableField(exist = false)
-    private TelegramAccount telegram;
-
-    @TableField(exist = false)
-    private ProxyInfo proxy;
-
-    @TableField(exist = false)
-    private BrowserEnv browserEnv;
-
-    @TableField(exist = false)
-    private final ConnectStatusInfo connectStatusInfo = new ConnectStatusInfo();
-
-    public String getParam(String key) {
-        return params.get(key) == null ? "" : params.get(key).toString();
-    }
-
-    public void setParam(String key, Object value) {
-        params.put(key, value);
-    }
-
-    public void removeParam(String key) {
-        params.remove(key);
-    }
-
-    public String getName() {
-        if (accountBaseInfo == null) return "";
-        return accountBaseInfo.getName() == null ? accountBaseInfo.getEmail() : accountBaseInfo.getName();
-    }
-
-    public String getSimpleInfo() {
-        return String.format("%s-账户[%s]-代理[%s]", getId(), getName(), getProxy() == null ? "NO_PROXY" : getProxy().generateAddressStr());
-    }
-
-    public Boolean isSignUp() {
-        return status != null && status == 1;
-    }
-
-    public String getType() {
-        return accountBaseInfo == null ? null : accountBaseInfo.getType();
-    }
-
-    public static void signUpSuccess(AccountContext accountContext) {
-        accountContext.setStatus(1);
-    }
+    STARTING,
+    RUNNING,
+    SHUTDOWN,
 }
 package cn.com.helei.bot.core.entity;
 
 import com.baomidou.mybatisplus.annotation.*;
 
-import lombok.*;
+        import lombok.*;
 
-import java.time.LocalDateTime;
+        import java.time.LocalDateTime;
 import java.util.Map;
 
 /**
- * <p>
- * CREATE TABLE "t_bot_instance" (
- *   "id" INTEGER PRIMARY KEY AUTOINCREMENT,
- *   "bot_id" INTEGER NOT NULL,
- *   "bot_key" text NOT NULL,
- *   "account_table_name" TEXT,
- *   "params" TEXT,
- *   "insert_datetime" TEXT,
- *   "update_datetime" TEXT,
- *   "is_valid" INTEGER(1),
- *   UNIQUE ("bot_id" ASC, "bot_key" ASC)
- * );
- * </p>
- *
  * @author com.helei
  * @since 2025-02-18
  */
@@ -1635,472 +1068,8 @@ public class BotInstance {
     @TableField(value = "is_valid", fill = FieldFill.INSERT)
     @TableLogic
     private Integer isValid;
-}
-package cn.com.helei.bot.core.mvc.controller;
 
-import cn.com.helei.bot.core.dto.Result;
-import cn.com.helei.bot.core.mvc.service.IBotAccountContextService;
-import cn.com.helei.bot.core.mvc.vo.BotImportVO;
-import cn.com.helei.bot.core.mvc.vo.PageQuery;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-/**
- * <p>
- * 前端控制器
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
- */
-@RestController
-@RequestMapping("/accountContext")
-public class BotAccountContextController {
-
-    @Autowired
-    private IBotAccountContextService botAccountContextService;
-
-    @PostMapping("/batchAdd")
-    public Result batchAdd(@RequestBody BotImportVO importVO) {
-        return botAccountContextService.saveBotAccountContext(importVO.getBotId(), importVO.getBotKey(), importVO.getRawLines());
-    }
-
-    @PostMapping("/pageQuery")
-    public Result pageQuery(@RequestBody PageQuery query) {
-        return botAccountContextService.conditionPageQuery(query);
-    }
-}
-package cn.com.helei.bot.core.mvc.controller;
-
-import cn.com.helei.bot.core.dto.Result;
-import cn.com.helei.bot.core.mvc.service.IBotInfoService;
-import cn.com.helei.bot.core.mvc.vo.BotBindVO;
-import cn.com.helei.bot.core.mvc.vo.PageQuery;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.*;
-
-/**
- * <p>
- * 前端控制器
- * </p>
- *
- * @author com.helei
- * @since 2025-02-07
- */
-@RestController
-@RequestMapping("/bot")
-public class BotInfoController {
-
-    @Autowired
-    private IBotInfoService botInfoService;
-
-    @PostMapping("/pageQuery")
-    public Result pageQuery(@RequestBody PageQuery query) {
-        return botInfoService.pageQuery(query);
-    }
-
-    @PostMapping("/create")
-    public Result create(@RequestBody BotBindVO botBindVO) {
-        return botInfoService.bindBotAccountBaseInfo(botBindVO.getBotId(), botBindVO.getBotKey(),
-                botBindVO.getBindAccountBaseInfoList());
-    }
-}
-package cn.com.helei.bot.core.mvc.controller;
-
-import cn.com.helei.bot.core.dto.Result;
-import cn.com.helei.bot.core.mvc.service.IBotInstanceService;
-import cn.com.helei.bot.core.mvc.vo.PageQuery;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-/**
- * <p>
- *  前端控制器
- * </p>
- *
- * @author com.helei
- * @since 2025-02-18
- */
-@RestController
-@RequestMapping("/botInstance")
-public class BotInstanceController {
-
-    @Autowired
-    private IBotInstanceService botInstanceService;
-
-    @PostMapping("/pageQuery")
-    public Result pageQuery(PageQuery query) {
-        return botInstanceService.pageQuery(query);
-    }
-}
-package cn.com.helei.bot.core.mvc.mapper;
-
-import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.util.table_shard.strategy.BotIdBasedTableShardStrategy;
-import cn.com.helei.bot.core.util.table_shard.TableShard;
-import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Select;
-
-import java.util.List;
-
-import static cn.com.helei.bot.core.mvc.service.impl.BotAccountContextServiceImpl.BOT_ACCOUNT_CONTEXT_TABLE_PREFIX;
-
-/**
- * <p>
- * Mapper 接口
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
- */
-@TableShard(
-        tableNamePrefix = BOT_ACCOUNT_CONTEXT_TABLE_PREFIX,
-        values = {"botId", "botKey"},
-        fieldFlag = true,
-        shardStrategy = BotIdBasedTableShardStrategy.class,
-        targetClass = AccountContext.class
-)
-public interface BotAccountContextMapper extends BaseMapper<AccountContext> {
-
-    Integer insertOrUpdate(AccountContext accountBaseInfo);
-
-    Boolean createIfTableNotExist(@Param("botId") Integer botId, @Param("botKey") String botKey);
-
-    List<AccountContext> multipleConditionQuery(AccountContext condition);
-
-    List<String> queryBotAccountTableNames(@Param("botId") Integer botId);
-}
-package cn.com.helei.bot.core.mvc.mapper;
-
-import cn.com.helei.bot.core.entity.BotInfo;
-import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-
-import java.util.List;
-
-/**
- * <p>
- *  Mapper 接口
- * </p>
- *
- * @author com.helei
- * @since 2025-02-07
- */
-public interface BotInfoMapper extends BaseMapper<BotInfo> {
-
-    Integer insertOrUpdate(BotInfo botInfo);
-
-    List<BotInfo> multipleConditionQuery(BotInfo condition);
-
-}
-package cn.com.helei.bot.core.mvc.mapper;
-
-import cn.com.helei.bot.core.entity.BotInstance;
-import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-
-import java.util.List;
-
-/**
- * <p>
- *  Mapper 接口
- * </p>
- *
- * @author com.helei
- * @since 2025-02-18
- */
-public interface BotInstanceMapper extends BaseMapper<BotInstance> {
-
-    List<BotInstance> multipleConditionQuery(BotInstance condition);
-
-    Integer insertOrUpdate(BotInstance botInstance);
-}
-package cn.com.helei.bot.core.mvc.service.impl;
-
-import cn.com.helei.bot.core.dto.Result;
-import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.entity.BotInstance;
-import cn.com.helei.bot.core.mvc.mapper.BotAccountContextMapper;
-import cn.com.helei.bot.core.mvc.service.IBotAccountContextService;
-import cn.com.helei.bot.core.mvc.service.IBotInstanceService;
-import cn.com.helei.bot.core.mvc.util.ConditionBuildUtil;
-import cn.com.helei.bot.core.mvc.vo.PageQuery;
-import cn.com.helei.bot.core.supporter.botapi.ImportService;
-import cn.com.helei.bot.core.util.table_shard.strategy.BotIdBasedTableShardStrategy;
-import cn.hutool.core.util.StrUtil;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.github.pagehelper.Page;
-import com.github.pagehelper.PageHelper;
-import com.github.pagehelper.PageInfo;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-
-import java.sql.SQLException;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
- */
-@Slf4j
-@Service
-public class BotAccountContextServiceImpl extends ServiceImpl<BotAccountContextMapper, AccountContext> implements IBotAccountContextService {
-
-    public static final String BOT_ACCOUNT_CONTEXT_TABLE_PREFIX = "t_bot_account_context";
-
-    @Autowired
-    private ImportService importService;
-
-    @Autowired
-    private BotIdBasedTableShardStrategy botIdBasedTableShardStrategy;
-
-    @Autowired
-    private IBotInstanceService botInstanceService;
-
-    @Override
-    public Integer insertOrUpdate(AccountContext accountContext) throws SQLException {
-        try {
-            accountContext.setInsertDatetime(LocalDateTime.now());
-            accountContext.setUpdateDatetime(LocalDateTime.now());
-            accountContext.setIsValid(1);
-
-            return baseMapper.insertOrUpdate(accountContext);
-        } catch (Exception e) {
-            throw new SQLException("insert or update [%s] error".formatted(accountContext));
-        }
-    }
-
-    @Override
-    public Integer insertOrUpdateBatch(List<AccountContext> accountContext) throws SQLException {
-        int successCount = 0;
-
-        for (AccountContext accountContent : accountContext) {
-            Integer count = insertOrUpdate(accountContent);
-            successCount += count == null ? 0 : count;
-        }
-
-        return successCount;
-    }
-
-    @Override
-    public Result saveBotAccountContext(Integer botId, String botKey, List<Map<String, Object>> rawLines) {
-        if (botId == null || StrUtil.isBlank(botKey)) {
-            return Result.fail("botId或botKey不能为空");
-        }
-
-        try {
-            importService.importBotAccountContextFromRaw(botId, botKey, rawLines);
-
-            return Result.ok();
-        } catch (Exception e) {
-            log.error("botId[{}]-botKey[{}] 报错账户信息失败", botId, botKey, e);
-            return Result.fail("保存失败, " + e.getMessage());
-        }
-    }
-
-    @Override
-    @Transactional
-    public Boolean checkAndCreateShardedTable(Integer botId, String botKey) throws SQLException {
-        if (botId == null || StrUtil.isBlank(botKey)) return false;
-
-        BotInstance query = BotInstance
-                .builder()
-                .botId(botId).botKey(botKey)
-                .build();
-
-        if (botInstanceService.exists(new QueryWrapper<>(query))) {
-            log.warn("[{}]-[{}] 已存在对应表", botId, botKey);
-            return true;
-        }
-
-        String tableName = botIdBasedTableShardStrategy.generateTableName(BOT_ACCOUNT_CONTEXT_TABLE_PREFIX, new Object[]{botId, botKey});
-        query.setAccountTableName(tableName);
-
-        try {
-            botInstanceService.insertOrUpdate(query);
-            getBaseMapper().createIfTableNotExist(botId, botKey);
-            return true;
-        } catch (Exception e) {
-            throw new SQLException("保存Bot实例信息失败", e);
-        }
-    }
-
-    @Override
-    public Result conditionPageQuery(PageQuery query) {
-        log.info("收到查询消息 [{}]", query);
-        Map<String, Object> filterMap = query.getFilterMap();
-
-        if (!filterMap.containsKey("botId") || !filterMap.containsKey("botKey")) {
-            log.error("没有携带参数[botId/botKey]");
-            return Result.fail("bot账户查询需包含botId/botKey参数");
-        }
-
-        try (Page<AccountContext> page = PageHelper.startPage(query.getPage(), query.getLimit())) {
-            AccountContext condition = ConditionBuildUtil.getMapContainsCondition(
-                    filterMap,
-                    "params",
-                    AccountContext.class
-            );
-
-            // 执行自定义查询
-            List<AccountContext> accountContexts = getBaseMapper().multipleConditionQuery(condition);
-
-            // 包装成 PageInfo 对象，便于返回分页结果
-            PageInfo<AccountContext> data = new PageInfo<>(accountContexts);
-
-            log.info("[{}]查询成功, {}条", query, accountContexts.size());
-
-            return Result.ok(data);
-        } catch (Exception e) {
-            log.error("error", e);
-            return Result.fail("error, " + e.getCause().getMessage());
-        }
-    }
-}
-package cn.com.helei.bot.core.mvc.service.impl;
-
-import cn.com.helei.bot.core.dto.Result;
-import cn.com.helei.bot.core.entity.AccountContext;
-import cn.com.helei.bot.core.entity.BotInfo;
-import cn.com.helei.bot.core.entity.BrowserEnv;
-import cn.com.helei.bot.core.mvc.mapper.BotInfoMapper;
-import cn.com.helei.bot.core.mvc.service.IBotAccountContextService;
-import cn.com.helei.bot.core.mvc.service.IBotInfoService;
-import cn.com.helei.bot.core.mvc.service.IBrowserEnvService;
-import cn.com.helei.bot.core.mvc.util.ConditionBuildUtil;
-import cn.com.helei.bot.core.mvc.vo.PageQuery;
-import cn.hutool.core.util.StrUtil;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.github.pagehelper.Page;
-import com.github.pagehelper.PageHelper;
-import com.github.pagehelper.PageInfo;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-
-import java.sql.SQLException;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
-
-/**
- * <p>
- *  服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-07
- */
-@Slf4j
-@Service
-public class BotInfoServiceImpl extends ServiceImpl<BotInfoMapper, BotInfo> implements IBotInfoService {
-
-    @Autowired
-    private IBotAccountContextService botAccountContextService;
-
-    @Autowired
-    private IBrowserEnvService browserEnvService;
-
-    @Override
-    public Integer insertOrUpdate(BotInfo botInfo) {
-        botInfo.setInsertDatetime(LocalDateTime.now());
-        botInfo.setUpdateDatetime(LocalDateTime.now());
-        botInfo.setIsValid(1);
-
-        return baseMapper.insertOrUpdate(botInfo);
-    }
-
-    @Override
-    public Result pageQuery(PageQuery query) {
-        log.info("收到查询消息 [{}]", query);
-        Map<String, Object> filterMap = query.getFilterMap();
-
-        try (Page<BotInfo> page = PageHelper.startPage(query.getPage(), query.getLimit())){
-            BotInfo condition = ConditionBuildUtil.getMapContainsCondition(
-                    filterMap,
-                    "params",
-                    BotInfo.class
-            );
-
-            // 执行自定义查询
-            List<BotInfo> botInfos = getBaseMapper().multipleConditionQuery(condition);
-
-            // 包装成 PageInfo 对象，便于返回分页结果
-            PageInfo<BotInfo> data = new PageInfo<>(botInfos);
-
-            log.info("[{}]查询成功, {}条", query, botInfos.size());
-
-            return Result.ok(data);
-        } catch (Exception e) {
-            log.error("error", e);
-            return Result.fail("error, " + e.getCause().getMessage());
-        }
-    }
-
-    @Override
-    public Result bindBotAccountBaseInfo(Integer botId, String botKey, List<Integer> bindAccountBaseInfoList) {
-
-        // Step 1 参数校验
-        if (botId == null || StrUtil.isBlank(botKey)) {
-            log.error("Bot[{}]-[{}]绑定账户时参数botId/botKey为空", botId, botKey);
-            return Result.fail("参数botId/botKey不能为空");
-        }
-
-        BotInfo dbBotInfo = query().eq("id", botId).one();
-        if (dbBotInfo == null) {
-            log.error("Bot[{}]-[{}] 不存在该bot", botId, botKey);
-            return Result.fail("不存在该bot");
-        }
-
-        if (bindAccountBaseInfoList == null) bindAccountBaseInfoList = List.of();
-
-        // Step 2 查看或创建对应的表
-        try {
-            botAccountContextService.checkAndCreateShardedTable(botId, botKey);
-        } catch (SQLException e) {
-            log.error("检查创建[{}]-[{}]对应表失败", botId, botKey);
-            return Result.fail("检查创建表失败");
-        }
-
-        // Step 3 插入或更新数据
-        List<BrowserEnv> browserEnvs = browserEnvService.getUselessBrowserEnv(bindAccountBaseInfoList.size());
-        AtomicInteger idx = new AtomicInteger();
-
-        List<AccountContext> accountContexts = bindAccountBaseInfoList.stream().map(abId -> {
-            AccountContext accountContext = new AccountContext();
-            accountContext.setBotId(botId);
-            accountContext.setBotKey(botKey);
-            accountContext.setAccountBaseInfoId(abId);
-            accountContext.setBrowserEnvId(browserEnvs.get(idx.getAndIncrement()).getId());
-
-            return accountContext;
-        }).toList();
-
-        Integer i = null;
-        try {
-            i = botAccountContextService.insertOrUpdateBatch(accountContexts);
-
-            log.info("保存Bot[{}]-[{}]账户成功. [{}/{}]", botId, botKey, i, accountContexts.size());
-            return Result.ok("保存Bot账户成功");
-        } catch (SQLException e) {
-            log.error("保存Bot[{}]-[{}]账户失败", botId, botKey, e);
-            return Result.fail("保存Bot账户失败, " + e.getCause().getMessage());
-        }
-    }
+    public BotInfo botInfo;
 }
 package cn.com.helei.bot.core.mvc.service.impl;
 
@@ -2108,6 +1077,7 @@ import cn.com.helei.bot.core.dto.Result;
 import cn.com.helei.bot.core.entity.BotInfo;
 import cn.com.helei.bot.core.entity.BotInstance;
 import cn.com.helei.bot.core.mvc.mapper.BotInstanceMapper;
+import cn.com.helei.bot.core.mvc.service.IBotInfoService;
 import cn.com.helei.bot.core.mvc.service.IBotInstanceService;
 import cn.com.helei.bot.core.mvc.util.ConditionBuildUtil;
 import cn.com.helei.bot.core.mvc.vo.PageQuery;
@@ -2116,11 +1086,14 @@ import com.github.pagehelper.Page;
 import com.github.pagehelper.PageHelper;
 import com.github.pagehelper.PageInfo;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * <p>
@@ -2133,6 +1106,11 @@ import java.util.Map;
 @Slf4j
 @Service
 public class BotInstanceServiceImpl extends ServiceImpl<BotInstanceMapper, BotInstance> implements IBotInstanceService {
+
+    @Lazy
+    @Autowired
+    private IBotInfoService botInfoService;
+
 
     @Override
     public Integer insertOrUpdate(BotInstance botInstance) {
@@ -2159,6 +1137,15 @@ public class BotInstanceServiceImpl extends ServiceImpl<BotInstanceMapper, BotIn
             // 执行自定义查询
             List<BotInstance> botInstance = getBaseMapper().multipleConditionQuery(condition);
 
+            // 填充botInfo
+            List<Integer> botIds = botInstance.stream().map(BotInstance::getBotId).toList();
+            Map<Integer, BotInfo> idMapBotInfo = botInfoService.listByIds(botIds)
+                    .stream().collect(Collectors.toMap(BotInfo::getId, botInfo -> botInfo));
+
+            for (BotInstance instance : botInstance) {
+                instance.setBotInfo(idMapBotInfo.get(instance.getBotId()));
+            }
+
             // 包装成 PageInfo 对象，便于返回分页结果
             PageInfo<BotInstance> data = new PageInfo<>(botInstance);
 
@@ -2171,138 +1158,70 @@ public class BotInstanceServiceImpl extends ServiceImpl<BotInstanceMapper, BotIn
         }
     }
 }
-package cn.com.helei.bot.core.mvc.service.impl;
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.com.helei.bot.core.mvc.mapper.BotInstanceMapper">
 
-import cn.com.helei.bot.core.dto.Result;
-import cn.com.helei.bot.core.entity.BrowserEnv;
-import cn.com.helei.bot.core.mvc.mapper.BrowserEnvMapper;
-import cn.com.helei.bot.core.mvc.service.IBrowserEnvService;
-import cn.com.helei.bot.core.mvc.util.ConditionBuildUtil;
-import cn.com.helei.bot.core.mvc.vo.PageQuery;
-import cn.com.helei.bot.core.supporter.botapi.ImportService;
-import cn.com.helei.bot.core.util.pool.IdMarkPool;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.github.pagehelper.Page;
-import com.github.pagehelper.PageHelper;
-import com.github.pagehelper.PageInfo;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.InitializingBean;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+    <!-- 通用查询映射结果 -->
+    <resultMap id="BaseResultMap" type="cn.com.helei.bot.core.entity.BotInstance">
+        <id column="id" property="id"/>
+        <result column="bot_id" property="botId"/>
+        <result column="bot_key" property="botKey"/>
+        <result column="account_table_name" property="accountTableName"/>
+        <result column="params" property="params"/>
+        <result column="insert_datetime" property="insertDatetime"/>
+        <result column="update_datetime" property="updateDatetime"/>
+        <result column="is_valid" property="isValid"/>
+    </resultMap>
 
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- *  服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
- */
-@Slf4j
-@Service
-public class BrowserEnvServiceImpl extends ServiceImpl<BrowserEnvMapper, BrowserEnv> implements IBrowserEnvService, InitializingBean {
-
-    @Autowired
-    private ImportService importService;
-
-    private IdMarkPool<BrowserEnv> pool;
+    <insert id="insertOrUpdate" parameterType="cn.com.helei.bot.core.entity.BotInstance">
+        INSERT INTO t_bot_instance
+        (bot_id, bot_key, account_table_name, params, insert_datetime, update_datetime, is_valid)
+        VALUES (#{botId}, #{botKey}, #{accountTableName}, #{params}, #{insertDatetime}, #{updateDatetime},
+                #{isValid}) ON CONFLICT(bot_id, bot_key)
+DO
+        UPDATE SET
+            account_table_name = excluded.account_table_name,
+            params = excluded.params,
+            params = excluded.params,
+            update_datetime = excluded.update_datetime;
+    </insert>
 
 
-
-    @Override
-    public Integer insertOrUpdate(BrowserEnv browserEnv) {
-        browserEnv.setInsertDatetime(LocalDateTime.now());
-        browserEnv.setUpdateDatetime(LocalDateTime.now());
-        browserEnv.setIsValid(1);
-
-        return baseMapper.insertOrUpdate(browserEnv);
-    }
-
-    @Override
-    public Integer insertOrUpdateBatch(List<BrowserEnv> browserEnvs) {
-        int successCount = 0;
-        for (BrowserEnv browserEnv : browserEnvs) {
-            try {
-                Integer count = insertOrUpdate(browserEnv);
-                successCount += count == null ? 0 : count;;
-            } catch (Exception e) {
-                log.error("insert or update [{}] error", browserEnv, e);
-            }
-        }
-
-        return successCount;
-    }
-
-    @Override
-    public Result saveBrowserEnvs(List<Map<String, Object>> rawLines) {
-        if (rawLines == null || rawLines.isEmpty()) {
-            return Result.fail("导入数据不能为空");
-        }
-
-        try {
-            importService.importBrowserEnvFromRaw(rawLines);
-            return Result.ok();
-        } catch (Exception e) {
-            return Result.fail("导入浏览器环境失败," + e.getMessage());
-        }
-    }
-
-    @Override
-    public Result conditionPageQuery(PageQuery query) {
-        log.info("收到查询消息 [{}]", query);
-        Map<String, Object> filterMap = query.getFilterMap();
-
-        try (Page<BrowserEnv> page = PageHelper.startPage(query.getPage(), query.getLimit())){
-            BrowserEnv condition = ConditionBuildUtil.getMapContainsCondition(
-                    filterMap,
-                    "params",
-                    BrowserEnv.class
-            );
-
-            // 执行自定义查询
-            List<BrowserEnv> browserEnvs = getBaseMapper().multipleConditionQuery(condition);
-
-            // 包装成 PageInfo 对象，便于返回分页结果
-            PageInfo<BrowserEnv> data = new PageInfo<>(browserEnvs);
-
-            log.info("[{}]查询成功, {}条", query, browserEnvs.size());
-
-            return Result.ok(data);
-        } catch (Exception e) {
-            log.error("error", e);
-            return Result.fail("error, " + e.getCause().getMessage());
-        }
-    }
-
-    @Override
-    @Transactional
-    public Result delete(List<Integer> ids) {
-        if (ids == null || ids.isEmpty()) {
-            return Result.ok();
-        }
-
-        if (removeBatchByIds(ids)) {
-            return Result.ok();
-        } else {
-            log.error("删除{}失败", ids);
-            return Result.fail("删除" + ids+ "失败");
-        }
-    }
-
-    @Override
-    public List<BrowserEnv> getUselessBrowserEnv(int count) {
-        return pool.getLessUsedItem(count);
-    }
-
-    @Override
-    public void afterPropertiesSet() throws Exception {
-        log.info("loading Browser Env pool...");
-        this.pool = IdMarkPool.create(list(), BrowserEnv.class);
-        log.info("loading Browser Env pool success");
-    }
-}
+    <select id="multipleConditionQuery"
+            parameterType="cn.com.helei.bot.core.entity.BotInstance"
+            resultType="cn.com.helei.bot.core.entity.BotInstance">
+        select
+        t.id as id,
+        t.bot_id as botId,
+        t.bot_key as botKey,
+        t.account_table_name as accountTableName,
+        t.params,
+        t.insert_datetime as insertDatetime,
+        t.update_datetime as updateDatetime,
+        t.is_valid as isValid
+        from
+        t_bot_instance as t
+        <if test="params != null and !params.isEmpty()">
+            left join json_each(t.params) json_each
+        </if>
+        <where>
+            is_valid = 1
+            <if test="botId != null">
+                and t.bot_id = #{botId}
+            </if>
+            <if test="botKey != null">
+                and t.bot_key = #{botKey}
+            </if>
+            <if test="accountTableName != null">
+                and t.account_table_name = #{accountTableName}
+            </if>
+            <if test="params != null and !params.isEmpty()">
+                and
+                <foreach collection="params" item='entry' index='key' separator='AND'>
+                    json_each.key = #{key} and json_each.value = #{entry}
+                </foreach>
+            </if>
+        </where>
+    </select>
+</mapper>
