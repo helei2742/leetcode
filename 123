@@ -1,1250 +1,2134 @@
-import request from '@/utils/custom_request'
+package cn.com.helei.bot_platform.controller;
+
+import cn.com.helei.common.vo.BotImportVO;
+import cn.com.helei.common.vo.DeleteVO;
+import cn.com.helei.common.vo.PageQuery;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.rpc.IAccountBaseInfoRPC;
+import org.apache.dubbo.config.annotation.DubboReference;
+import org.springframework.web.bind.annotation.*;
+
+import java.sql.SQLException;
 
 /**
- * 分页查询浏览器环境
- * @param {page, limit}
- * @returns {*}
+ * <p>
+ * 前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
  */
-export function pageQueryBot({ page, limit, filterMap }) {
-  return request({
-    url: '/bot/pageQuery',
-    method: 'post',
-    data: {
-      page,
-      limit,
-      filterMap
+@RestController
+@RequestMapping("/accountBaseInfo")
+public class AccountBaseInfoController {
+
+    @DubboReference
+    private IAccountBaseInfoRPC accountBaseInfoRPC;
+
+    @PostMapping("/batchAdd")
+    public Result batchAdd(@RequestBody BotImportVO importVO) {
+        return accountBaseInfoRPC.saveAccountBaseInfos(importVO.getRawLines());
     }
-  })
-}
 
-/**
- * 创建bot
- * @param botId
- * @param botKey
- * @param accountIds
- */
-export function createBot({ botId, botKey, accountIds }) {
-  return request({
-    url: '/bot/create',
-    method: 'post',
-    data: {
-      botId,
-      botKey,
-      accountIds
+    @PostMapping("/pageQuery")
+    public Result pageQuery(@RequestBody PageQuery query) throws SQLException {
+        return Result.ok(accountBaseInfoRPC.conditionPageQuery(
+                query.getPage(),
+                query.getLimit(),
+                query.getFilterMap()
+        ));
     }
-  })
-}
 
-/**
- * 查询Bot实例
- */
-export function pageQueryBotInstanceNetwork({ page, limit, filterMap }) {
-  return request({
-    url: '/botInstance/pageQuery',
-    method: 'post',
-    data: {
-      page,
-      limit,
-      filterMap
+    @GetMapping("/typedInfo")
+    public Result queryTypedInfo() {
+        return accountBaseInfoRPC.queryTypedInfo();
     }
-  })
-}
-import request from '@/utils/custom_request'
 
-/**
- * 分页查询Bot账户的基本信息
- * @param {page, limit, filterMap}
- * @returns {*}
- */
-export function pageQueryAccountContext({ page, limit, filterMap }) {
-  return request({
-    url: '/accountContext/pageQuery',
-    method: 'post',
-    data: {
-      page,
-      limit,
-      filterMap
-    }
-  })
-}
-export const Bot_JOB_TYPE = {
-  LOGIN: 'LOGIN',
-  REGISTER: 'REGISTER',
-  QUERY_REWARD: 'QUERY_REWARD',
-  TIMED_TASK: 'TIMED_TASK',
-  ONCE_TASK: 'ONCE_TASK',
-  WEB_SOCKET_CONNECT: 'WEB_SOCKET_CONNECT'
-}
-
-
-export const BOT_INSTANCE_STATUS = {
-  NEW: 'NEW',
-  STOPPED: 'STOPPED',
-  RUNNING: 'RUNNING'
-}
-<template>
-  <div>
-    <!--    头部搜索、添加、上传 bar-->
-    <div class="filter-container clearfix">
-
-      <el-dropdown
-        plain
-        split-button
-        class="filter-item"
-        style="margin-right: 5px"
-        type="info"
-        size="medium"
-      >
-        展示列
-        <el-dropdown-menu slot="dropdown">
-          <el-checkbox-group v-model="currentParams.selectedFilterHeader">
-            <el-dropdown-item v-for="item in headers">
-              <el-checkbox :label="item" disabled />
-            </el-dropdown-item>
-
-            <el-dropdown-item v-for="item in currentParams.customHeaders">
-              <el-checkbox :label="item" />
-            </el-dropdown-item>
-          </el-checkbox-group>
-        </el-dropdown-menu>
-      </el-dropdown>
-
-      <el-select
-        v-for="headerName in headers"
-        v-model="currentParams.headerFilterFieldValues[headerName]"
-        size="medium"
-        :placeholder="headerName"
-        clearable
-        style="width: 90px"
-        class="filter-item"
-        @clear="currentParams.headerFilterFieldValues[headerName] = undefined"
-      >
-        <el-option v-for="item in getFieldOptions(headerName)" :key="item" :label="item" :value="item" />
-      </el-select>
-
-      <el-button
-        v-waves
-        size="medium"
-        class="filter-item"
-        style="margin-left: 10px"
-        type="primary"
-        icon="el-icon-search"
-        @click="handleFilter"
-      >
-        Search
-      </el-button>
-      <el-button
-        v-if="useImportData"
-        size="medium"
-        class="filter-item"
-        style="margin-left: 10px;"
-        type="primary"
-        icon="el-icon-plus"
-        @click="addBatchRowData"
-      >
-        Add
-      </el-button>
-      <el-button
-        v-if="useImportData"
-        v-waves
-        size="medium"
-        class="filter-item"
-        type="success"
-        icon="el-icon-upload"
-        @click="handleUpload"
-      >
-        Upload
-      </el-button>
-
-      <el-switch
-        v-model="useImportData"
-        class="filter-item"
-        style="float: right; top: 10px"
-        active-text="导入"
-        inactive-text="查看"
-      />
-    </div>
-
-    <!--    表格-->
-    <el-table
-      :data="filteredTableData"
-      border
-      stripe
-      fit
-      highlight-current-row
-      style="width: 100%;"
-      @selection-change="handleSelectionChange"
-    >
-      <el-table-column type="selection" width="55" fixed="left" />
-
-      <el-table-column
-        v-if="currentParams.customHeaders.indexOf(idField) < 0"
-        type="index"
-        class-name="status-col"
-        style="color: #2ac06d"
-        min-width="75"
-      />
-
-      <el-table-column v-for="headName in fullHeaders" :label="headName" class-name="status-col" min-width="200">
-        <template slot="header">
-          {{ headName }}
-          <el-badge
-            v-if="headers.includes(headName)"
-            class="header-badge"
-            :value="''"
-            :max="99"
-            :is-dot="true"
-          />
-        </template>
-
-        <template slot-scope="scope">
-          <div v-if="!currentParams.editLineIndexMap[scope.$index]">{{ scope.row[headName] }}</div>
-          <el-input
-            v-else
-            v-model="scope.row[headName]"
-            size="mini"
-            placeholder="请输入内容"
-          />
-        </template>
-      </el-table-column>
-
-      <el-table-column label="Status" class-name="status-col" width="75">
-        <template slot-scope="{row}">
-          <el-button
-            v-if="buildRowStatus(row)"
-            type="success"
-            icon="el-icon-check"
-            size="mini"
-            circle
-          />
-          <el-button
-            v-else
-            type="warning"
-            icon="el-icon-close"
-            size="mini"
-            circle
-          />
-        </template>
-      </el-table-column>
-
-      <el-table-column align="right" width="200" fixed="right">
-        <template #header>
-          <el-input
-            v-model="newHeaderName"
-            size="small"
-            placeholder="输入新列名"
-            style="display: inline-block;width: 60%"
-          />
-          <el-button type="primary" size="small" @click="addNewHeaderField">
-            Add
-          </el-button>
-        </template>
-
-        <template #default="scope">
-          <el-button
-            v-if="currentParams.editLineIndexMap[scope.$index]"
-            size="mini"
-            type="success"
-            :loading="currentParams.updatingLineIndexMap[scope.$index]"
-            :disabled="currentParams.updatingLineIndexMap[scope.$index]"
-            @click="confirmEditRow(scope.$index, scope.row)"
-          >
-            Confirm
-          </el-button>
-          <el-button
-            v-else
-            type="info"
-            size="mini"
-            @click="handleEdit(scope.$index, scope.row)"
-          >
-            Edit
-          </el-button>
-
-          <el-button
-            size="mini"
-            type="danger"
-            @click="handleDelete(scope.$index, scope.row)"
-          >
-            Delete
-          </el-button>
-        </template>
-      </el-table-column>
-    </el-table>
-    <!--      v-show="filteredTableData() !== null && filteredTableData().length >0"-->
-
-    <!--分页条-->
-    <pagination
-      :total="currentParams.listQuery.total"
-      :page.sync="currentParams.listQuery.page"
-      :limit.sync="currentParams.listQuery.limit"
-      @pagination="pageChangeHandler"
-    />
-
-    <!--    添加界面-->
-    <dynamic-field-load-from
-      :ref="fieldLoadFromRef"
-      :field-names="headers"
-      :visible="addRowDataFromVisible"
-      @batch-data-import="batchDataImportHandler"
-    />
-  </div>
-</template>
-
-<script>
-import waves from '@/directive/waves' // waves directive
-import Pagination from '@/components/Pagination'
-import DynamicFieldLoadFrom from '@/views/custom/account/components/dynamic-field-load-from'
-import row from 'element-ui/packages/row'
-
-export default {
-  name: 'DynamicAddColTable',
-  components: { Pagination, DynamicFieldLoadFrom },
-  directives: { waves },
-  filters: {},
-  props: {
-    title: {
-      type: String,
-      default() {
-        return ''
-      }
-    },
-    headers: {
-      type: Array,
-      default() {
-        return []
-      }
-    },
-    idField: {
-      type: String,
-      default() {
-        return 'id'
-      }
-    },
-    batchQueryDataNetwork: {
-      type: Function,
-      default() {
-        return () => {
-        }
-      }
-    },
-    uploadDataNetwork: {
-      type: Function,
-      default() {
-        return () => {
-        }
-      }
-    },
-    deleteDataNetwork: {
-      type: Function,
-      default() {
-        return () => {
-        }
-      }
-    },
-    updateDataNetwork: {
-      type: Function,
-      default() {
-        return () => {
-        }
-      }
-    }
-  },
-  data() {
-    return {
-      importData: [],
-      data: [],
-
-      newHeaderName: '',
-      useImportData: false,
-      addRowDataFromVisible: false,
-
-      typedParam: {
-        import: {
-          filteredTableDataIdxes: new Set(),
-          headerFilterFieldValues: {},
-          editLineIndexMap: {},
-          editLineRowMap: {},
-          updatingLineIndexMap: {},
-          listQuery: {
-            page: 1,
-            limit: 20,
-            total: 0
-          },
-          selectedDataList: [],
-          customHeaders: [],
-          selectedFilterHeader: []
-        },
-        display: {
-          filteredTableDataIdxes: new Set(),
-          headerFilterFieldValues: {},
-          editLineIndexMap: {},
-          editLineRowMap: {},
-          updatingLineIndexMap: {},
-          listQuery: {
-            page: 1,
-            limit: 20,
-            total: 0
-          },
-          selectedDataList: [],
-          customHeaders: [],
-          selectedFilterHeader: []
-        }
-      }
-    }
-  },
-  computed: {
-    row() {
-      return row
-    },
-    fullHeaders() {
-      return this.headers.concat(this.currentParams.selectedFilterHeader)
-    },
-    fieldLoadFromRef() {
-      return 'dynamicFieldLoadFrom[' + this.headers + ']'
-    },
-    currentParams() {
-      return this.useImportData ? this.typedParam['import'] : this.typedParam['display']
-    },
-    currentData() {
-      return this.useImportData ? this.importData : this.data
-    },
-    filteredTableData() {
-      const curData = this.currentData
-
-      const res = []
-      for (let i = 0; i < curData.length; i++) {
-        if (!this.currentParams.filteredTableDataIdxes.has(i)) {
-          res.push(curData[i])
-        }
-      }
-
-      return res
-    }
-  },
-  created() {
-    this.queryDisplayData()
-  },
-  methods: {
-    handleDelete(idx, row) {
-      if (this.useImportData) {
-        this.importData.splice(idx, 1)
-      } else {
-        this.$confirm('是否删除该行数据?', '提示', {
-          confirmButtonText: '确定',
-          cancelButtonText: '取消',
-          type: 'warning'
-        }).then(() => {
-          const network = this.deleteDataNetwork(row)
-          if (network instanceof Promise) {
-            network
-              .then(response => {
-                this.$message.success('删除成功')
-                // this.currentData.splice(idx, 1)
-                this.queryDisplayData()
-              })
-              .catch(e => {
-                this.$message.error('删除失败, ' + e)
-              })
-          }
-        }).catch(() => {
-          this.$message({
-            type: 'info',
-            message: '已取消删除'
-          })
-        })
-      }
-    },
-    handleEdit(idx, row) {
-      this.$set(this.currentParams.editLineIndexMap, idx, true)
-      this.$set(this.currentParams.editLineRowMap, idx, JSON.parse(JSON.stringify(row)))
-    },
-    handleSelectionChange(rows) {
-      this.currentParams.selectedDataList = rows
-    },
-    handleFilter() {
-      // 导入，前端筛选，
-      this.currentParams.filteredTableDataIdxes.clear()
-
-      const currentData = this.currentData
-      for (let i = 0; i < currentData.length; i++) {
-        const line = currentData[i]
-        let flag = true
-        for (const headName of this.fullHeaders) {
-          const targetValue = this.currentParams.headerFilterFieldValues[headName]
-          const currentValue = line[headName]
-
-          if (targetValue !== undefined && targetValue !== currentValue) {
-            flag = false
-            break
-          }
-        }
-
-        if (!flag) this.currentParams.filteredTableDataIdxes.add(i)
-      }
-
-      if (!this.useImportData) {
-        // 展示，发送请求获取新数据
-        this.queryDisplayData()
-      }
-    },
-    handleUpload() {
-      let uploadData = this.currentData
-      if (this.currentParams.selectedDataList !== null && this.currentParams.selectedDataList.length > 0) {
-        uploadData = this.currentParams.selectedDataList
-      }
-      const uploadDataNetwork = this.uploadDataNetwork(uploadData)
-      if (uploadDataNetwork instanceof Promise) {
-        uploadDataNetwork
-          .then(response => {
-            this.$message.success('上传成功')
-          })
-          .catch(e => {
-            this.$message.error('上传失败, ' + e)
-          })
-      }
-    },
-    /**
-     * 批量添加数据
-     * @param payload
-     */
-    batchDataImportHandler(payload) {
-      console.log(payload)
-      const newDataArray = payload.filteredData
-      const customFields = payload.customFields
-
-      this.importData.push(...newDataArray)
-
-      if (customFields !== undefined && customFields !== null && customFields.length > 0) {
-        this.currentParams.customHeaders = [...new Set([...this.currentParams.customHeaders, ...customFields])]
-      }
-    },
-    pageChangeHandler({ page, limit }) {
-      this.currentParams.listQuery.page = page
-      this.currentParams.listQuery.limit = limit
-
-      if (!this.useImportData) {
-        this.queryDisplayData()
-      }
-    },
-    confirmEditRow(index, row) {
-      this.$set(this.currentParams.updatingLineIndexMap, index, true)
-
-      if (!this.useImportData) {
-        const originRow = this.currentParams.editLineRowMap[index]
-
-        let isRPC = false
-        for (const key of Object.keys(row)) {
-          if (originRow[key] !== row[key]) {
-            isRPC = true
-            break
-          }
-        }
-
-        this.$set(this.currentParams.editLineRowMap, index, row)
-        if (isRPC) {
-          const network = this.updateDataNetwork(row)
-          if (network instanceof Promise) {
-            network
-              .then(response => {
-                this.$message.success('上传成功')
-              })
-              .catch(e => {
-                this.$message.error('上传失败, ' + e)
-              })
-              .finally(() => {
-                this.$set(this.currentParams.editLineIndexMap, index, false)
-                this.$set(this.currentParams.updatingLineIndexMap, index, false)
-              })
-          } else {
-            this.$set(this.currentParams.editLineIndexMap, index, false)
-            this.$set(this.currentParams.updatingLineIndexMap, index, false)
-          }
+    @PostMapping("/delete")
+    public Result delete(@RequestBody DeleteVO deleteVO) {
+        Boolean delete = accountBaseInfoRPC.delete(deleteVO.getIds());
+        if (delete) {
+            return Result.ok();
         } else {
-          this.$set(this.currentParams.editLineIndexMap, index, false)
-          this.$set(this.currentParams.updatingLineIndexMap, index, false)
+            return Result.fail("删除失败");
         }
-      } else {
-        this.$set(this.currentParams.editLineIndexMap, index, false)
-        this.$set(this.currentParams.updatingLineIndexMap, index, false)
-      }
-    },
-    addNewHeaderField() {
-      if (this.newHeaderName === null ||
-        this.newHeaderName === undefined ||
-        this.newHeaderName === ''
-      ) {
-        return
-      }
-
-      if (this.currentParams.customHeaders.indexOf(this.newHeaderName) === -1 && this.headers.indexOf(this.newHeaderName) === -1) {
-        this.currentParams.customHeaders.push(this.newHeaderName)
-        this.currentParams.selectedFilterHeader.push(this.newHeaderName)
-      }
-
-      this.newHeaderName = ''
-    },
-    addBatchRowData() {
-      this.$refs[this.fieldLoadFromRef].toggleVisible()
-    },
-    getFieldOptions(headerName) {
-      const set = new Set()
-      const currentData = this.currentData
-
-      if (currentData === undefined || currentData === null) return {}
-
-      for (const line of currentData) {
-        const fieldValue = line[headerName]
-
-        if (fieldValue !== undefined) {
-          set.add(fieldValue == null ? 'null' : fieldValue)
-        }
-      }
-
-      return set
-    },
-    buildRowStatus(row) {
-      return this.headers.every(header => row[header] !== undefined &&
-        row[header] !== null && row[header] !== '')
-    },
-    /**
-     * 网络请求获取数据
-     */
-    queryDisplayData() {
-      const display = this.typedParam.display
-
-      this.batchQueryDataNetwork(display.listQuery, display.headerFilterFieldValues, pageInfo => {
-        this.data = pageInfo.list
-
-        for (const item of this.data) {
-          for (const key of Object.keys(item)) {
-            if (this.headers.indexOf(key) === -1 && this.currentParams.customHeaders.indexOf(key) === -1) {
-              this.currentParams.customHeaders.push(key)
-            }
-          }
-        }
-
-        display.listQuery.total = pageInfo.total
-      })
     }
-  }
 }
-</script>
-<template>
-  <div class="components-container">
+package cn.com.helei.bot_platform.controller;
 
-    <el-row :span="24">
-      <bot-info-card :bot-info="botInfo" />
-    </el-row>
+import cn.com.helei.common.vo.BotBindVO;
+import cn.com.helei.common.vo.PageQuery;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.rpc.IBotInfoRPC;
+import org.apache.dubbo.config.annotation.DubboReference;
+import org.springframework.web.bind.annotation.*;
 
-    <el-row :span="24">
+import java.sql.SQLException;
 
-      <el-col class="account-selector">
+/**
+ * <p>
+ * 前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-07
+ */
+@RestController
+@RequestMapping("/bot")
+public class BotInfoController {
 
-        <div>
-          <h3 style="padding: 0 15px">运行账户设置</h3>
-          <div class="center">
-            <el-input v-model="botKey" style="width: 430px;padding: 0" placeholder="请输入Bot名称" />
-          </div>
-          <div class="center">
-            <el-transfer
-              v-model="selectedList"
-              style="text-align: left; display: inline-block"
-              :titles="['未添加', '已添加']"
-              :data="selectionList"
-              :format="{
-                noChecked: '',
-                hasChecked: '${checked}/${total}'
-              }"
-              filterable
-            >
-              <span slot-scope="{ option }">{{ option.key }} - {{ option.name }}-{{ option.email }}</span>
+    @DubboReference
+    private IBotInfoRPC botInfoRPC;
 
-              <div slot="left-footer" style=" display: flex;justify-content: center;">
-                <el-pagination
-                  layout="prev, pager, next"
-                  background
-                  :page-size="defaultLimit"
-                  :total="typedContext[currentType] !== undefined ? typedContext[currentType].total : 0"
-                  @current-change="pageChangeHandler"
-                />
-              </div>
-
-              <div slot="right-footer">
-                <el-select
-                  v-model="currentType"
-                  placeholder=""
-                  size="mini"
-                  style="display: block"
-                  @change="typeChangeHandler"
-                >
-                  <el-option
-                    v-for="(value, key) in typedContext"
-                    :key="key"
-                    :label="key"
-                    :value="key"
-                  />
-                </el-select>
-              </div>
-            </el-transfer>
-          </div>
-
-          <div class="center">
-            <el-button type="success" @click="addBotHandler">
-              确定
-            </el-button>
-          </div>
-        </div>
-      </el-col>
-    </el-row>
-  </div>
-</template>
-
-<script>
-import BotInfoCard from '@/views/custom/bot/bot-config/components/bot-info-card.vue'
-import DndList from '@/components/DndList/index.vue'
-import LeftRightSelector from '@/views/custom/components/left-right-selector.vue'
-import { pageQueryAccountBaseInfo, queryAccountBaseInfoTypedInfo } from '@/api/custom/account-base-info'
-import { createBot } from '@/api/custom/bot'
-import Index from '@/views/dashboard/admin/components/TodoList/index.vue'
-
-export default {
-  name: 'BotConfig',
-  components: { Index, LeftRightSelector, DndList, BotInfoCard },
-  data() {
-    return {
-      botId: null,
-      botKey: null,
-      botInfo: {},
-      defaultLimit: 20,
-      currentType: null,
-      typedContext: {},
-      selectionList: [],
-
-      selectedList: [],
-      selectedQuery: {
-        page: 1,
-        limit: 50
-      }
+    @PostMapping("/pageQuery")
+    public Result pageQuery(@RequestBody PageQuery query) throws SQLException {
+        return Result.ok(botInfoRPC.conditionPageQuery(
+                query.getPage(),
+                query.getLimit(),
+                query.getFilterMap()
+        ));
     }
-  },
-  computed: {
-    currentPage() {
-      const currentTypeContext = this.typedContext[this.currentType]
 
-      if (currentTypeContext === undefined) return 1
-
-      return currentTypeContext.page
+    @PostMapping("/create")
+    public Result create(@RequestBody BotBindVO botBindVO) {
+        return botInfoRPC.bindBotAccountBaseInfo(botBindVO.getBotId(), botBindVO.getBotKey(),
+                botBindVO.getBindAccountBaseInfoList());
     }
-  },
-  created() {
-    // 获取路由参数
-    this.botInfo = this.$route.query.botInfo
-    this.botId = this.botInfo.id
-    this.botKey = this.$route.query.botKey
+}
+package cn.com.helei.bot_platform.controller;
 
-    document.title += this.botInfo.id
+import cn.com.helei.common.vo.PageQuery;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.rpc.IBotInstanceRPC;
+import org.apache.dubbo.config.annotation.DubboReference;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-    // 获取账户分类信息
-    queryAccountBaseInfoTypedInfo().then(response => {
-      const typedInfo = response.data
+import java.sql.SQLException;
 
-      for (const info of typedInfo) {
-        this.typedContext[info.key] = {
-          page: 1,
-          limit: this.defaultLimit,
-          total: info.value,
-          pageDataMap: {}
+/**
+ * <p>
+ * 前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-18
+ */
+@RestController
+@RequestMapping("/botInstance")
+public class BotInstanceController {
+
+    @DubboReference
+    private IBotInstanceRPC botInstanceRPC;
+
+    @PostMapping("/pageQuery")
+    public Result pageQuery(PageQuery query) throws SQLException {
+        return Result.ok(botInstanceRPC.conditionPageQuery(
+                query.getPage(),
+                query.getLimit(),
+                query.getFilterMap()
+        ));
+    }
+}
+package cn.com.helei.bot_platform.controller;
+
+import cn.com.helei.common.vo.BotImportVO;
+import cn.com.helei.common.vo.DeleteVO;
+import cn.com.helei.common.vo.PageQuery;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.rpc.IBrowserEnvRPC;
+import org.apache.dubbo.config.annotation.DubboReference;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.sql.SQLException;
+
+/**
+ * <p>
+ * 前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@RestController
+@RequestMapping("/browserEnv")
+public class BrowserEnvController {
+    @DubboReference
+    private IBrowserEnvRPC browserEnvRPC;
+
+    @PostMapping("/batchAdd")
+    public Result batchAdd(@RequestBody BotImportVO importVO) {
+        return browserEnvRPC.saveBrowserEnvs(importVO.getRawLines());
+    }
+
+    @PostMapping("/pageQuery")
+    public Result pageQuery(@RequestBody PageQuery query) throws SQLException {
+        return Result.ok(browserEnvRPC.conditionPageQuery(
+                query.getPage(),
+                query.getLimit(),
+                query.getFilterMap()
+        ));
+    }
+
+    @PostMapping("/delete")
+    public Result delete(@RequestBody DeleteVO deleteVO) {
+        Boolean delete = browserEnvRPC.delete(deleteVO.getIds());
+        if (delete) {
+            return Result.ok();
+        } else {
+            return Result.fail("删除失败");
+        }
+    }
+
+}
+package cn.com.helei.bot_platform.controller;
+
+
+import cn.com.helei.common.vo.BotImportVO;
+import cn.com.helei.common.vo.DeleteVO;
+import cn.com.helei.common.vo.PageQuery;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.rpc.IDiscordAccountRPC;
+import org.apache.dubbo.config.annotation.DubboReference;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.sql.SQLException;
+
+/**
+ * <p>
+ * 前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@RestController
+@RequestMapping("/discord")
+public class DiscordAccountController {
+    @DubboReference
+    private IDiscordAccountRPC discordAccountRPC;
+
+    @PostMapping("/batchAdd")
+    public Result batchAdd(@RequestBody BotImportVO importVO) {
+        return discordAccountRPC.saveDiscordAccounts(importVO.getRawLines());
+    }
+
+    @PostMapping("/pageQuery")
+    public Result pageQuery(@RequestBody PageQuery query) throws SQLException {
+        return Result.ok(
+                discordAccountRPC.conditionPageQuery(
+                        query.getPage(),
+                        query.getLimit(),
+                        query.getFilterMap()
+                )
+        );
+    }
+
+    @PostMapping("/delete")
+    public Result delete(@RequestBody DeleteVO deleteVO) {
+        Boolean delete = discordAccountRPC.delete(deleteVO.getIds());
+        if (delete) {
+            return Result.ok();
+        } else {
+            return Result.fail("删除失败");
+        }
+    }
+
+}
+package cn.com.helei.bot_platform.controller;
+
+import cn.com.helei.common.vo.BotImportVO;
+import cn.com.helei.common.vo.DeleteVO;
+import cn.com.helei.common.vo.PageQuery;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.rpc.IProxyInfoRPC;
+import org.apache.dubbo.config.annotation.DubboReference;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.sql.SQLException;
+
+/**
+ * <p>
+ * 前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@RestController
+@RequestMapping("/proxyInfo")
+public class ProxyInfoController {
+
+    @DubboReference
+    private IProxyInfoRPC proxyInfoRPC;
+
+    @PostMapping("/batchAdd")
+    public Result batchAdd(@RequestBody BotImportVO importVO) {
+        return proxyInfoRPC.saveProxyInfos(importVO.getRawLines());
+    }
+
+    @PostMapping("/pageQuery")
+    public Result pageQuery(@RequestBody PageQuery query) throws SQLException {
+        return Result.ok(proxyInfoRPC.conditionPageQuery(
+                query.getPage(),
+                query.getLimit(),
+                query.getFilterMap()
+        ));
+    }
+
+    @PostMapping("/delete")
+    public Result delete(@RequestBody DeleteVO deleteVO) {
+        Boolean delete = proxyInfoRPC.delete(deleteVO.getIds());
+        if (delete) {
+            return Result.ok();
+        } else {
+            return Result.fail("删除失败");
+        }
+    }
+}
+package cn.com.helei.bot_platform.controller;
+
+import cn.com.helei.common.vo.BotImportVO;
+import cn.com.helei.common.vo.DeleteVO;
+import cn.com.helei.common.vo.PageQuery;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.rpc.ITelegramAccountRPC;
+import org.apache.dubbo.config.annotation.DubboReference;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.sql.SQLException;
+
+/**
+ * <p>
+ * 前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-06
+ */
+@RestController
+@RequestMapping("/telegram")
+public class TelegramAccountController {
+
+    @DubboReference
+    private ITelegramAccountRPC telegramAccountRPC;
+
+    @PostMapping("/batchAdd")
+    public Result batchAdd(@RequestBody BotImportVO importVO) {
+        return telegramAccountRPC.saveTelegrams(importVO.getRawLines());
+    }
+
+    @PostMapping("/pageQuery")
+    public Result pageQuery(@RequestBody PageQuery query) throws SQLException {
+        return Result.ok(telegramAccountRPC.conditionPageQuery(
+                query.getPage(),
+                query.getLimit(),
+                query.getFilterMap()
+        ));
+    }
+
+    @PostMapping("/delete")
+    public Result delete(@RequestBody DeleteVO deleteVO) {
+        Boolean delete = telegramAccountRPC.delete(deleteVO.getIds());
+        if (delete) {
+            return Result.ok();
+        } else {
+            return Result.fail("删除失败");
+        }
+    }
+}
+package cn.com.helei.bot_platform.controller;
+
+import cn.com.helei.common.vo.BotImportVO;
+import cn.com.helei.common.vo.DeleteVO;
+import cn.com.helei.common.vo.PageQuery;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.rpc.ITwitterAccountRPC;
+import org.apache.dubbo.config.annotation.DubboReference;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.sql.SQLException;
+
+/**
+ * <p>
+ *  前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@RestController
+@RequestMapping("/twitter")
+public class TwitterAccountController {
+
+    @DubboReference
+    private ITwitterAccountRPC twitterAccountRPC;
+
+    @PostMapping("/batchAdd")
+    public Result batchAdd(@RequestBody BotImportVO importVO) {
+        return twitterAccountRPC.saveTwitters(importVO.getRawLines());
+    }
+
+    @PostMapping("/pageQuery")
+    public Result pageQuery(@RequestBody PageQuery query)  throws SQLException {
+        return Result.ok(
+                twitterAccountRPC.conditionPageQuery(
+                        query.getPage(),
+                        query.getLimit(),
+                        query.getFilterMap()
+                )
+        );
+    }
+
+
+    @PostMapping("/delete")
+    public Result delete(@RequestBody DeleteVO deleteVO) {
+        Boolean delete = twitterAccountRPC.delete(deleteVO.getIds());
+        if (delete) {
+            return Result.ok();
+        } else {
+            return Result.fail("删除失败");
+        }
+    }
+}
+package cn.com.helei.bot_platform.service.impl;
+
+import cn.com.helei.common.config.SystemConfig;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.util.FileUtil;
+import cn.com.helei.common.util.excel.ExcelReadUtil;
+import cn.com.helei.db_layer.mapper.AccountBaseInfoMapper;
+import cn.com.helei.db_layer.mapper.IBaseMapper;
+import cn.com.helei.db_layer.service.AbstractBaseService;
+import cn.com.helei.common.entity.AccountBaseInfo;
+import cn.com.helei.rpc.IAccountBaseInfoRPC;
+import cn.hutool.core.lang.Pair;
+import cn.hutool.core.util.StrUtil;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.dubbo.config.annotation.DubboService;
+
+import java.io.IOException;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@DubboService(registry = "zk-registry")
+public class AccountBaseInfoServiceImpl extends AbstractBaseService<AccountBaseInfoMapper, AccountBaseInfo> implements IAccountBaseInfoRPC {
+
+    public static final String DEFAULT_ACCOUNT_TYPE = "default";
+
+
+    public AccountBaseInfoServiceImpl() {
+        super(accountBaseInfo -> {
+            accountBaseInfo.setInsertDatetime(LocalDateTime.now());
+            accountBaseInfo.setUpdateDatetime(LocalDateTime.now());
+            accountBaseInfo.setIsValid(1);
+        });
+    }
+
+    @Override
+    public Result saveAccountBaseInfos(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
         }
 
-        this.queryTypedABIPageData(1, this.defaultLimit, info.key)
-      }
-    })
-  },
-  methods: {
+        try {
+            importFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            log.error("导入账户数据失败", e.getCause());
+            return Result.fail("导入账户数据失败," + e.getMessage());
+        }
+    }
 
-    calPrintTotal(pageDataMap, start) {
-      let printTotal = []
-      for (let i = 1; i <= start; i++) {
-        printTotal = printTotal.concat(pageDataMap[i])
-      }
 
-      return printTotal
-    },
+    @Override
+    public Result queryTypedInfo() {
+        try {
+            List<Pair<String, Integer>> typedInfo = getBaseMapper().queryTypedInfo();
+            return Result.ok(typedInfo);
+        } catch (Exception e) {
+            log.error("查询AccountBaseInfo分类信息失败,", e.getCause());
+            return Result.fail(e.getCause().getMessage());
+        }
+    }
+
+    @Override
+    public Integer importFromExcel(String botConfigPath) {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, botConfigPath);
+        AtomicInteger total = new AtomicInteger();
+        try {
+            ExcelReadUtil.readExcelAsMap(
+                    proxyFilePath,
+                    (type, map) -> AccountBaseInfo.builder()
+                            .type(type)
+                            .name(autoCast(map.remove("name")))
+                            .email(autoCast(map.remove("email")))
+                            .password(autoCast(map.remove("password")))
+                            .params(map)
+                            .build(),
+                    (type, accountBaseInfos) -> CompletableFuture.runAsync(() -> {
+                        log.info("[{}] 账号基本信息读取完毕, 共[{}]", type, accountBaseInfos.size());
+                        Integer insertCount = null;
+                        try {
+                            insertCount = insertOrUpdateBatch(accountBaseInfos);
+                        } catch (SQLException e) {
+                            throw new RuntimeException(e);
+                        }
+
+                        log.info("[{}] 账号基本信息保存成功, 新增[{}], 共[{}]", type, insertCount, accountBaseInfos.size());
+
+                        total.addAndGet(accountBaseInfos.size());
+                    })
+            );
+
+        } catch (IOException e) {
+            log.error("从文件导入账号基本信息出错", e);
+        }
+
+        return total.get();
+    }
+
+    @Override
+    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
+        log.info("导入账户基本信息，共[{}]条", rawLines.size());
+        List<AccountBaseInfo> list = rawLines.stream().map(map -> {
+            String type = autoCast(map.remove("type"));
+
+            return AccountBaseInfo.builder()
+                    .type(StrUtil.isBlank(type) ? DEFAULT_ACCOUNT_TYPE : type)
+                    .name(autoCast(map.remove("name")))
+                    .email(autoCast(map.remove("email")))
+                    .password(autoCast(map.remove("password")))
+                    .params(map)
+                    .build();
+        }).toList();
+
+        return insertOrUpdateBatch(list);
+    }
+
+    @Override
+    protected IBaseMapper<AccountBaseInfo> getMapper() {
+        return getBaseMapper();
+    }
+}
+package cn.com.helei.bot_platform.service.impl;
+
+import cn.com.helei.db_layer.mapper.IBaseMapper;
+import cn.com.helei.db_layer.service.AbstractBaseService;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.entity.BotInfo;
+import cn.com.helei.db_layer.mapper.BotInfoMapper;
+import cn.com.helei.rpc.IBotInfoRPC;
+import cn.hutool.core.util.StrUtil;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.dubbo.config.annotation.DubboService;
+
+import java.time.LocalDateTime;
+import java.util.List;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-07
+ */
+@Slf4j
+@DubboService(registry = "zk-registry")
+public class BotInfoServiceImpl extends AbstractBaseService<BotInfoMapper, BotInfo> implements IBotInfoRPC {
+
+
+    public BotInfoServiceImpl() {
+        super(botInfo -> {
+            botInfo.setInsertDatetime(LocalDateTime.now());
+            botInfo.setUpdateDatetime(LocalDateTime.now());
+            botInfo.setIsValid(1);
+        });
+    }
+
+
+    @Override
+    public Result bindBotAccountBaseInfo(Integer botId, String botKey, List<Integer> bindAccountBaseInfoList) {
+
+        // Step 1 参数校验
+        if (botId == null || StrUtil.isBlank(botKey)) {
+            log.error("Bot[{}]-[{}]绑定账户时参数botId/botKey为空", botId, botKey);
+            return Result.fail("参数botId/botKey不能为空");
+        }
+
+        BotInfo dbBotInfo = query().eq("id", botId).one();
+        if (dbBotInfo == null) {
+            log.error("Bot[{}]-[{}] 不存在该bot", botId, botKey);
+            return Result.fail("不存在该bot");
+        }
+
+        if (bindAccountBaseInfoList == null) bindAccountBaseInfoList = List.of();
+
+        return Result.ok(bindAccountBaseInfoList);
+//        // Step 2 查看或创建对应的表
+//        try {
+//            botAccountContextService.checkAndCreateShardedTable(botId, botKey, false);
+//        } catch (SQLException e) {
+//            log.error("检查创建[{}]-[{}]对应表失败", botId, botKey);
+//            return Result.fail("检查创建表失败, " + e.getMessage());
+//        }
+
+//        // Step 3 插入或更新数据
+//        List<BrowserEnv> browserEnvs = browserEnvService.getUselessBrowserEnv(bindAccountBaseInfoList.size());
+//        AtomicInteger idx = new AtomicInteger();
+//
+//        List<AccountContext> accountContexts = bindAccountBaseInfoList.stream().map(abId -> {
+//            AccountContext accountContext = new AccountContext();
+//            accountContext.setBotId(botId);
+//            accountContext.setBotKey(botKey);
+//            accountContext.setAccountBaseInfoId(abId);
+//            accountContext.setBrowserEnvId(browserEnvs.get(idx.getAndIncrement()).getId());
+//
+//            return accountContext;
+//        }).toList();
+//
+//        Integer i = null;
+//        try {
+//            i = botAccountContextService.insertOrUpdateBatch(accountContexts);
+//
+//            log.info("保存Bot[{}]-[{}]账户成功. [{}/{}]", botId, botKey, i, accountContexts.size());
+//            return Result.ok("保存Bot账户成功");
+//        } catch (SQLException e) {
+//            log.error("保存Bot[{}]-[{}]账户失败", botId, botKey, e);
+//            return Result.fail("保存Bot账户失败, " + e.getCause().getMessage());
+//        }
+    }
+
+    @Override
+    protected IBaseMapper<BotInfo> getMapper() {
+        return getBaseMapper();
+    }
+}
+package cn.com.helei.bot_platform.service.impl;
+
+import cn.com.helei.common.dto.PageResult;
+import cn.com.helei.db_layer.mapper.BotInfoMapper;
+import cn.com.helei.db_layer.mapper.IBaseMapper;
+import cn.com.helei.db_layer.service.AbstractBaseService;
+import cn.com.helei.common.entity.BotInfo;
+import cn.com.helei.common.entity.BotInstance;
+import cn.com.helei.db_layer.mapper.BotInstanceMapper;
+import cn.com.helei.rpc.IBotInstanceRPC;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.dubbo.config.annotation.DubboService;
+import org.springframework.beans.factory.annotation.Autowired;
+
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-18
+ */
+@Slf4j
+@DubboService(registry = "zk-registry")
+public class BotInstanceServiceImpl extends AbstractBaseService<BotInstanceMapper, BotInstance> implements IBotInstanceRPC {
+
+    @Autowired
+    private BotInfoMapper botInfoMapper;
+
+    public BotInstanceServiceImpl() {
+        super(botInstance -> {
+            botInstance.setInsertDatetime(LocalDateTime.now());
+            botInstance.setUpdateDatetime(LocalDateTime.now());
+            botInstance.setIsValid(1);
+        });
+    }
+    @Override
+    public PageResult<BotInstance> conditionPageQuery(int page, int limit, Map<String, Object> filterMap) throws SQLException {
+
+        PageResult<BotInstance> result = super.conditionPageQuery(page, limit, filterMap);
+
+        // 填充botInfo
+        List<Integer> botIds = result.getList().stream().map(BotInstance::getBotId).toList();
+        Map<Integer, BotInfo> idMapBotInfo = botInfoMapper.selectBatchIds(botIds)
+                .stream().collect(Collectors.toMap(BotInfo::getId, botInfo -> botInfo));
+
+        for (BotInstance instance : result.getList()) {
+            instance.setBotInfo(idMapBotInfo.get(instance.getBotId()));
+        }
+
+        return result;
+    }
+
+    @Override
+    protected IBaseMapper<BotInstance> getMapper() {
+        return getBaseMapper();
+    }
+
+
+    @Override
+    public Boolean existsBotInstance(BotInstance query) {
+        return getMapper().exists(new QueryWrapper<>(query));
+    }
+}
+package cn.com.helei.bot_platform.service.impl;
+
+import cn.com.helei.common.config.SystemConfig;
+import cn.com.helei.common.util.FileUtil;
+import cn.com.helei.common.util.excel.ExcelReadUtil;
+import cn.com.helei.db_layer.mapper.IBaseMapper;
+import cn.com.helei.db_layer.service.AbstractBaseService;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.entity.BrowserEnv;
+import cn.com.helei.common.util.pool.IdMarkPool;
+import cn.com.helei.db_layer.mapper.BrowserEnvMapper;
+import cn.com.helei.rpc.IBrowserEnvRPC;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.dubbo.config.annotation.DubboService;
+
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
+import static cn.com.helei.common.entity.BrowserEnv.USER_AGENT_KEY;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@DubboService(registry = "zk-registry")
+public class BrowserEnvServiceImpl extends AbstractBaseService<BrowserEnvMapper, BrowserEnv> implements IBrowserEnvRPC {
+
+    private IdMarkPool<BrowserEnv> pool;
+
+    public BrowserEnvServiceImpl() {
+        super(browserEnv -> {
+            browserEnv.setInsertDatetime(LocalDateTime.now());
+            browserEnv.setUpdateDatetime(LocalDateTime.now());
+            browserEnv.setIsValid(1);
+        });
+    }
+
+
+    @Override
+    public Result saveBrowserEnvs(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail("导入浏览器环境失败," + e.getMessage());
+        }
+    }
+
+
+    @Override
+    public synchronized List<BrowserEnv> getUselessBrowserEnv(int count) {
+        if (pool == null) {
+            log.info("loading Browser Env pool...");
+            this.pool = IdMarkPool.create(list(), BrowserEnv.class);
+            log.info("loading Browser Env pool success");
+        }
+
+        return pool.getLessUsedItem(count);
+    }
+
+    @Override
+    public Integer importFromExcel(String fileBotConfigPath) throws SQLException {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        List<Map<String, Object>> headerList = ExcelReadUtil.readExcelToMap(proxyFilePath);
+
+        log.info("文件解析成功, 共[{}]个", headerList.size());
+        return importFromRaw(headerList);
+    }
+
+    @Override
+    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
+
+        List<BrowserEnv> list = rawLines.stream().map(map -> {
+            Object userAgent = map.remove(USER_AGENT_KEY);
+            if (userAgent == null) return null;
+
+            BrowserEnv browserEnv = new BrowserEnv();
+            browserEnv.setUserAgent((String) userAgent);
+            browserEnv.setOtherHeader(map);
+            return browserEnv;
+        }).filter(Objects::nonNull).toList();
+
+        return insertOrUpdateBatch(list);
+    }
+
+    @Override
+    protected IBaseMapper<BrowserEnv> getMapper() {
+        return getBaseMapper();
+    }
+}
+package cn.com.helei.bot_platform.service.impl;
+
+import cn.com.helei.common.config.SystemConfig;
+import cn.com.helei.common.util.FileUtil;
+import cn.com.helei.common.util.excel.ExcelReadUtil;
+import cn.com.helei.db_layer.mapper.IBaseMapper;
+import cn.com.helei.db_layer.service.AbstractBaseService;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.entity.DiscordAccount;
+import cn.com.helei.db_layer.mapper.DiscordAccountMapper;
+import cn.com.helei.rpc.IDiscordAccountRPC;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.dubbo.config.annotation.DubboService;
+
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@DubboService(registry = "zk-registry")
+public class DiscordAccountServiceImpl extends AbstractBaseService<DiscordAccountMapper, DiscordAccount> implements IDiscordAccountRPC {
+
+    public DiscordAccountServiceImpl() {
+        super(discordAccount -> {
+            discordAccount.setInsertDatetime(LocalDateTime.now());
+            discordAccount.setUpdateDatetime(LocalDateTime.now());
+            discordAccount.setIsValid(1);
+        });
+    }
+
+
+    public Result saveDiscordAccounts(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail("导入discord账号失败," + e.getMessage());
+        }
+    }
+
+    @Override
+    public Integer importFromExcel(String fileBotConfigPath) {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        try {
+            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(dirResourcePath);
+
+            return importFromRaw(rawLines);
+        } catch (Exception e) {
+            log.error("读取discord account 文件[{}]发生异常", dirResourcePath, e);
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
+        List<DiscordAccount> discordAccounts = rawLines.stream().map(map -> DiscordAccount.builder()
+                .username(autoCast(map.remove("username")))
+                .password(autoCast(map.remove("password")))
+                .bindEmail(autoCast(map.remove("bind_email")))
+                .bindEmailPassword(autoCast(map.remove("bind_email_password")))
+                .token(autoCast(map.remove("token")))
+                .params(map)
+                .build()
+        ).toList();
+
+        return insertOrUpdateBatch(discordAccounts);
+    }
+
+    @Override
+    protected IBaseMapper<DiscordAccount> getMapper() {
+        return getBaseMapper();
+    }
+}
+package cn.com.helei.bot_platform.service.impl;
+
+import cn.com.helei.db_layer.mapper.IBaseMapper;
+import cn.com.helei.db_layer.service.AbstractBaseService;
+import cn.com.helei.common.entity.ProjectInfo;
+import cn.com.helei.db_layer.mapper.ProjectInfoMapper;
+import cn.com.helei.rpc.IProjectInfoRPC;
+import org.apache.dubbo.config.annotation.DubboService;
+
+import java.time.LocalDateTime;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-07
+ */
+@DubboService(registry = "zk-registry")
+public class ProjectInfoServiceImpl extends AbstractBaseService<ProjectInfoMapper, ProjectInfo> implements IProjectInfoRPC {
+
+    public ProjectInfoServiceImpl() {
+        super(projectInfo -> {
+            projectInfo.setInsertDatetime(LocalDateTime.now());
+            projectInfo.setUpdateDatetime(LocalDateTime.now());
+            projectInfo.setIsValid(1);
+        });
+    }
+
+    @Override
+    protected IBaseMapper<ProjectInfo> getMapper() {
+        return null;
+    }
+}
+package cn.com.helei.bot_platform.service.impl;
+
+import cn.com.helei.common.config.SystemConfig;
+import cn.com.helei.common.constants.ProxyProtocol;
+import cn.com.helei.common.constants.ProxyType;
+import cn.com.helei.common.util.FileUtil;
+import cn.com.helei.common.util.excel.ExcelReadUtil;
+import cn.com.helei.db_layer.mapper.IBaseMapper;
+import cn.com.helei.db_layer.service.AbstractBaseService;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.entity.ProxyInfo;
+import cn.com.helei.db_layer.mapper.ProxyInfoMapper;
+import cn.com.helei.rpc.IProxyInfoRPC;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.dubbo.config.annotation.DubboService;
+
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@DubboService(registry = "zk-registry")
+public class ProxyInfoServiceImpl extends AbstractBaseService<ProxyInfoMapper, ProxyInfo> implements IProxyInfoRPC {
+
+
+    public ProxyInfoServiceImpl() {
+        super(proxyInfo -> {
+            proxyInfo.setInsertDatetime(LocalDateTime.now());
+            proxyInfo.setUpdateDatetime(LocalDateTime.now());
+            proxyInfo.setIsValid(1);
+        });
+
+    }
+
+
+    @Override
+    public Result saveProxyInfos(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            log.error("saveProxyInfos error", e);
+            return Result.fail("导入代理信息失败," + e.getMessage());
+        }
+    }
+
+    @Override
+    public Integer importFromExcel(String botConfigPath) {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, botConfigPath);
+
+        int total = 0;
+
+        try {
+            List<Map<String, Object>> staticProxies = ExcelReadUtil.readExcelToMap(proxyFilePath, "static");
+
+            total += importFromRaw(staticProxies);
+
+            List<Map<String, Object>> dynamicProxies = ExcelReadUtil.readExcelToMap(proxyFilePath, "dynamic");
+
+            total += importFromRaw(dynamicProxies);
+
+            log.info("代理配置文件解析成功，static-proxy:[{}], dynamic-proxy:[{}]", staticProxies.size(), dynamicProxies.size());
+
+            return total;
+        } catch (Exception e) {
+            log.error("解析代理配置文件[{}]错误", proxyFilePath, e);
+
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
+
+        List<ProxyInfo> list = rawLines.stream().map(map -> {
+            String proxyProtocol = autoCast(map.remove("proxy_protocol"));
+            if (proxyProtocol == null) proxyProtocol = autoCast(map.remove("proxyProtocol"));
+
+            Object port = map.remove("port");
+            return ProxyInfo.builder()
+                    .proxyType(ProxyType.STATIC)
+                    .host(autoCast(map.remove("host")))
+                    .port(port instanceof Integer ? (Integer) port : Integer.parseInt(autoCast(port)))
+                    .proxyProtocol(ProxyProtocol.valueOf(proxyProtocol.toUpperCase()))
+                    .username(autoCast(map.remove("username")))
+                    .password(autoCast(map.remove("password")))
+                    .params(map)
+                    .build();
+        }).toList();
+
+        return insertOrUpdateBatch(list);
+    }
+
+    @Override
+    protected IBaseMapper<ProxyInfo> getMapper() {
+        return getBaseMapper();
+    }
+}
+package cn.com.helei.bot_platform.service.impl;
+
+import cn.com.helei.common.config.SystemConfig;
+import cn.com.helei.common.util.FileUtil;
+import cn.com.helei.common.util.excel.ExcelReadUtil;
+import cn.com.helei.db_layer.mapper.IBaseMapper;
+import cn.com.helei.db_layer.service.AbstractBaseService;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.entity.TelegramAccount;
+import cn.com.helei.db_layer.mapper.TelegramAccountMapper;
+import cn.com.helei.rpc.ITelegramAccountRPC;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.dubbo.config.annotation.DubboService;
+
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-06
+ */
+@Slf4j
+@DubboService(registry = "zk-registry")
+public class TelegramAccountServiceImpl extends AbstractBaseService<TelegramAccountMapper, TelegramAccount> implements ITelegramAccountRPC {
+
+
+    public TelegramAccountServiceImpl() {
+        super(telegramAccount -> {
+            telegramAccount.setInsertDatetime(LocalDateTime.now());
+            telegramAccount.setUpdateDatetime(LocalDateTime.now());
+            telegramAccount.setIsValid(1);
+        });
+    }
+
+    @Override
+    public Result saveTelegrams(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail("导入telegram账号失败," + e.getMessage());
+        }
+    }
+
+    @Override
+    public Integer importFromExcel(String fileBotConfigPath) throws SQLException {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        try {
+            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(dirResourcePath);
+
+            return importFromRaw(rawLines);
+        } catch (Exception e) {
+            log.error("读取telegram account 文件[{}]发生异常", dirResourcePath, e);
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
+        List<TelegramAccount> telegramAccounts = rawLines.stream().map(map -> TelegramAccount.builder()
+                .username(autoCast(map.remove("username")))
+                .password(autoCast(map.remove("password")))
+                .phonePrefix(autoCast(map.remove("phone_prefix")))
+                .phone(autoCast(map.remove("phone")))
+                .token(autoCast(map.remove("token")))
+                .params(map)
+                .build()
+        ).toList();
+
+
+        return insertOrUpdateBatch(telegramAccounts);
+    }
+
+    @Override
+    protected IBaseMapper<TelegramAccount> getMapper() {
+        return getBaseMapper();
+    }
+}
+package cn.com.helei.bot_platform.service.impl;
+
+import cn.com.helei.common.config.SystemConfig;
+import cn.com.helei.common.util.FileUtil;
+import cn.com.helei.common.util.excel.ExcelReadUtil;
+import cn.com.helei.db_layer.mapper.IBaseMapper;
+import cn.com.helei.db_layer.service.AbstractBaseService;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.entity.TwitterAccount;
+import cn.com.helei.db_layer.mapper.TwitterAccountMapper;
+import cn.com.helei.rpc.ITwitterAccountRPC;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.dubbo.config.annotation.DubboService;
+
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@DubboService(registry = "zk-registry")
+public class TwitterAccountServiceImpl extends AbstractBaseService<TwitterAccountMapper, TwitterAccount> implements ITwitterAccountRPC {
+
+
+    public TwitterAccountServiceImpl() {
+        super(twitterAccount -> {
+            twitterAccount.setInsertDatetime(LocalDateTime.now());
+            twitterAccount.setUpdateDatetime(LocalDateTime.now());
+            twitterAccount.setIsValid(1);
+        });
+    }
+
+    @Override
+    public Result saveTwitters(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail("导入twitter 账号失败," + e.getMessage());
+        }
+    }
+
+    @Override
+    public Integer importFromExcel(String fileBotConfigPath) throws SQLException {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        try {
+            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(proxyFilePath);
+
+            return importFromRaw(rawLines);
+        } catch (Exception e) {
+            log.error("读取twitter account 文件[{}]发生异常", proxyFilePath, e);
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
+        List<TwitterAccount> twitterAccounts = rawLines.stream().map(map -> TwitterAccount.builder()
+                .username(autoCast(map.remove("username")))
+                .password(autoCast(map.remove("password")))
+                .email(autoCast(map.remove("email")))
+                .emailPassword(autoCast(map.remove("email_password")))
+                .token(autoCast(map.remove("token")))
+                .f2aKey(autoCast(map.remove("f2a_key")))
+                .params(map)
+                .build()).toList();
+
+        return insertOrUpdateBatch(twitterAccounts);
+    }
+
+    @Override
+    protected IBaseMapper<TwitterAccount> getMapper() {
+        return getBaseMapper();
+    }
+}
+package cn.com.helei.bot_platform;
+
+import cn.com.helei.db_layer.DBLayerAutoConfig;
+import org.apache.dubbo.config.spring.context.annotation.EnableDubbo;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+@EnableDubbo(scanBasePackages = {"cn.com.helei.bot_platform.service.impl"})
+@ImportAutoConfiguration(classes = DBLayerAutoConfig.class)
+public class BotPlatformApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(BotPlatformApplication.class, args);
+    }
+}
+spring:
+  datasource:
+    url: "jdbc:sqlite://Users/helei/develop/ideaworkspace/depinbot/DepinBot/A_back/botData/db/auto_bot.db"
+
+dubbo:
+  application:
+    name: bot-platform
+    logger: slf4j
+  protocol:
+    name: tri
+    port: -1
+  registry:
+    id: zk-registry
+    address: zookeeper://127.0.0.1:2181
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>cn.com.helei</groupId>
+        <artifactId>BotFramework</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>bot-platform</artifactId>
+
+    <properties>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>cn.com.helei</groupId>
+            <artifactId>db-layer</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+
+        <dependency>
+            <groupId>cn.com.helei</groupId>
+            <artifactId>rpc-api</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!--dubbo集成springboot依赖-->
+        <dependency>
+            <groupId>org.apache.dubbo</groupId>
+            <artifactId>dubbo-spring-boot-starter</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.dubbo</groupId>
+            <artifactId>dubbo-zookeeper-spring-boot-starter</artifactId>
+        </dependency>
+
+    </dependencies>
+</project>
+
+
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>cn.com.helei</groupId>
+    <artifactId>BotFramework</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <name>BotFramework</name>
+    <url>http://maven.apache.org</url>
+    <modules>
+        <module>bot-father</module>
+        <module>bot-platform</module>
+        <module>websocket</module>
+        <module>common</module>
+        <module>mail</module>
+        <module>db-layer</module>
+        <module>bot-example</module>
+        <module>captcha</module>
+        <module>rpc-api</module>
+    </modules>
+
+    <properties>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <java.version>21</java.version>
+        <netty.version>4.1.95.Final</netty.version>
+        <gsonn.version>2.9.1</gsonn.version>
+        <guava.version>19.0</guava.version>
+        <lombok.version>1.18.30</lombok.version>
+        <protostuff.version>1.7.2</protostuff.version>
+        <hutool.version>5.8.21</hutool.version>
+        <mapstruct.version>1.6.0</mapstruct.version>
+        <slf4j.version>2.0.4</slf4j.version>
+        <springboot.version>3.2.0</springboot.version>
+        <snakeyaml.version>2.2</snakeyaml.version>
+        <mapstruct.version>1.6.0</mapstruct.version>
+        <junit.version>5.9.1</junit.version>
+        <okhttp.version>4.7.0</okhttp.version>
+        <logback.version>1.3.7</logback.version>
+        <fastjson.version>1.2.83</fastjson.version>
+        <jline.version>3.2.0</jline.version>
+        <fliptables.version>1.0.0</fliptables.version>
+        <cglib.version>3.3.0</cglib.version>
+        <jakarta.mail.version>2.0.1</jakarta.mail.version>
+        <sql.lite.version>3.36.0</sql.lite.version>
+        <mybatis_plus.version>3.5.5</mybatis_plus.version>
+        <mysql_connection.version>8.0.33</mysql_connection.version>
+        <druid.version>1.2.12</druid.version>
+        <pagehelper.version>1.4.6</pagehelper.version>
+        <velocity.version>2.3</velocity.version>
+        <jsoup.version>1.16.2</jsoup.version>
+        <two_captcha.version>1.3.1</two_captcha.version>
+        <easyexcel.version>3.2.0</easyexcel.version>
+        <mail-api.version>1.6.2</mail-api.version>
+        <dubbo.version>3.3.0</dubbo.version>
+        <zookeeper.version>3.7.0</zookeeper.version>
+        <curator-recipes.vesrion>5.1.0</curator-recipes.vesrion>
+    </properties>
+
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${springboot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.dubbo</groupId>
+                <artifactId>dubbo-bom</artifactId>
+                <version>${dubbo.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>cglib</groupId>
+                <artifactId>cglib</artifactId>
+                <version>${cglib.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.jakewharton.fliptables</groupId>
+                <artifactId>fliptables</artifactId>
+                <version>${fliptables.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.jline</groupId>
+                <artifactId>jline</artifactId>
+                <version>${jline.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.alibaba</groupId>
+                <artifactId>fastjson</artifactId>
+                <version>${fastjson.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-all</artifactId>
+                <version>${netty.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.projectlombok</groupId>
+                <artifactId>lombok</artifactId>
+                <version>${lombok.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.protostuff</groupId>
+                <artifactId>protostuff-core</artifactId>
+                <version>${protostuff.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.protostuff</groupId>
+                <artifactId>protostuff-runtime</artifactId>
+                <version>${protostuff.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>cn.hutool</groupId>
+                <artifactId>hutool-all</artifactId>
+                <version>${hutool.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.yaml</groupId>
+                <artifactId>snakeyaml</artifactId>
+                <version>${snakeyaml.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.mapstruct</groupId>
+                <artifactId>mapstruct</artifactId>
+                <version>${mapstruct.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter</artifactId>
+                <version>5.9.1</version>
+                <scope>${junit.version}</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>com.squareup.okhttp3</groupId>
+                <artifactId>okhttp</artifactId>
+                <version>${okhttp.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>ch.qos.logback</groupId>
+                <artifactId>logback-classic</artifactId>
+                <version>${logback.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.xerial</groupId>
+                <artifactId>sqlite-jdbc</artifactId>
+                <version>${sql.lite.version}</version> <!-- Use the latest version -->
+            </dependency>
+
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+                <version>${mybatis_plus.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-generator</artifactId>
+                <version>${mybatis_plus.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>mysql</groupId>
+                <artifactId>mysql-connector-java</artifactId>
+                <version>${mysql_connection.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.alibaba</groupId>
+                <artifactId>druid-spring-boot-starter</artifactId>
+                <version>${druid.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.github.pagehelper</groupId>
+                <artifactId>pagehelper-spring-boot-starter</artifactId>
+                <version>${pagehelper.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.jsoup</groupId>
+                <artifactId>jsoup</artifactId>
+                <version>${jsoup.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.github.2captcha</groupId>
+                <artifactId>2captcha-java</artifactId>
+                <version>${two_captcha.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.alibaba</groupId>
+                <artifactId>easyexcel</artifactId>
+                <version>${easyexcel.version}</version>  <!-- 请根据需要选择最新版本 -->
+            </dependency>
+
+            <dependency>
+                <groupId>javax.mail</groupId>
+                <artifactId>javax.mail-api</artifactId>
+                <version>${mail-api.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.sun.mail</groupId>
+                <artifactId>jakarta.mail</artifactId>
+                <version>${jakarta.mail.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.velocity</groupId>
+                <artifactId>velocity-engine-core</artifactId>
+                <version>${velocity.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <plugins>
+            <!-- Maven Compiler Plugin (JDK 21) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <release>21</release>
+                </configuration>
+            </plugin>
+
+            <!-- Maven Shade Plugin -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.4.1</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <createDependencyReducedPom>true</createDependencyReducedPom>
+                            <transformers>
+                                <!-- 指定主类 -->
+                                <transformer
+                                        implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>cn.com.helei.DepinBot.DepinBotApp</mainClass> <!-- 替换为你的主类 -->
+                                </transformer>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
+
+
+package cn.com.helei.common.dto;
+
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.List;
+
+@Data
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+public class PageResult<T> {
+
+    private long total;
+
+    private List<T> list;
+
+    private int pages;
+
+    private int pageNum;
+
+    private int pageSize;
+}
+
+
+
+package cn.com.helei.common.service;
+
+
+import cn.com.helei.common.dto.PageResult;
+
+import java.io.Serializable;
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Map;
+
+public interface IBaseService<T> {
+    Integer insertOrUpdate(T t) throws SQLException;
+
+    Integer insertOrUpdateBatch(List<T> tList) throws SQLException;
+
+    PageResult<T> conditionPageQuery(int page, int limit, String params, Map<String, Object> filterMap) throws SQLException;
+
+    PageResult<T> conditionPageQuery(int page, int limit, Map<String, Object> filterMap) throws SQLException;
+
+    List<T> conditionQuery(Map<String, Object> filterMap) throws SQLException;
+
+    List<T> conditionQuery(String params, Map<String, Object> filterMap) throws SQLException;
+
+    T queryById(Serializable id);
+
+    Boolean delete(List<Integer> ids);
+}
+
+
+package cn.com.helei.common.service;
+
+
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Map;
+
+public interface ImportService {
+
+    Integer importFromExcel(String fileBotConfigPath) throws SQLException;
+
+    Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException;
+}
+
+
+package cn.com.helei.db_layer.service;
+
+import cn.com.helei.common.dto.PageResult;
+import cn.com.helei.common.service.IBaseService;
+import cn.com.helei.common.util.ConditionBuildUtil;
+import cn.com.helei.db_layer.mapper.IBaseMapper;
+import cn.com.helei.db_layer.util.ConditionQueryUtil;
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.github.pagehelper.PageInfo;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.io.Serializable;
+import java.lang.reflect.InvocationTargetException;
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
+
+@Slf4j
+public abstract class AbstractBaseService<M extends BaseMapper<T>, T> extends ServiceImpl<M, T> implements IBaseService<T> {
+
+    private final Consumer<T> fillFunction;
+
+    protected AbstractBaseService(Consumer<T> fillFunction) {
+        this.fillFunction = fillFunction;
+    }
+
+    @Override
+    public T queryById(Serializable id) {
+        return getById(id);
+    }
+
     /**
-     * 查询account base info
+     * 插入或更新
      *
-     * @param page
-     * @param limit
-     * @param type
+     * @param t t
+     * @return Integer
      */
-    queryTypedABIPageData(page, limit, type) {
-      // 有缓存，不请求新的数据
-      const pageDataMap = this.typedContext[type].pageDataMap
-      if (
-        pageDataMap !== undefined && pageDataMap !== null &&
-        pageDataMap[page] !== undefined && pageDataMap[page] !== null
-      ) {
-        this.selectionList = this.calPrintTotal(pageDataMap, page)
+    @Override
+    public Integer insertOrUpdate(T t) throws SQLException {
+        fillFunction.accept(t);
+        return getMapper().insertOrUpdate(t);
+    }
 
-        return
-      }
 
-      // 获取账户信息
-      pageQueryAccountBaseInfo({
-        page: page,
-        limit: limit,
-        filterMap: {
-          type: type
+    /**
+     * 批量插入或更新
+     *
+     * @param tList tList
+     * @return Integer
+     */
+    @Override
+    public Integer insertOrUpdateBatch(List<T> tList) throws SQLException {
+        int successCount = 0;
+        for (T t : tList) {
+            try {
+                Integer count = insertOrUpdate(t);
+                successCount += count == null ? 0 : count;
+            } catch (Exception e) {
+                throw new SQLException("insert or update error", e);
+            }
         }
-      }).then(response => {
-        const pageInfo = response.data
 
-        pageDataMap[page] = pageInfo.list
-        this.selectionList = this.calPrintTotal(pageDataMap, page)
-        this.currentType = type
+        return successCount;
+    }
 
-        this.typedContext[type].page = page
+    /**
+     * 条件分页查询
+     *
+     * @param page      page
+     * @param limit     limit
+     * @param filterMap filterMap
+     * @return PageInfo<T>
+     * @throws SQLException SQLException
+     */
+    @Override
+    public PageResult<T> conditionPageQuery(
+            int page,
+            int limit,
+            Map<String, Object> filterMap
+    ) throws SQLException {
+        return conditionPageQuery(page, limit, "params", filterMap);
+    }
 
-        for (const ac of pageDataMap[page]) {
-          ac.key = ac.id
+
+    /**
+     * 条件分页查询
+     *
+     * @param page      page
+     * @param limit     limit
+     * @param paramsKey paramsKey
+     * @param filterMap filterMap
+     * @return PageInfo<T>
+     * @throws SQLException SQLException
+     */
+    @Override
+    public PageResult<T> conditionPageQuery(
+            int page,
+            int limit,
+            String paramsKey,
+            Map<String, Object> filterMap
+    ) throws SQLException {
+        try {
+            PageInfo<T> pageInfo = ConditionQueryUtil.conditionQuery(
+                    page,
+                    limit,
+                    filterMap,
+                    paramsKey,
+                    condition -> getMapper().multipleConditionQuery(condition),
+                    entityClass
+            );
+            List<T> list = pageInfo.getList();
+            PageResult<T> pageResult = new PageResult<>();
+            pageResult.setPages(pageInfo.getPages());
+            pageResult.setPageNum(pageInfo.getPageNum());
+            pageResult.setPageNum(pageInfo.getPageSize());
+            pageResult.setTotal(pageInfo.getTotal());
+            pageResult.setList(list);
+            return pageResult;
+        } catch (InvocationTargetException | NoSuchMethodException | InstantiationException |
+                 IllegalAccessException e
+        ) {
+            throw new SQLException("condition query error", e);
         }
-        this.typedContext[type].total = pageInfo.total
-      })
-    },
-
-    pageChangeHandler(page) {
-      this.queryTypedABIPageData(page, this.defaultLimit, this.currentType)
-    },
-    typeChangeHandler(type) {
-      this.queryTypedABIPageData(this.currentPage, this.defaultLimit, type)
-    },
-    addBotHandler() {
-      const botKey = this.botKey
-      if (botKey === undefined || botKey === null || botKey === '') {
-        this.$message.warning('请输入bot名称')
-        return
-      }
-
-      const botId = this.botId
-      if (botId === undefined || botId === null || botId === '') {
-        this.$message.error('请关闭页面重新进入')
-        return
-      }
-
-      this.$confirm('确定创建[' + botKey + ']吗', '提示', {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning'
-      }).then(() => {
-        createBot({
-          botId: botId,
-          botKey: botKey,
-          accountIds: this.selectedList
-        }).then(response => {
-          this.$message.success('创建Bot成功')
-        })
-      }).catch(() => {
-        this.$message({
-          type: 'info',
-          message: '已取消创建'
-        })
-      })
     }
-  }
-}
-</script>
 
-<style scoped>
-.components-container {
-  position: relative;
-  min-height: 100px;
-  background-color: #f0f2f5;
-  padding: 10px;
-}
+    @Override
+    public List<T> conditionQuery(Map<String, Object> filterMap) throws SQLException {
+        return conditionQuery("params", filterMap);
+    }
 
-.account-selector {
-  background-color: #fff;
-  box-shadow: 0 0 10px rgba(0, 0, 0, 0.15); /* 设置阴影效果 */
-  border: 1px solid #e6ebf5;
-  border-radius: 10px;
-}
-
-.account-selector >>> .el-transfer-panel {
-  width: 400px;
-  border: 1px solid #e6ebf5;
-  border-radius: 4px;
-  overflow: hidden;
-  background: #FFFFFF;
-  display: inline-block;
-  vertical-align: middle;
-  max-height: 100%;
-  -webkit-box-sizing: border-box;
-  box-sizing: border-box;
-  position: relative;
-}
-
-.account-selector >>> .el-transfer-panel__body {
-  height: calc(100% - 50px);
-  min-height: 296px;
-}
-
-.account-selector >>> .el-transfer-panel__footer {
-  margin: 10px auto 0;
-  padding: 6px 5px;
-}
-
-.center {
-  display: flex;
-  justify-content: center;
-  margin-top: 10px;
-}
-</style>
-
-<template>
-  <div class="mixin-components-container">
-    <el-row>
-      <el-card class="box-card">
-        <div slot="header" class="clearfix">
-          <span>Types</span>
-        </div>
-        <div style="margin-bottom:50px;">
-          <el-col :span="4" class="text-center">
-            <router-link class="pan-btn blue-btn" to="/documentation/index">
-              Depin
-            </router-link>
-          </el-col>
-          <el-col :span="4" class="text-center">
-            <router-link class="pan-btn light-blue-btn" to="/icon/index">
-              ETH
-            </router-link>
-          </el-col>
-          <el-col :span="4" class="text-center">
-            <router-link class="pan-btn pink-btn" to="/excel/export-excel">
-              Ai
-            </router-link>
-          </el-col>
-          <el-col :span="4" class="text-center">
-            <router-link class="pan-btn green-btn" to="/table/complex-table">
-              Daily
-            </router-link>
-          </el-col>
-          <el-col :span="4" class="text-center">
-            <router-link class="pan-btn tiffany-btn" to="/example/create">
-              SOL
-            </router-link>
-          </el-col>
-          <el-col :span="4" class="text-center">
-            <router-link class="pan-btn yellow-btn" to="/theme/index">
-              TESTNET
-            </router-link>
-          </el-col>
-        </div>
-      </el-card>
-    </el-row>
-
-    <div class="bot-info-content">
-      <bot-simple-card
-        v-for="info in botInfoList"
-        :bot-simple-info="info"
-      />
-    </div>
-
-    <div class="block">
-      <el-pagination
-        layout="prev, pager, next"
-        :total="listQuery.total"
-      />
-    </div>
-  </div>
-</template>
-
-<script>
-import PanThumb from '@/components/PanThumb'
-import MdInput from '@/components/MDinput'
-import DropdownMenu from '@/components/Share/DropdownMenu'
-import waves from '@/directive/waves/index.js'
-import BotSimpleCard from '@/views/custom/bot/bot-market/components/bot-simple-card.vue' // 水波纹指令
-import { pageQueryBot } from '@/api/custom/bot'
-
-export default {
-  name: 'BotMarket',
-  components: {
-    BotSimpleCard,
-    PanThumb,
-    MdInput,
-    DropdownMenu
-  },
-  directives: {
-    waves
-  },
-  data() {
-    return {
-      listQuery: {
-        page: 1,
-        limit: 10,
-        total: 0
-      },
-      botInfoList: [
-        {
-          id: 1,
-          name: 'test-bot-1',
-          describe: 'bot detailnakjwndjkawndjknwajkdnakjwndjkawndjkawndjanwkjdnakjndjkawndjaw',
-          image: 'https://wpimg.wallstcn.com/577965b9-bb9e-4e02-9f0c-095b41417191'
+    @Override
+    public List<T> conditionQuery(String paramsKey, Map<String, Object> filterMap) throws SQLException {
+        T condition = null;
+        try {
+            condition = ConditionBuildUtil.getMapContainsCondition(
+                    filterMap,
+                    paramsKey,
+                    entityClass
+            );
+        } catch (NoSuchMethodException | InvocationTargetException | InstantiationException |
+                 IllegalAccessException e) {
+            throw new SQLException(e);
         }
-      ]
+
+        return getMapper().multipleConditionQuery(condition);
     }
-  },
-  created() {
-    pageQueryBot({
-      page: this.listQuery.page,
-      limit: this.listQuery.limit
-    }).then(response => {
-      const pageInfo = response.data
 
-      if (pageInfo != null) {
-        this.listQuery.total = pageInfo.total
-        this.botInfoList = pageInfo.list
-      } else {
-        this.$message.warning('查询bot list失败')
-      }
-    })
-  }
-}
-</script>
-
-<style scoped>
-.bot-info-content{
-  padding: 0 25px 0px;
-  display: flex;
-  justify-content: flex-start;
-  flex-wrap: wrap;
-  margin-top: 20px;
-}
-</style>
-<template>
-  <div class="bot-runtime-display-card">
-    <div class="card-header clearfix">
-      <div style="display:flex; float: left">
-        <el-image class="head-image"/>
-        <div style="font-weight: 700;font-size: 16px">
-          {{ botInstance.botKey }}
-        </div>
-      </div>
-
-      <div style="float: right">
-        <i class="el-icon-setting icon-button"/>
-      </div>
-    </div>
-
-    <div class="data-print-line"/>
-
-    <div class="card-detail">
-
-      <div class="card-detail-content">
-        <el-tabs tabPosition="bottom">
-          <el-tab-pane
-            v-for="(jobParam, jobName) in botInstance.botInfo.jobParams"
-          >
-            <span style="color: #9da3ae;" slot="label"> {{ jobName }}</span>
-            <div class="card-detail-content-graph">
-
-            </div>
-          </el-tab-pane>
-        </el-tabs>
-      </div>
-
-      <el-button v-if="botInstance.status === BOT_INSTANCE_STATUS.STOPPED"
-                 @click="startBotClickHandler"
-                 class="start-button" icon="el-icon-video-play" type="success" plain>
-        Start Bot
-      </el-button>
-      <el-button v-else-if="botInstance.status === BOT_INSTANCE_STATUS.RUNNING"
-                 @click="stopBotClickHandler"
-                 class="start-button" icon="el-icon-video-pause" type="danger">
-        Stop Bot
-      </el-button>
-      <el-button v-else
-                 @click="configBotClickHandler"
-                 class="start-button" icon="el-icon-s-operation" type="info" plain>
-        Config Bot
-      </el-button>
-    </div>
-  </div>
-</template>
-
-<script>
-
-import {BOT_INSTANCE_STATUS} from "@/utils/system-enum";
-
-export default {
-  name: 'BotRuntimeDisplayCard',
-  computed: {
-    BOT_INSTANCE_STATUS() {
-      return BOT_INSTANCE_STATUS
+    /**
+     * 删除
+     *
+     * @param ids ids
+     * @return Result
+     */
+    @Transactional
+    public Boolean delete(List<Integer> ids) {
+        return removeBatchByIds(ids);
     }
-  },
-  props: {
-    botInstance: {
-      type: Object,
-      default() {
-        return {
-          botKey: 'TestName',
-          status: null
-        }
-      }
+
+
+    protected <T> T autoCast(Object obj) {
+        return obj == null ? null : (T) obj;
     }
-  },
-  methods: {
-    startBotClickHandler() {
-      this.$emit("start-bot", {botId: this.botInstance.botId, botInstance: this.botInstance})
-    },
-    stopBotClickHandler() {
-      this.$emit("stop-bot", {botId: this.botInstance.botId, botInstance: this.botInstance})
-    },
-    configBotClickHandler() {
-      this.$emit("config-bot", {botId: this.botInstance.botId, botInstance: this.botInstance})
+
+    protected Integer toInteger(Object obj) {
+        return obj == null ? null : Integer.valueOf(obj.toString());
     }
-  }
+
+    protected abstract IBaseMapper<T> getMapper();
 }
-</script>
+package cn.com.helei.db_layer;
 
-<style scoped>
-.bot-runtime-display-card {
-  width: 416px;
-  height: 398px;
-  background-color: #202735;
-  padding: 24px;
+import cn.com.helei.db_layer.config.MybatisConfig;
+import org.mybatis.spring.annotation.MapperScan;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 
-  margin-left: 12px;
-
-  color: #9da3ae;
-  border-radius: 10px;
-}
-
-.card-header {
-  height: 48px;
-}
-
-.data-print-line {
-  height: 48px;
-  margin-top: 16px;
+@Configuration
+@MapperScan(basePackages = "cn.com.helei.db_layer.mapper")
+@Import(MybatisConfig.class)
+public class DBLayerAutoConfig {
 
 }
+# 应用程序名称
+spring:
+  datasource:
+    driver-class-name: org.sqlite.JDBC
+    type: com.zaxxer.hikari.HikariDataSource
+    hikari:
+      maximum-pool-size: 10
+      auto-commit: true
+      idle-timeout: 60000
+      max-lifetime: 1800000
+      pool-name: HikariPool
+      connection-test-query: SELECT 1
+      minimum-idle: 10
 
-.card-detail {
-  height: 222px;
-  margin-top: 16px;
+mybatis-plus:
+  configuration:
+    #    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    cache-enabled: true
+    map-underscore-to-camel-case: false
+  global-config:
+    db-config:
+      logic-delete-field: isValid  # 全局逻辑删除的实体字段名(since 3.3.0,配置后可以忽略不配置步骤2)
+      logic-delete-value: 0    # 设置 1 为未删除
+      logic-not-delete-value: 1 # 设置 0 为已删除
+  mapper-locations: classpath:/mapper/*.xml
+
+
+# 其他配置
+logging:
+  level:
+    org.springframework: ERROR
+#    cn.com.helei.bot.core: DEBUG
+package cn.com.helei.rpc.bot;
+
+import cn.com.helei.common.service.IBaseService;
+import cn.com.helei.common.service.ImportService;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.entity.AccountContext;
+
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IBotAccountRPC extends IBaseService<AccountContext>, ImportService {
+
+    Result saveBotAccountContext(Integer botId, String botKey, List<Map<String, Object>> acKVMap);
+
+    Boolean checkAndCreateShardedTable(Integer botId, String botKey, boolean existUpdate) throws SQLException;
+
+}
+package cn.com.helei.rpc.bot;
+
+import cn.com.helei.common.entity.RewordInfo;
+import cn.com.helei.common.service.IBaseService;
+
+public interface IRewordInfoRPC extends IBaseService<RewordInfo> {
+}
+package cn.com.helei.rpc;
+
+import cn.com.helei.common.service.IBaseService;
+import cn.com.helei.common.service.ImportService;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.entity.AccountBaseInfo;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IAccountBaseInfoRPC extends IBaseService<AccountBaseInfo>, ImportService {
+
+    Result saveAccountBaseInfos(List<Map<String, Object>> rawLines);
+
+    Result queryTypedInfo();
+}
+package cn.com.helei.rpc;
+
+import cn.com.helei.common.service.IBaseService;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.entity.BotInfo;
+
+import java.util.List;
+
+/**
+ * <p>
+ * 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-07
+ */
+public interface IBotInfoRPC extends IBaseService<BotInfo> {
+
+    Result bindBotAccountBaseInfo(Integer botId, String botKey, List<Integer> bindAccountBaseInfoList);
+
+}
+package cn.com.helei.rpc;
+
+
+import cn.com.helei.common.service.IBaseService;
+import cn.com.helei.common.entity.BotInstance;
+
+/**
+ * <p>
+ * 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-18
+ */
+public interface IBotInstanceRPC extends IBaseService<BotInstance> {
+
+
+    Boolean existsBotInstance(BotInstance query);
+
+}
+package cn.com.helei.rpc;
+
+import cn.com.helei.common.service.IBaseService;
+import cn.com.helei.common.service.ImportService;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.entity.BrowserEnv;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IBrowserEnvRPC extends IBaseService<BrowserEnv>, ImportService {
+
+    Result saveBrowserEnvs(List<Map<String, Object>> rawLines);
+
+    List<BrowserEnv> getUselessBrowserEnv(int count);
+}
+package cn.com.helei.rpc;
+
+import cn.com.helei.common.service.IBaseService;
+import cn.com.helei.common.service.ImportService;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.entity.DiscordAccount;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IDiscordAccountRPC extends  IBaseService<DiscordAccount>, ImportService {
+
+    Result saveDiscordAccounts(List<Map<String, Object>> rawLines);
+
+}
+package cn.com.helei.rpc;
+
+
+import cn.com.helei.common.service.IBaseService;
+import cn.com.helei.common.entity.ProjectInfo;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-07
+ */
+public interface IProjectInfoRPC extends  IBaseService<ProjectInfo> {
+
+}
+package cn.com.helei.rpc;
+
+import cn.com.helei.common.service.IBaseService;
+import cn.com.helei.common.service.ImportService;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.entity.ProxyInfo;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IProxyInfoRPC extends IBaseService<ProxyInfo>, ImportService {
+
+
+    Result saveProxyInfos(List<Map<String, Object>> rawLines);
+
 }
 
-.head-image {
-  height: 48px;
-  width: 48px;
-  margin-right: 8px;
+
+package cn.com.helei.rpc;
+
+import cn.com.helei.common.service.IBaseService;
+import cn.com.helei.common.service.ImportService;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.entity.TelegramAccount;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-06
+ */
+public interface ITelegramAccountRPC extends  IBaseService<TelegramAccount>, ImportService {
+
+
+    Result saveTelegrams(List<Map<String, Object>> rawLines);
+
 }
+package cn.com.helei.rpc;
 
-.icon-button {
-  width: 24px;
-  height: 24px;
-  color: #9da3ae;
-  font-size: 20px;
+import cn.com.helei.common.service.IBaseService;
+import cn.com.helei.common.service.ImportService;
+import cn.com.helei.common.dto.Result;
+import cn.com.helei.common.entity.TwitterAccount;
 
-  cursor: pointer;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface ITwitterAccountRPC extends IBaseService<TwitterAccount>, ImportService {
+
+    Result saveTwitters(List<Map<String, Object>> rawLines);
+
 }
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>cn.com.helei</groupId>
+        <artifactId>BotFramework</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
 
-.icon-button:hover {
-  transform: scale(1.2); /* 鼠标悬浮时放大 */
-  color: #007BFF; /* 鼠标悬浮时改变颜色 */
-}
+    <artifactId>rpc-api</artifactId>
 
-.card-detail-content {
-  height: 184px;
-}
+    <properties>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
 
-.card-detail-content-graph {
-  height: 130px;
-  padding: 9px;
-  background-color: #495060;
-}
-
-.start-button {
-  width: 368px;
-  height: 44px;
-
-  font-size: 16px;
-  font-weight: 500;
-}
-</style>
-<template>
-  <div class="my-bot">
-    <div class="top-tool-bar"/>
-
-    <div class="bot-info-content">
+    <dependencies>
+        <dependency>
+            <groupId>cn.com.helei</groupId>
+            <artifactId>common</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
 
 
-      <bot-runtime-display-card
-        v-for="instance in botInstanceList"
-        :bot-instance="instance"
-      />
+    </dependencies>
 
-    </div>
-  </div>
-
-</template>
-
-<script>
-
-import BotRuntimeDisplayCard from '@/views/custom/bot/my-bot/components/bot-runtime-display-card.vue'
-import {pageQueryBotInstanceNetwork} from "@/api/custom/bot";
-
-export default {
-  name: 'MyBot',
-  components: {BotRuntimeDisplayCard},
-  data() {
-    return {
-      botInstanceList: [],
-      listQuery: {
-        page: 1,
-        limit: 9,
-        total: 0
-      }
-    }
-  },
-  created() {
-    // Step 1 查询实例列表
-    this.queryAllBotInstance()
-  },
-  methods: {
-    queryAllBotInstance() {
-      pageQueryBotInstanceNetwork({
-        page: this.listQuery.page,
-        limit: this.listQuery.limit
-      }).then(response => {
-        const pageInfo = response.data
-        this.listQuery.total = pageInfo.total
-        this.botInstanceList = pageInfo.list
-      })
-    }
-  }
-}
-</script>
-
-<style scoped>
-.my-bot {
-  margin-top: 10px;
-  background: linear-gradient(to bottom, #324157, #121826);
-
-  padding: 32px;
-
-  min-height: 100vh;
-}
-
-.top-tool-bar {
-  height: 44px;
-  padding: 16px;
-}
-
-.bot-info-content {
-  display: flex;
-  justify-items: flex-start;
-}
-</style>
+</project>
