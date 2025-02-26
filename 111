@@ -4,6 +4,8 @@ import cn.com.helei.bot_father.BotLauncher;
 import cn.com.helei.bot_father.anno.BotApplication;
 import cn.com.helei.bot_father.anno.BotMethod;
 import cn.com.helei.bot_father.bot.AutoLaunchBot;
+import cn.com.helei.bot_father.config.AutoBotConfig;
+import cn.com.helei.bot_father.service.BotApi;
 import cn.com.helei.common.constants.BotJobType;
 import cn.com.helei.common.dto.Result;
 import cn.com.helei.common.entity.AccountContext;
@@ -20,6 +22,11 @@ import java.util.List;
 public class ThreeDosBot extends AutoLaunchBot<ThreeDosBot> {
 
     private ThreeDosApi threeDosApi;
+
+    @Override
+    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
+        this.threeDosApi = new ThreeDosApi(this);
+    }
 
     @Override
     protected ThreeDosBot getInstance() {
@@ -65,7 +72,6 @@ public class ThreeDosBot extends AutoLaunchBot<ThreeDosBot> {
     public void keepAlivePing(AccountContext accountContext) {
         threeDosApi.keepLive(accountContext);
     }
-
 
     public static void main(String[] args) throws BotStartException, BotInitException {
         BotLauncher.launch(ThreeDosBot.class, args);
@@ -258,7 +264,7 @@ public abstract class AbstractAutoBot {
             // Step 2。6 更新状态
             updateState(BotStatus.INIT_FINISH);
         } catch (Exception e) {
-            logger.error("init error, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+            logger.error("init error", e);
             updateState(BotStatus.INIT_ERROR);
         }
     }
@@ -683,12 +689,6 @@ public abstract class AnnoDriveAutoBot<T extends AbstractAutoBot> extends Accoun
                 },
                 BotJobType.REGISTER.name()
         );
-    }
-
-
-    @Override
-    protected void doInit() throws BotInitException {
-        super.doInit();
     }
 
     /**
@@ -1279,6 +1279,12 @@ import java.util.List;
  */
 public abstract class AutoLaunchBot<T extends AnnoDriveAutoBot<T>> extends AnnoDriveAutoBot<T> {
 
+
+    @Override
+    protected final void doInit() throws BotInitException {
+        super.doInit();
+    }
+
     /**
      * 启动Bot
      *
@@ -1298,6 +1304,8 @@ public abstract class AutoLaunchBot<T extends AnnoDriveAutoBot<T>> extends AnnoD
         // 初始化
         instance.init(botApi, botConfig);
 
+        botInitialized(botConfig, botApi);
+
         if (botConfig.isCommandMenu()) {
             MenuCMDLineAutoBot<AutoBotConfig> menuCMDLineAutoBot
                     = new MenuCMDLineAutoBot<>(instance, List.of());
@@ -1306,6 +1314,72 @@ public abstract class AutoLaunchBot<T extends AnnoDriveAutoBot<T>> extends AnnoD
             menuCMDLineAutoBot.start();
         }
     }
+
+    protected abstract void botInitialized(AutoBotConfig botConfig, BotApi botApi);
+}
+package cn.com.helei.bot_father.config;
+
+
+import cn.com.helei.bot_father.service.impl.BotAccountContextServiceImpl;
+import cn.com.helei.bot_father.service.impl.RewordInfoServiceImpl;
+import cn.com.helei.rpc.bot.IBotAccountRPC;
+import cn.com.helei.rpc.bot.IRewordInfoRPC;
+import org.apache.dubbo.config.ServiceConfig;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class DubboConfig {
+
+    @Autowired
+    private AutoBotConfig botConfig;
+
+    @Autowired
+    private BotAccountContextServiceImpl botAccountContextService;
+
+    @Autowired
+    private RewordInfoServiceImpl rewordInfoService;
+
+    @Bean
+    public ServiceConfig<IBotAccountRPC> botAccountRPCServiceConfig() {
+        ServiceConfig<IBotAccountRPC> serviceConfig = new ServiceConfig<>();
+
+        serviceConfig.setInterface(IBotAccountRPC.class);
+        serviceConfig.setRef(botAccountContextService);
+        serviceConfig.setGroup(botConfig.getBotKey());
+        serviceConfig.setVersion("");
+
+        return serviceConfig;
+    }
+
+    @Bean
+    public ServiceConfig<IRewordInfoRPC> botRewordInfoRPCServiceConfig() {
+        ServiceConfig<IRewordInfoRPC> serviceConfig = new ServiceConfig<>();
+
+        serviceConfig.setInterface(IRewordInfoRPC.class);
+        serviceConfig.setRef(rewordInfoService);
+        serviceConfig.setGroup(botConfig.getBotKey());
+        serviceConfig.setVersion("");
+
+        return serviceConfig;
+    }
+}
+package cn.com.helei.bot_father.mapper;
+
+import cn.com.helei.common.entity.RewordInfo;
+import cn.com.helei.db_layer.mapper.IBaseMapper;
+
+/**
+ * <p>
+ *  Mapper 接口
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface RewordInfoMapper extends IBaseMapper<RewordInfo> {
+
 }
 package cn.com.helei.bot_father.service.impl;
 
@@ -1318,7 +1392,6 @@ import cn.com.helei.common.entity.BotInstance;
 import cn.com.helei.common.entity.BrowserEnv;
 import cn.com.helei.common.util.FileUtil;
 import cn.com.helei.common.util.excel.ExcelReadUtil;
-import cn.com.helei.common.vo.PageQuery;
 import cn.com.helei.db_layer.mapper.IBaseMapper;
 import cn.com.helei.db_layer.plugn.table_shard.strategy.BotIdBasedTableShardStrategy;
 import cn.com.helei.db_layer.service.AbstractBaseService;
@@ -1326,10 +1399,9 @@ import cn.com.helei.rpc.IBotInstanceRPC;
 import cn.com.helei.rpc.IBrowserEnvRPC;
 import cn.com.helei.rpc.bot.IBotAccountRPC;
 import cn.hutool.core.util.StrUtil;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.dubbo.config.annotation.DubboReference;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -1351,6 +1423,7 @@ public class BotAccountContextServiceImpl extends AbstractBaseService<BotAccount
 
     public static final String BOT_ACCOUNT_CONTEXT_TABLE_PREFIX = "t_bot_account_context";
 
+    @Autowired
     private BotIdBasedTableShardStrategy botIdBasedTableShardStrategy;
 
     @DubboReference
@@ -1539,11 +1612,6 @@ public class BotAccountContextServiceImpl extends AbstractBaseService<BotAccount
 
         return res;
     }
-
-    @Override
-    protected IBaseMapper<AccountContext> getMapper() {
-        return null;
-    }
 }
 package cn.com.helei.bot_father.service.impl;
 
@@ -1565,10 +1633,10 @@ public class DBBotApi implements BotApi {
     @Autowired
     private BotJobService botJobService;
 
-    @DubboReference
+    @Autowired
     private IBotAccountRPC botAccountRPC;
 
-    @DubboReference
+    @Autowired
     private IRewordInfoRPC rewordInfoRPC;
 
     @DubboReference
@@ -1594,6 +1662,36 @@ public class DBBotApi implements BotApi {
 
     @DubboReference
     private IDiscordAccountRPC discordAccountRPC;
+}
+package cn.com.helei.bot_father.service.impl;
+
+import cn.com.helei.bot_father.mapper.RewordInfoMapper;
+import cn.com.helei.common.entity.RewordInfo;
+import cn.com.helei.db_layer.mapper.IBaseMapper;
+import cn.com.helei.db_layer.service.AbstractBaseService;
+import cn.com.helei.rpc.bot.IRewordInfoRPC;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Service
+public class RewordInfoServiceImpl extends AbstractBaseService<RewordInfoMapper, RewordInfo> implements IRewordInfoRPC {
+
+    public RewordInfoServiceImpl() {
+        super(rewordInfo -> {
+            rewordInfo.setInsertDatetime(LocalDateTime.now());
+            rewordInfo.setUpdateDatetime(LocalDateTime.now());
+            rewordInfo.setIsValid(1);
+        });
+    }
 }
 package cn.com.helei.bot_father.service;
 
@@ -1632,6 +1730,7 @@ package cn.com.helei.bot_father.util.persistence.impl;
 import cn.com.helei.bot_father.service.BotApi;
 import cn.com.helei.bot_father.util.persistence.AbstractPersistenceManager;
 import cn.com.helei.common.entity.AccountContext;
+import cn.com.helei.common.entity.RewordInfo;
 import cn.com.helei.common.util.NamedThreadFactory;
 import cn.com.helei.common.util.propertylisten.PropertyChangeInvocation;
 import lombok.extern.slf4j.Slf4j;
@@ -1758,13 +1857,656 @@ public class DBAccountPersistenceManager extends AbstractPersistenceManager {
         }
         // Step 2.8 绑定奖励信息
         if (accountContext.getRewardId() != null) {
-            accountContext.setRewordInfo(botApi.getRewordInfoRPC().queryById(accountContext.getRewardId()));
+            RewordInfo rewordInfo = botApi.getRewordInfoRPC().queryById(accountContext.getRewardId());
+            accountContext.setRewordInfo(rewordInfo);
         }
+    }
+}
+package cn.com.helei.bot_father.view.commandMenu;
+
+import lombok.Data;
+import lombok.Getter;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
+
+@Data
+public class CommandMenuNode {
+
+    private final boolean isEnd;
+
+    /**
+     * 当前节点被选择时显示的文本
+     */
+    private String tittle;
+
+    /**
+     * 当前节点进入后的describe
+     */
+    private String describe;
+
+    /**
+     * 当前节点调用的函数, 返回内容会显示在describe 和 子节点选项之间
+     */
+    private Supplier<String> action;
+
+    /**
+     * 处理输入
+     */
+    private Consumer<String> resolveInput;
+
+    /**
+     * 当前节点的子节点
+     */
+    private final List<CommandMenuNode> subNodeList = new ArrayList<>();
+
+    public CommandMenuNode(String tittle, String describe, Supplier<String> action) {
+        this(false, tittle, describe, action);
+    }
+
+    public CommandMenuNode(boolean isEnd, String tittle, String describe, Supplier<String> action) {
+        this.isEnd = isEnd;
+        this.tittle = tittle;
+        this.describe = describe;
+        this.action = action;
+    }
+
+    public CommandMenuNode addSubMenu(CommandMenuNode subMenu) {
+        this.subNodeList.add(subMenu);
+        return this;
+    }
+}
+package cn.com.helei.bot_father.view.commandMenu;
+
+
+import cn.com.helei.common.dto.PageResult;
+import cn.com.helei.common.util.tableprinter.CommandLineTablePrintHelper;
+
+import java.lang.reflect.Field;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.BiFunction;
+
+public class PageMenuNode<T> extends CommandMenuNode {
+    private static final String PREFIX_PAGE_NAME = "pre_page";
+
+    private static final String NEXT_PAGE_NAME = "next_page";
+
+    private static final String REFRESH_PAGE_NAME = "refresh_page";
+
+    private static final String PAGE_KEY = "current_page";
+
+    private static final String TOTAL_KEY = "total";
+
+    private final Map<String, Object> params = new HashMap<>();
+
+    private final Field[] fields;
+
+    private final int limit;
+
+    private List<T> cacheList;
+
+    private boolean isQuery = true;
+
+    public PageMenuNode(
+            String tittle,
+            String describe,
+            BiFunction<Integer, Integer, PageResult<T>> pageInvocation,
+            Class<T> tClass
+    ) {
+        this(tittle, describe, 20, pageInvocation, tClass);
+    }
+
+    public PageMenuNode(
+            String tittle,
+            String describe,
+            int limit,
+            BiFunction<Integer, Integer, PageResult<T>> pageInvocation,
+            Class<T> tClass
+    ) {
+        super(tittle, describe, null);
+
+        this.fields = tClass.getDeclaredFields();
+        this.limit = limit;
+
+        this.setAction(() -> {
+            String print = "";
+            if (isQuery) {
+                int page = Math.max(1, (Integer) params.getOrDefault(PAGE_KEY, 1));
+                PageResult<T> pageResult = pageInvocation.apply(page, limit);
+
+                params.put(TOTAL_KEY, pageResult.getTotal());
+                params.put(PAGE_KEY, pageResult.getPageNum());
+
+                cacheList = pageResult.getList();
+                isQuery = false;
+                print = CommandLineTablePrintHelper.generateTableString(cacheList, tClass);
+            }
+
+            return print + printPageInfo();
+        });
+
+        this.setResolveInput(input -> {
+            String[] split = input.split(":");
+            if (split.length != 2) return;
+
+            if ("detail".equals(split[0]) && cacheList != null && !cacheList.isEmpty()) {
+                int row = Integer.parseInt(split[1]);
+                T item = cacheList.get(row);
+                try {
+                    System.out.println(printItem(item));
+                } catch (IllegalAccessException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        });
+
+        this.addSubMenu(preMenuNode()).addSubMenu(nextMenuNode()).addSubMenu(refreshMenuNode());
+    }
+
+
+    private CommandMenuNode preMenuNode() {
+        return new CommandMenuNode(
+                true,
+                PREFIX_PAGE_NAME,
+                "",
+                () -> {
+                    params.compute(PAGE_KEY, (k, v) -> (int) Math.max(0, (v == null ? 0 : (int) v) - 1));
+                    isQuery = true;
+                    return "";
+                }
+        );
+    }
+
+    private CommandMenuNode nextMenuNode() {
+        return new CommandMenuNode(
+                true,
+                NEXT_PAGE_NAME,
+                "",
+                () -> {
+                    params.compute(PAGE_KEY, (k, v) -> {
+                        Long total = (Long) params.get(TOTAL_KEY);
+                        v = v == null ? 0 : v;
+                        if (total == null) return (int) v + 1;
+
+                        return (int) Math.min(total, (int) v + 1);
+                    });
+                    isQuery = true;
+                    return "";
+                }
+        );
+    }
+
+    private CommandMenuNode refreshMenuNode() {
+        return new CommandMenuNode(
+                true,
+                REFRESH_PAGE_NAME,
+                "",
+                () -> {
+                    isQuery = true;
+                    return "";
+                }
+        );
+    }
+
+
+    private String printPageInfo() {
+        return "\n总数:%s, 当前页: %s, 每页大小: %s\n输入detail:row查看详情".formatted(
+                params.get(TOTAL_KEY), params.get(PAGE_KEY), this.limit
+        );
+    }
+
+    private String printItem(T item) throws IllegalAccessException {
+        StringBuilder sb = new StringBuilder();
+        for (Field field : fields) {
+            field.setAccessible(true);
+            sb.append(field.getName()).append(": ").append(field.get(item)).append("\n");
+        }
+
+        return sb.toString();
+    }
+}
+package cn.com.helei.bot_father.view;
+
+
+import cn.com.helei.bot_father.bot.AnnoDriveAutoBot;
+import cn.com.helei.bot_father.util.AccountInfoPrinter;
+import cn.com.helei.bot_father.view.commandMenu.CommandMenuNode;
+import cn.com.helei.bot_father.view.commandMenu.DefaultMenuType;
+import cn.com.helei.bot_father.view.commandMenu.MenuNodeMethod;
+import cn.com.helei.bot_father.config.AutoBotConfig;
+import cn.com.helei.bot_father.view.commandMenu.PageMenuNode;
+import cn.com.helei.common.dto.PageResult;
+import cn.com.helei.common.entity.AccountContext;
+import cn.com.helei.common.entity.BrowserEnv;
+import cn.com.helei.common.entity.ProxyInfo;
+import cn.com.helei.common.entity.RewordInfo;
+import cn.com.helei.common.util.tableprinter.CommandLineTablePrintHelper;
+import com.alibaba.fastjson.JSON;
+import com.github.pagehelper.PageInfo;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.sql.SQLException;
+import java.util.*;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+
+import static cn.com.helei.bot_father.constants.MapConfigKey.*;
+
+
+@Slf4j
+public class MenuCMDLineAutoBot<C extends AutoBotConfig> extends CommandLineAutoBot {
+    /**
+     * 刷新节点
+     */
+    public static final CommandMenuNode REFRESH_NODE = new CommandMenuNode(true, "刷新", "当前数据已刷新", null);
+
+
+    private final List<DefaultMenuType> defaultMenuTypes;
+
+    @Setter
+    private Consumer<CommandMenuNode> addCustomMenuNode;
+
+    public MenuCMDLineAutoBot(AnnoDriveAutoBot<?> bot, List<DefaultMenuType> defaultMenuTypes) {
+        super(bot);
+        this.defaultMenuTypes = new ArrayList<>(defaultMenuTypes);
+
+        this.defaultMenuTypes.add(DefaultMenuType.ACCOUNT_LIST);
+        this.defaultMenuTypes.add(DefaultMenuType.PROXY_LIST);
+        this.defaultMenuTypes.add(DefaultMenuType.BROWSER_ENV_LIST);
+
+        if (bot.getRegisterMethod() != null) {
+            this.defaultMenuTypes.add(DefaultMenuType.REGISTER);
+        }
+        if (bot.getLoginMethod() != null) {
+            this.defaultMenuTypes.add(DefaultMenuType.LOGIN);
+        }
+        if (bot.botJobNameList() != null) {
+            this.defaultMenuTypes.add(DefaultMenuType.START_ACCOUNT_CLAIM);
+        }
+
+        // 解析MenuNodeMethod注解添加菜单节点
+        for (Method method : bot.getClass().getDeclaredMethods()) {
+            method.setAccessible(true);
+
+            if (method.isAnnotationPresent(MenuNodeMethod.class)) {
+                if (method.getParameterCount() > 0) {
+                    throw new IllegalArgumentException("菜单方法参数数量必须为0");
+                }
+
+                MenuNodeMethod anno = method.getAnnotation(MenuNodeMethod.class);
+                String title = anno.title();
+                String description = anno.description();
+
+                CommandMenuNode menuNode = new CommandMenuNode(title, description, () -> {
+                    try {
+                        return method.invoke(bot).toString();
+                    } catch (IllegalAccessException | InvocationTargetException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+
+                getMainManu().addSubMenu(menuNode);
+            }
+        }
+    }
+
+
+    @Override
+    public final void buildMenuNode(CommandMenuNode mainManu) {
+        if (addCustomMenuNode != null) {
+            addCustomMenuNode.accept(mainManu);
+        }
+
+        for (DefaultMenuType menuType : defaultMenuTypes) {
+            mainManu.addSubMenu(switch (menuType) {
+                case REGISTER -> buildRegisterMenuNode();
+                case VERIFIER -> buildVerifierMenuNode();
+                case LOGIN -> buildQueryTokenMenuNode();
+                case ACCOUNT_LIST -> buildAccountListMenuNode();
+                case PROXY_LIST -> buildProxyListMenuNode();
+                case BROWSER_ENV_LIST -> buildBrowserListMenuNode();
+                case START_ACCOUNT_CLAIM -> buildStartAccountConnectMenuNode();
+                case IMPORT -> buildImportMenuNode();
+            });
+        }
+    }
+
+
+    /**
+     * 构建注册菜单节点
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildRegisterMenuNode() {
+        CommandMenuNode registerMenu = new CommandMenuNode("注册",
+                "请确认设置后运行", this::printCurrentRegisterConfig);
+
+        CommandMenuNode interInvite = new CommandMenuNode(
+                "填入邀请码",
+                "请输入邀请码：",
+                this::printCurrentRegisterConfig
+        );
+        interInvite.setResolveInput(input -> {
+            log.info("邀请码修改[{}]->[{}]", getBotConfig().getConfig(INVITE_CODE_KEY), input);
+            getBotConfig().setConfig(INVITE_CODE_KEY, input);
+        });
+
+        return registerMenu
+                .addSubMenu(interInvite)
+                .addSubMenu(new CommandMenuNode(
+                        true,
+                        "开始注册",
+                        "开始注册所有账号...",
+                        () -> getBot().registerAccount().toString()
+                ));
+    }
+
+    private CommandMenuNode buildVerifierMenuNode() {
+
+        return new CommandMenuNode("验证邮箱", "请选择验证的账户类型",
+                () -> "当前的邮箱类型：" + getBotConfig().getConfig(EMAIL_VERIFIER_TYPE));
+    }
+
+
+    /**
+     * 获取token
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildQueryTokenMenuNode() {
+        return new CommandMenuNode("获取token", "开始获取token", () -> {
+            return JSON.toJSONString(getBot().loginAndTakeTokenAccount());
+        });
+    }
+
+    /**
+     * 构建查看代理列表的菜单节点
+     *
+     * @return 查看代理列表菜单节点
+     */
+    private CommandMenuNode buildProxyListMenuNode() {
+        return new PageMenuNode<>("查看代理列表", "当前代理列表:", (pageNum, pageSize) -> {
+            try {
+                return getBot().getBotApi().getProxyInfoRPC().conditionPageQuery(pageNum, pageSize, new HashMap<>());
+            } catch (SQLException e) {
+                getBot().logger.error("查询代理列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+                return null;
+            }
+        }, ProxyInfo.class);
+    }
+
+
+    /**
+     * 构建查看浏览器环境列表的菜单节点
+     *
+     * @return 查看浏览器环境列表菜单节点
+     */
+    private CommandMenuNode buildBrowserListMenuNode() {
+        return new PageMenuNode<>("查看浏览器环境列表", "当前浏览器环境:", (pageNum, pageSize) -> {
+            try {
+                return getBot().getBotApi().getBrowserEnvRPC().conditionPageQuery(pageNum, pageSize, new HashMap<>());
+            } catch (SQLException e) {
+                getBot().logger.error("查询浏览器环境列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+                return null;
+            }
+        }, BrowserEnv.class);
+    }
+
+    /**
+     * 账户列表菜单节点
+     *
+     * @return 账户列表节点
+     */
+    private CommandMenuNode buildAccountListMenuNode() {
+        CommandMenuNode accountListMenuNode = new PageMenuNode<>("查看账号", "当前账户详情列表:", (pageNum, pageSize) -> {
+            try {
+                HashMap<String, Object> filter = new HashMap<>();
+                filter.put("botId", getBot().getBotInfo().getId());
+                filter.put("botKey", getBot().getAutoBotConfig().getBotKey());
+
+                return getBot().getBotApi().getBotAccountRPC().conditionPageQuery(pageNum, pageSize, filter);
+            } catch (SQLException e) {
+                getBot().logger.error("查询账号列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+                return null;
+            }
+        }, AccountContext.class);
+
+        return accountListMenuNode
+                .addSubMenu(buildAccountRewardMenuNode())
+                .addSubMenu(buildAccountConnectStatusMenuNode())
+                .addSubMenu(REFRESH_NODE);
+    }
+
+    /**
+     * 查看账户收益菜单节点
+     *
+     * @return 账户收益节点
+     */
+    private CommandMenuNode buildAccountRewardMenuNode() {
+        return new PageMenuNode<>("查看账号收益", "账号收益详情列表:", (pageNum, pageSize) -> {
+            try {
+                return getBot().getBotApi().getRewordInfoRPC().conditionPageQuery(pageNum, pageSize, new HashMap<>());
+            } catch (SQLException e) {
+                getBot().logger.error("查询账号收益列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+                return null;
+            }
+        }, RewordInfo.class);
+    }
+
+    /**
+     * 查看账户连接情况菜单节点
+     *
+     * @return 账户收益节点
+     */
+    private CommandMenuNode buildAccountConnectStatusMenuNode() {
+        return new CommandMenuNode(
+                "查看账号连接情况",
+                "账号连接情况列表:",
+                () -> AccountInfoPrinter.printAccountConnectStatusList(getBot().getAccountContexts())
+        ).addSubMenu(REFRESH_NODE);
+    }
+
+
+    /**
+     * 开始账户连接菜单节点
+     *
+     * @return 连接账户菜单节点
+     */
+    private CommandMenuNode buildStartAccountConnectMenuNode() {
+        CommandMenuNode menuNode = new CommandMenuNode(
+                "启动任务",
+                "选择任务类型",
+                null
+        );
+
+        Set<String> jobNameSet = getBot().botJobNameList();
+        for (String jobName : jobNameSet) {
+            CommandMenuNode typeInput = new CommandMenuNode(true, jobName + " 任务", "type",
+                    () -> JSON.toJSONString(getBot().startBotJob(jobName))
+            );
+
+            menuNode.addSubMenu(typeInput);
+        }
+
+        return menuNode;
+    }
+
+    /**
+     * 导入菜单节点
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportMenuNode() {
+
+        return new CommandMenuNode("导入", "请选择要导入的数据", null)
+                .addSubMenu(buildImportBotAccountContextMenuNode())
+                .addSubMenu(buildImportBaseAccountMenuNode())
+                .addSubMenu(buildImportProxyMenuNode())
+                .addSubMenu(buildImportBrowserEnvMenuNode())
+                .addSubMenu(buildImportTwitterMenuNode())
+                .addSubMenu(buildImportDiscordMenuNode())
+                .addSubMenu(buildImportTelegramMenuNode())
+                ;
+    }
+
+    /**
+     * 导入浏览器环境菜单节点
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportBrowserEnvMenuNode() {
+
+        return new CommandMenuNode(true, "导入浏览器环境", null, () -> {
+            String filePath = getBotConfig().getFilePathConfig().getBrowserEnvFileBotConfigPath();
+
+            try {
+                getBot().getBotApi().getBrowserEnvRPC().importFromExcel(filePath);
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+
+            return "浏览器环境导入完成";
+        });
+    }
+
+    /**
+     * 导入代理信息
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportProxyMenuNode() {
+        return new CommandMenuNode(true, "导入代理", null, () -> {
+
+            try {
+                getBot().getBotApi().getProxyInfoRPC()
+                        .importFromExcel(getBotConfig().getFilePathConfig().getProxyFileBotConfigPath());
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+
+            return "代理导入完成";
+        });
+    }
+
+    /**
+     * 导入账号基本信息
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportBaseAccountMenuNode() {
+        return new CommandMenuNode(true, "导入账号基本信息", null, () -> {
+
+            try {
+                Integer integer = getBot().getBotApi().getAccountBaseInfoRPC()
+                        .importFromExcel(getBotConfig().getFilePathConfig().getBaseAccountFileBotConfigPath());
+                return "账号基本信息导入完成，" + integer;
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+
+    /**
+     * 导入twitter账号基本信息
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportTwitterMenuNode() {
+        return new CommandMenuNode(true, "导入twitter账号", null, () -> {
+            try {
+                Integer i = getBot().getBotApi().getTwitterAccountRPC()
+                        .importFromExcel(getBotConfig().getFilePathConfig().getTwitterFileBotConfigPath());
+                return "twitter导入完成, " + i;
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+
+    /**
+     * 导入discord账号基本信息
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportDiscordMenuNode() {
+        return new CommandMenuNode(true, "导入discord账号", null, () -> {
+
+            try {
+                Integer i = getBot().getBotApi().getDiscordAccountRPC().importFromExcel(getBotConfig().getFilePathConfig().getDiscordFileBotConfigPath());
+                return "discord导入完成," + i;
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    /**
+     * 导入Telegram账号基本信息
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportTelegramMenuNode() {
+        return new CommandMenuNode(true, "导入Telegram账号", null, () -> {
+
+            try {
+                Integer i = getBot().getBotApi().getTelegramAccountRPC().importFromExcel(getBotConfig().getFilePathConfig().getTelegramFileBotConfigPath());
+
+                return "Telegram导入完成" + i;
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+
+    /**
+     * 导入bot使用的账号菜单节点
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportBotAccountContextMenuNode() {
+        return new CommandMenuNode(true, "导入bot运行账号", null, () -> {
+
+            try {
+                Integer i = getBot().getBotApi().getBotAccountRPC().importFromExcel(
+                        getBotConfig().getAccountConfig().getConfigFilePath()
+                );
+                return "bot运行账号导入完成," + i;
+            } catch (SQLException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+
+    /**
+     * 打印当前的邀请码
+     *
+     * @return 邀请码
+     */
+    private String printCurrentRegisterConfig() {
+        String inviteCode = (String) getBotConfig().getCustomConfig().get(INVITE_CODE_KEY);
+        String registerType = (String) getBotConfig().getCustomConfig().get(REGISTER_TYPE_KEY);
+
+        return "(当前邀请码为:" + inviteCode + ")\n"
+                + "(当前注册类型为:" + registerType + ")\n";
     }
 }
 package cn.com.helei.bot_father;
 
 import cn.com.helei.bot_father.config.AutoBotConfig;
+import cn.com.helei.bot_father.config.DubboConfig;
 import cn.com.helei.common.util.FileUtil;
 import cn.com.helei.db_layer.DBLayerAutoConfig;
 import cn.hutool.core.util.StrUtil;
@@ -1777,6 +2519,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 
 import javax.sql.DataSource;
 import java.io.IOException;
@@ -1787,7 +2530,7 @@ import java.nio.file.Paths;
 @EnableDubbo
 @Configuration
 @ConditionalOnClass(DBLayerAutoConfig.class)
-@ImportAutoConfiguration(classes = DBLayerAutoConfig.class)
+@ImportAutoConfiguration(classes = {DBLayerAutoConfig.class, DubboConfig.class})
 @ComponentScan({"cn.com.helei.bot_father.service.impl", "cn.com.helei.bot_father.config"})
 @MapperScan(basePackages = "cn.com.helei.bot_father.mapper")
 public class BotFatherAutoConfig {
@@ -1843,15 +2586,19 @@ import cn.com.helei.common.exception.BotStartException;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.web.servlet.ServletWebServerFactoryAutoConfiguration;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
+import java.util.Arrays;
+import java.util.Optional;
 
-@SpringBootApplication
+@SpringBootApplication(exclude = ServletWebServerFactoryAutoConfiguration.class)
 @ImportAutoConfiguration({BotFatherAutoConfig.class})
 public class BotLauncher {
+    private static final String BOT_KEY_PARAM_KEY = "--bot.botKey=";
 
     /**
      * 启动bot
@@ -1865,6 +2612,11 @@ public class BotLauncher {
      */
     public static <T extends AutoLaunchBot<T>> ApplicationContext launch(Class<T> botClass, String[] args)
             throws BotStartException, BotInitException {
+        // 命令行参数设置app name
+        Optional<String> botKeyOp = Arrays.stream(args).filter(arg -> arg.startsWith("--bot.botKey=")).findFirst();
+        if (botKeyOp.isEmpty()) throw new  BotStartException("bot key is empty");
+        System.setProperty("spring.application.name", botKeyOp.get().replace(BOT_KEY_PARAM_KEY, ""));
+
         // Step 1 创建容器
         ConfigurableApplicationContext applicationContext = SpringApplication.run(BotLauncher.class, args);
 
@@ -1889,21 +2641,20 @@ public class BotLauncher {
         return applicationContext;
     }
 }
-
-
 mybatis-plus:
   mapper-locations: classpath:/mapper/*.xml
 
 dubbo:
   application:
-    name: bot-platform
     logger: slf4j
-  protocol:
-    name: tri
-    port: -1
+    serialize-check-status: WARN
+    qos-accept-foreign-ip: true
   registry:
     id: zk-registry
     address: zookeeper://127.0.0.1:2181
+  consumer:
+    timeout: 60000
+
 
 bot:
   botKey: ''
@@ -1918,6 +2669,16 @@ bot:
     configFilePath: ""
 
 
+logging:
+  level:
+    org:
+      apache:
+        dubbo: WARN
+        zookeeper: WARN
+
+
+server:
+  port: 10012
 
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
@@ -1965,7 +2726,7 @@ bot:
 
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
+            <artifactId>spring-boot-starter</artifactId>
         </dependency>
 
         <dependency>
