@@ -1,107 +1,494 @@
-package cn.com.helei.browser_control;
+package cn.com.helei.example.haha_wallet;
 
+import cn.com.helei.browser_control.*;
+import cn.com.helei.common.entity.AccountContext;
+import cn.com.helei.common.entity.BrowserEnv;
+import cn.com.helei.common.entity.ProxyInfo;
+import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
-import lombok.*;
-import org.openqa.selenium.WebDriver;
+import org.jetbrains.annotations.NotNull;
+import org.openqa.selenium.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.util.Arrays;
+
+import java.awt.*;
+import java.awt.event.KeyEvent;
+import java.io.IOException;
+import java.util.*;
 import java.util.List;
-import java.util.function.BiFunction;
 
-@Data
-@Builder
-@AllArgsConstructor
-@NoArgsConstructor
-public class ExecuteGroup {
+import static cn.com.helei.example.haha_wallet.HaHaWalletBot.*;
 
-    private String name;
+public class HahaWalletSelenium extends OptSeleniumInstance {
 
-    private List<ExecuteItem> executeItems;
+    private static final String HAHA_WALLET_EXTENSION_CRX_PATH = "D:\\workspace\\DepinBot\\auto-bot-v_1.1\\bot-example\\src\\main\\resources\\haha-wallet\\HaHa-Wallet-Chrome-Web-Store.crx";
 
-    private BiFunction<WebDriver, JSONObject, Boolean> enterCondition;
+    private static final String CHROME_DRIVER_PATH = "D:\\workspace\\DepinBot\\auto-bot-v_1.1\\bot-example\\src\\main\\resources\\chromedriver";
+    private static final Logger log = LoggerFactory.getLogger(HahaWalletSelenium.class);
+
+    private final AccountContext accountContext;
+
+    public static void main(String[] args) throws IOException, InterruptedException {
+        AccountContext testAC = new AccountContext();
+
+        testAC.setProxy(ProxyInfo.builder().host("192.46.201.191").port(6705).username("").password("").build());
+        testAC.setParam(WALLET_KEY, "23");
+        testAC.setParam(USERNAME_KEY, "@qq.com");
+        testAC.setParam(PASSWORD_KEY, "23");
+
+        BrowserEnv browserEnv = new BrowserEnv();
+        browserEnv.setUserAgent("Mozilla/55.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.6723.116 Safari/537.36");
+
+        testAC.setBrowserEnv(browserEnv);
+        HahaWalletSelenium hahaWalletSelenium = new HahaWalletSelenium(new HaHaWalletBot(), testAC);
+
+        hahaWalletSelenium.syncStart();
+    }
+
+
+    public HahaWalletSelenium(HaHaWalletBot bot, AccountContext accountContext) throws IOException {
+        super(
+                accountContext.getParam(HaHaWalletBot.USERNAME_KEY),
+                new SeleniumProxy(
+                        accountContext.getProxy().getHost(),
+                        accountContext.getProxy().getPort(),
+                        accountContext.getProxy().getUsername(),
+                        accountContext.getProxy().getPassword()
+                ),
+                getParams(accountContext)
+        );
+        String email = accountContext.getParam(HaHaWalletBot.USERNAME_KEY);
+        String password = accountContext.getParam(HaHaWalletBot.PASSWORD_KEY);
+        String wallet = accountContext.getParam(WALLET_KEY);
+
+        if (StrUtil.isBlank(wallet) || StrUtil.isBlank(email) || StrUtil.isBlank(password)) {
+            bot.logger.warn("%s no email or password or wallet".formatted(accountContext.getSimpleInfo()));
+            throw new IllegalArgumentException("email or password or wallet is empty");
+        }
+
+        this.accountContext = accountContext;
+    }
+
+
+    @Override
+    public void init() {
+
+
+        super.addExecuteFun(ExecuteGroup.builder()
+                        .name("初始化")
+                        .enterCondition((webDriver, params) -> {
+                            return true;
+                        })
+                        .executeItems(List.of(
+                                ExecuteItem.builder().name("代理验证").executeLogic(this::proxyVerify).build()
+                        ))
+                        .build()
+                )
+                .addExecuteFun(ExecuteGroup.builder()
+                        .name("登录HaHa")
+                        .enterCondition((webDriver, params) -> {
+                            return true;
+                        })
+                        .executeItems(List.of(
+                                ExecuteItem.builder().name("切换到目标页面").executeLogic(this::changeToTargetPage).build(),
+                                ExecuteItem.builder().name("登录账号").executeLogic(this::loginAccount).build(),
+                                ExecuteItem.builder().name("导入钱包").executeLogic(this::importWallet).build()
+                        ))
+                        .build()
+                )
+                .addExecuteFun(ExecuteGroup.builder()
+                        .name("每日任务")
+                        .enterCondition((webDriver, params) -> {
+                            return true;
+                        })
+                        .executeItems(List.of(
+                                ExecuteItem.builder().name("进入monad Swap页面").executeLogic(this::enterMonadSwapPage).build(),
+                                ExecuteItem.builder().name("交换Monad").executeLogic(this::monadSwap).build(),
+                                ExecuteItem.builder().name("trans sepolia Eth").executeLogic(this::sepoliaSwapPage).build()
+                        ))
+                        .build()
+                );
+
+    }
+
+
+    private void sepoliaSwapPage(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+
+        xPathClick("//*[@id=\"app-content\"]/div[1]/div[2]/div[2]/div[3]/ul/li[2]");
+
+        //.点击选择网络界面
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[1]");
+
+        // 点击选择测试网络
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[4]/div[2]/div[2]/ul/li[2]");
+
+        // 选择sepolia
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[4]/div[2]/div[2]/div[2]/button[4]");
+
+        randomWait();
+
+        int count = seleniumInstance.getRandom().nextInt(5, 10);
+
+        for (int i = 0; i < count; i++) {
+            try {
+                sepoliaSwap(webDriver, seleniumInstance);
+
+            } catch (Exception e) {
+                log.error("{} sepolia swap error", getInstanceId(), e);
+            }
+        }
+    }
+
+    private void sepoliaSwap(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+        // 点击进入legacyPage
+        xPathClick("//*[@id=\"tab:r0:1\"]/div");
+
+        // 进入发送界面
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[3]/div[2]/div[1]/div[1]/div[2]/div[2]/button[1]");
+        randomWait();
+
+        // 选择代币
+        List<WebElement> selectionBtnList = xPathFindElements("//*[@id=\"app-content\"]/div[1]/div[2]/div[2]/div[2]/div[1]/div[1]/div[1]//button");
+        int select = seleniumInstance.getRandom().nextInt(selectionBtnList.size());
+        selectionBtnList.get(select).click();
+
+        // 选择自己的地址
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[4]/button");
+        randomWait();
+
+        WebElement countP = xPathFindElement("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[1]/div[2]/div[2]/div[3]/p");
+        ;
+        double total = Double.parseDouble(countP.getText());
+        double count = seleniumInstance.getRandom().nextDouble(0.1, 0.7) * total;
+
+        // 输入数量
+        WebElement countInput = xPathFindElement("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[1]/div[2]/div[5]/div/div[2]/input");
+        countInput.sendKeys("%.6f".formatted(count));
+
+        // 点击下一步
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[2]/div[2]/button");
+
+        // 点击确认
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[2]/div[2]/button");
+    }
+
+
+    private void monadSwap(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+        WebElement swapCountInput = xPathFindElement("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[1]/div[2]/div/div[3]/input");
+
+        Random random = new Random();
+        int monCount = random.nextInt(1, 4);
+        int successTimes = 0;
+
+        while (successTimes < monCount) {
+            // 点击进入交换代币选择界面
+            xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[3]/div[1]/button");
+
+            // 随机选择代币
+            List<WebElement> token2List = xPathFindElements("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[3]/div[2]/div[3]/div//button");
+            token2List.removeFirst();
+
+            randomWait();
+            token2List.get(random.nextInt(token2List.size())).click();
+
+
+            double count = random.nextDouble(0.0001, 0.001);
+            swapCountInput.sendKeys("");
+            swapCountInput.sendKeys("%.4f".formatted(count));
+
+            // 等待按钮可点击
+            try {
+                // 点击确认
+                xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[6]/button");
+                xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[3]/div[2]/div/button");
+                successTimes++;
+            } catch (TimeoutException timeoutException) {
+                System.out.println("超时");
+            }
+        }
+
+        // 点击返回按钮
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[1]/button");
+    }
+
+    private void enterMonadSwapPage(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+
+        // 点击进入legacyPage
+        xPathClick("//*[@id=\"tab:r0:1\"]/div");
+
+        // 点击网络选择按钮
+        xPathClick("\"//*[@id=\\\"app-content\\\"]/div/div[2]/div[2]/div[2]/div[1]\"");
+
+        // 点击选择测试网
+        xPathClick("\"//*[@id=\\\"app-content\\\"]/div/div[2]/div[2]/div[4]/div[2]/div[2]/ul/li[2]\"");
+
+        // 点击选择Monad
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[4]/div[2]/div[2]/div[2]/button[1]");
+
+        randomWait();
+
+        // 点击swap页面
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[3]/div[2]/div[1]/div[1]/div[2]/div[2]/button[3]");
+
+        randomWait();
+    }
+
+    private void importWallet(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+        // 点击导入按钮
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[5]/div[2]/button");
+
+        // 等待输入框出现， 输入钱包
+        List<WebElement> inputs = xPathFindElements("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[3]/div//input");
+        String[] split = accountContext.getParam(WALLET_KEY).split(" ");
+        for (int i = 0; i < inputs.size(); i++) {
+            inputs.get(i).sendKeys(split[i]);
+        }
+
+        // 点击导入按钮
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[4]/button");
+
+        // 点击导入成功的确认按钮
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/button");
+
+        // 点击跳过按钮
+        xPathClick("//*[@id=\"app-content\"]/div[2]/div[2]/div[3]/button[2]");
+
+        randomWait();
+    }
+
+
+    private void loginAccount(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[3]/button[2]");
+
+        // 找到 email 输入框并输入邮箱
+        webDriver.findElement(By.cssSelector("input[type='email']")).sendKeys(accountContext.getParam(USERNAME_KEY));
+        // 找到 password 输入框并输入密码
+        webDriver.findElement(By.cssSelector("input[type='password']")).sendKeys(accountContext.getParam(PASSWORD_KEY));
+        // 点击登录按钮
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[3]/div[3]/button[1]");
+
+
+        // 输入解锁密码
+        xPathFindElement("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[3]/div[1]/input").sendKeys("123456789");
+        // 输入解锁密码
+        xPathFindElement("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[3]/div[2]/input").sendKeys("123456789");
+        // 确认
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[4]/button");
+
+
+        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/label/input");
+    }
+
+
+    private void changeToTargetPage(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+        // 获取所有窗口句柄
+        Set<String> handles = webDriver.getWindowHandles();
+        for (String handle : handles) {
+            webDriver.switchTo().window(handle);
+            if (Objects.equals(webDriver.getCurrentUrl(), "data:,")) {
+                webDriver.close(); // 关闭 data:, 页面
+                break;
+            }
+        }
+
+        // 切换到第二个标签页（索引 1）
+        List<String> windowList = new ArrayList<>(webDriver.getWindowHandles());
+        webDriver.switchTo().window(windowList.getFirst());
+    }
+
+    private void proxyVerify(WebDriver webDriver, SeleniumInstance instance) {
+        // 使用 Robot 模拟输入用户名和密码
+        Robot robot = null;
+        try {
+            robot = new Robot();
+        } catch (AWTException e) {
+            throw new RuntimeException(e);
+        }
+        robot.delay(5000); // 等待弹框出现
+
+        // 输入用户名
+        for (char c : instance.getProxy().getUsername().toCharArray()) {
+            robot.keyPress(KeyEvent.getExtendedKeyCodeForChar(c));
+            robot.keyRelease(KeyEvent.getExtendedKeyCodeForChar(c));
+        }
+
+        robot.keyPress(KeyEvent.VK_TAB);
+        robot.keyRelease(KeyEvent.VK_TAB);
+
+        // 输入密码
+        for (char c : instance.getProxy().getPassword().toCharArray()) {
+            robot.keyPress(KeyEvent.getExtendedKeyCodeForChar(c));
+            robot.keyRelease(KeyEvent.getExtendedKeyCodeForChar(c));
+        }
+        robot.keyPress(KeyEvent.VK_ENTER);
+        robot.keyRelease(KeyEvent.VK_ENTER);
+    }
+
+    @NotNull
+    private static JSONObject getParams(AccountContext accountContext) {
+        JSONObject params = new JSONObject();
+
+        JSONArray extensions = new JSONArray();
+        extensions.add(HAHA_WALLET_EXTENSION_CRX_PATH);
+        params.put(SeleniumInstance.EXTENSIONS_PATH_LIST, extensions);
+
+        JSONArray options = new JSONArray();
+        options.add("user-agent=" + accountContext.getBrowserEnv().getUserAgent());
+
+        params.put(SeleniumInstance.OPTION_LIST, options);
+        params.put(SeleniumInstance.DRIVER_PATH, CHROME_DRIVER_PATH);
+        return params;
+    }
 
 }
-package cn.com.helei.browser_control;
 
 
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-@Data
-@Builder
-@AllArgsConstructor
-@NoArgsConstructor
-public class ExecuteItem {
-
-    private String name;
-
-    private Integer retryTimes;
-
-    private ExecuteLogic executeLogic;
-
-    private ExecuteLogic resetLogic;
-}
 package cn.com.helei.browser_control;
 
 import com.alibaba.fastjson.JSONObject;
-import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.By;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.WebDriverWait;
 
-public interface ExecuteLogic {
+import java.io.IOException;
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
 
-    void execute(WebDriver webDriver, JSONObject params);
+public class OptSeleniumInstance extends SeleniumInstance {
 
+    public static final int CLICK_WAIT_MIN_TIME = 500;
+
+    public static final int CLICK_WAIT_MAX_TIME = 2500;
+
+    public static final int NORMAL_DRIVER_WAITE_TIME = 30;
+
+    private WebDriverWait normalDriverWaiter;
+
+    public OptSeleniumInstance(String instanceId, SeleniumProxy proxy, JSONObject params) throws IOException {
+        super(instanceId, proxy, params);
+    }
+
+    @Override
+    public void init() {
+
+    }
+
+    @Override
+    public void webDriverLaunched() {
+        normalDriverWaiter = new WebDriverWait(getWebDriver(), Duration.ofSeconds(NORMAL_DRIVER_WAITE_TIME));
+    }
+
+    public void xPathClick(String xPath, int waitSecond) {
+        xPathClick(new WebDriverWait(getWebDriver(), Duration.ofSeconds(waitSecond)), xPath);
+    }
+
+    public void xPathClick(String xPath) {
+        xPathClick(normalDriverWaiter, xPath);
+    }
+
+    public void xPathClick(WebDriverWait wait, String xPath) {
+        WebElement element = wait.until(ExpectedConditions.elementToBeClickable(By.xpath(xPath)));
+        randomWait();
+        element.click();
+    }
+
+
+    public WebElement xPathFindElement(String xPath, int waitSecond) {
+       return xPathFindElement(new WebDriverWait(getWebDriver(), Duration.ofSeconds(waitSecond)), xPath);
+    }
+
+    public WebElement xPathFindElement(String xPath) {
+        return xPathFindElement(normalDriverWaiter, xPath);
+    }
+
+    public WebElement xPathFindElement(WebDriverWait wait, String xPath) {
+        WebElement element = wait.until(ExpectedConditions.elementToBeClickable(By.xpath(xPath)));
+        randomWait();
+        return element;
+    }
+
+
+    public List<WebElement> xPathFindElements(String xPath) {
+        return getWebDriver().findElements(By.xpath(xPath));
+    }
+
+    public void randomWait() {
+        try {
+            TimeUnit.MILLISECONDS.sleep(getRandom().nextInt(CLICK_WAIT_MIN_TIME, CLICK_WAIT_MAX_TIME));
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
 }
+
+
 package cn.com.helei.browser_control;
 
 import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
-import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.chrome.ChromeDriver;
 import org.openqa.selenium.chrome.ChromeOptions;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Random;
+import java.util.*;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
-import static cn.com.helei.browser_control.SeleniumProxyAuth.createProxyAuthExtension;
 
 @Slf4j
-public class SeleniumInstance {
+@Getter
+public abstract class SeleniumInstance {
 
     public static final String EXTENSIONS_PATH_LIST = "extension_path_list";
 
     public static final String DRIVER_PATH = "driver_path";
 
+    public static final String OPTION_LIST = "option_list";
+
+    public static final String TARGET_WEB_SITE = "target_web_site";
+
     private final JSONObject params;
 
     private final ChromeOptions chromeOptions;
 
-    private final InetSocketAddress proxy;
+    private final SeleniumProxy proxy;
 
     private final List<ExecuteGroup> seleniumExecuteChain = new ArrayList<>();
 
     private final Random random = new Random();
 
-    private WebDriver webDriver;
+    private final String instanceId;
+
+    private ChromeDriver webDriver;
+
+    @Setter
+    private Consumer<Long> finishHandler;
 
     public SeleniumInstance(
-            InetSocketAddress proxy,
-            String username,
-            String password,
+            String instanceId,
+            SeleniumProxy proxy,
             JSONObject params
     ) throws IOException {
+        this.instanceId = instanceId;
+        if (instanceId == null || instanceId.isEmpty()) throw new IllegalArgumentException("instanceId is empty");
         this.params = params;
         this.proxy = proxy;
-        this.chromeOptions = initChromeOption(proxy, username, password, params);
+        this.chromeOptions = initChromeOption(proxy, params);
     }
 
+    public abstract void init();
+
+    public abstract void webDriverLaunched();
 
     /**
      * 添加执行方法
@@ -115,87 +502,183 @@ public class SeleniumInstance {
     }
 
     /**
-     * 开始执行selenium
-     *
-     * @param name name
-     * @throws InterruptedException InterruptedException
+     * 同步启动selenium
      */
-    public void start(String name) throws InterruptedException {
-        // Step 1 设置driver
-        String driverPath = params.getString(DRIVER_PATH);
-        if (driverPath != null && !driverPath.isEmpty()) {
-            System.setProperty("webdriver.chrome.driver", driverPath);
+    public void syncStart() throws InterruptedException {
+        CountDownLatch latch = new CountDownLatch(1);
+
+        if (finishHandler == null) {
+            setFinishHandler(cost -> {
+                latch.countDown();
+            });
+        } else {
+            Consumer<Long> fh = getFinishHandler();
+            setFinishHandler(cost -> {
+                fh.accept(cost);
+                latch.countDown();
+            });
         }
 
-        // Step 2 启动浏览器
-        log.info("starting chrome browser [{}}", name);
-        this.webDriver = new ChromeDriver(chromeOptions);
-        log.info("chrome browser started, start execute chain");
-
-        // Step 3 遍历execute chain 执行
-        for (ExecuteGroup executeGroup : seleniumExecuteChain) {
-            String groupName = executeGroup.getName();
-
-            log.info("[{}]-[{}] group start execute", name, groupName);
-
-            // Step 3.1 判断该组操作是否能够进入
-            Boolean isEnter = executeGroup.getEnterCondition().apply(webDriver, params);
-            if (isEnter != null && isEnter) {
-                // Step 3.1.1 能够进入，开始执行group的逻辑
-                log.info("[{}]-[{}] group can execute", name, groupName);
-
-                executeGroup.getExecuteItems().forEach(item -> {
-                    // Step 3.1.1.1 带重试
-                    for (int j = 0; j < item.getRetryTimes(); j++) {
-                        try {
-                            log.info("[{}]-[{}]-[{}] start invoke logic [{}/{}]",
-                                    name, groupName, item.getName(), j, item.getRetryTimes());
-                            item.getExecuteLogic().execute(webDriver, params);
-                            // Step 3。1.1.2 运行成功，return下一个item执行
-                            return;
-                        } catch (Exception e) {
-                            // Step 3.1.1.3 运行失败，调用重试Rest方法后，继续执行
-                            log.error("[{}]-[{}]-[{}] invoke logic error, retry {}", name, groupName, item.getName(), j);
-                            item.getResetLogic().execute(webDriver, params);
-                        }
-                    }
-                    // Step 3.1.1.4 超过次数抛出异常
-                    throw new RuntimeException("[%S]-[%s]-[%s] invoke logic error, out of limit %s"
-                            .formatted(name, groupName, item.getName(), item.getRetryTimes()));
-                });
-            } else {
-                // Step 3.1.2 不能进入执行
-                log.warn("[{}]-[{}] group can not execute", name, groupName);
-            }
-
-            // Step 3.2 group 操作执行完，sleep一段时间
-            int timeout = random.nextInt(500, 5000);
-            log.info("[{}]-[{}] execute finish, sleep [{}]ms", name, groupName, timeout);
-            TimeUnit.MILLISECONDS.sleep(timeout);
-        }
+        asyncStart();
+        latch.await();
     }
 
 
     /**
+     * 异步启动selenium
+     */
+    public void asyncStart() {
+        init();
+
+        long start = System.currentTimeMillis();
+        try {
+            // Step 1 设置driver
+            String driverPath = params.getString(DRIVER_PATH);
+            if (driverPath != null && !driverPath.isEmpty()) {
+                System.setProperty("webdriver.chrome.driver", driverPath);
+            }
+
+            // Step 2 启动浏览器
+            launchBrowser();
+            webDriverLaunched();
+
+            // Step 3 遍历execute chain 执行
+            executeChainInvoke();
+        } catch (Exception e) {
+            log.error("selenium instance invoke error", e);
+        } finally {
+            if (finishHandler != null) {
+                finishHandler.accept(System.currentTimeMillis() - start);
+            }
+            webDriver.close();
+        }
+    }
+
+    /**
+     * 调用执行链
+     *
+     * @throws InterruptedException InterruptedException
+     */
+    private void executeChainInvoke() throws InterruptedException {
+        for (ExecuteGroup executeGroup : seleniumExecuteChain) {
+            String groupName = executeGroup.getName();
+
+            log.info("[{}]-[{}] group start execute", instanceId, groupName);
+
+            // Step 3.1 判断该组操作是否能够进入
+            Boolean isEnter = executeGroup.getEnterCondition().apply(webDriver, this);
+            if (isEnter != null && isEnter) {
+                // Step 3.1.1 能够进入，开始执行group的逻辑
+                log.info("[{}]-[{}] group can execute", instanceId, groupName);
+
+                executeGroup.getExecuteItems().forEach(item -> {
+                    // Step 3.1.1.1 带重试
+                    Integer retryTimes = item.getRetryTimes() == null ? 1 : item.getRetryTimes();
+                    for (int j = 0; j < retryTimes; j++) {
+                        try {
+                            log.info("[{}]-[{}]-[{}] start invoke logic [{}/{}]",
+                                    instanceId, groupName, item.getName(), j, retryTimes);
+                            ExecuteLogic executeLogic = item.getExecuteLogic();
+
+                            if (executeLogic != null) {
+                                executeLogic.execute(webDriver, this);
+                            }
+                            // Step 3。1.1.2 运行成功，return下一个item执行
+                            return;
+                        } catch (Exception e) {
+                            // Step 3.1.1.3 运行失败，调用重试Rest方法后，继续执行
+                            log.error("[{}]-[{}]-[{}] invoke logic error, retry {}", instanceId, groupName, item.getName(), j, e);
+
+                            ExecuteLogic resetLogic = item.getResetLogic();
+                            if (resetLogic != null) {
+                                resetLogic.execute(webDriver, this);
+                            }
+                        }
+                    }
+                    // Step 3.1.1.4 超过次数抛出异常
+                    throw new RuntimeException("[%S]-[%s]-[%s] invoke logic error, out of limit %s"
+                            .formatted(instanceId, groupName, item.getName(), retryTimes));
+                });
+            } else {
+                // Step 3.1.2 不能进入执行
+                log.warn("[{}]-[{}] group can not execute", instanceId, groupName);
+            }
+
+            // Step 3.2 group 操作执行完，sleep一段时间
+            int timeout = random.nextInt(500, 5000);
+            log.info("[{}]-[{}] execute finish, sleep [{}]ms", instanceId, groupName, timeout);
+            TimeUnit.MILLISECONDS.sleep(timeout);
+        }
+    }
+
+    /**
+     * 启动浏览器
+     *
+     * @throws IOException IOException
+     */
+    private void launchBrowser() throws IOException {
+        log.info("starting chrome browser [{}}", instanceId);
+        this.webDriver = new ChromeDriver(chromeOptions);
+        log.info("chrome browser started, start execute chain");
+
+        ((JavascriptExecutor) webDriver).executeScript("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})");
+
+        // Step 2.1 进入目标页面
+        String targetWebSite = (String) params.get(TARGET_WEB_SITE);
+        webDriver.get(targetWebSite);
+
+        // Step 2.2 设置代理
+        setProxyAuth();
+
+        // Step 2.3 加载用户数据
+
+
+        // Step 2.4 关闭多余标签页
+        String mainWindow = webDriver.getWindowHandles().iterator().next();
+        for (String handle : webDriver.getWindowHandles()) {
+            if (!handle.equals(mainWindow)) {
+                webDriver.switchTo().window(handle);
+                webDriver.close();
+            }
+        }
+    }
+
+    private void setProxyAuth() {
+
+    }
+
+    /**
      * 初始化参数
      *
-     * @param proxy    proxy
-     * @param username username
-     * @param password password
-     * @param params   params
+     * @param proxy  proxy
+     * @param params params
      * @return ChromeOptions
      * @throws IOException IOException
      */
-    private ChromeOptions initChromeOption(InetSocketAddress proxy, String username, String password, JSONObject params) throws IOException {
+    private ChromeOptions initChromeOption(SeleniumProxy proxy, JSONObject params) throws IOException {
         final ChromeOptions chromeOptions = new ChromeOptions();
+        // 设置用户数据目录
+        chromeOptions.addArguments("user-data-dir=" + SeleniumUtil.getUserDataDir(instanceId));
+        // 设置代理
+        chromeOptions.addArguments("--proxy-server=" + proxy.getHost() + ":" + proxy.getPort());
         chromeOptions.addArguments("--disable-gpu");
         chromeOptions.addArguments("--remote-allow-origins=*");
-        chromeOptions.addArguments("--start-maximized");
         chromeOptions.addArguments("--no-default-browser-check");
         chromeOptions.addArguments("--disable-popup-blocking");
         chromeOptions.addArguments("--disable-infobars");
+        chromeOptions.addArguments("---no-sandbox");
 
-        chromeOptions.addExtensions(new File(createProxyAuthExtension(proxy.getHostName(), proxy.getPort(), username, password)));
+        chromeOptions.addArguments("--disable-blink-features=AutomationControlled");  // 禁用自动化检测
+        chromeOptions.addArguments("--start-maximized");
+        chromeOptions.setExperimentalOption("useAutomationExtension", false);
+        chromeOptions.setExperimentalOption("excludeSwitches", new String[]{"enable-automation"});
+
+        JSONArray options = params.getJSONArray(OPTION_LIST);
+        if (options != null && !options.isEmpty()) {
+            for (int i = 0; i < options.size(); i++) {
+                chromeOptions.addArguments(options.getString(i));
+            }
+        }
 
         JSONArray extensionsPathList = params.getJSONArray(EXTENSIONS_PATH_LIST);
         if (extensionsPathList != null && !extensionsPathList.isEmpty()) {
@@ -207,364 +690,90 @@ public class SeleniumInstance {
             chromeOptions.addExtensions(files);
         }
 
-
         return chromeOptions;
     }
 }
+
+
 package cn.com.helei.browser_control;
+
+import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.Cookie;
+import org.openqa.selenium.JavascriptExecutor;
+import org.openqa.selenium.WebDriver;
 
 import java.io.*;
 
-public class SeleniumProxyAuth {
+@Slf4j
+public class SeleniumUtil {
 
-    private static final String BASE_DIR = System.getProperty("user.dir") + File.separator + "botData" + File.separator + "extensions";
+    private static final String SELENIUNM_FILE = System.getProperty("user.dir") + File.separator + "selenium_data";
 
-    public static String createProxyAuthExtension(String host, int port, String user, String pass) throws IOException {
-        String pluginPath = BASE_DIR + File.separator +  "proxy_auth_plugin_%s_%s.zip".formatted(host, port);
+    private static final String COOKIE_DIR = "cookie";
 
-        if (new File(pluginPath).exists()) {
-            return pluginPath;
-        }
+    private static final String USER_DATA_DIR = "user_data_dir";
 
-        String manifestJson = """
-                {
-                    "version": "1.0.0",
-                    "manifest_version": 2,
-                    "name": "Chrome Proxy",
-                    "permissions": [
-                        "proxy",
-                        "tabs",
-                        "unlimitedStorage",
-                        "storage",
-                        "<all_urls>",
-                        "webRequest",
-                        "webRequestBlocking"
-                    ],
-                    "background": {
-                        "scripts": ["background.js"]
-                    },
-                    "minimum_chrome_version":"22.0.0"
-                }
-                """;
-
-        String backgroundJs =
-                """
-                        var config = {
-                                mode: "fixed_servers",
-                                rules: {
-                                  singleProxy: {
-                                    scheme: "http",
-                                    host: "%s",
-                                    port: parseInt(%s)
-                                  },
-                                  bypassList: []
-                                }
-                              };
-                        chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
-                        function callbackFn(details) {
-                            return {
-                                authCredentials: {
-                                    username: "%s",
-                                    password: "%s"
-                                }
-                            };
-                        }
-                        chrome.webRequest.onAuthRequired.addListener(
-                                    callbackFn,
-                                    {urls: ["<all_urls>"]},
-                                    ['blocking']
-                        );
-                        """.formatted(host, port, user, pass);
-
-        File dir = new File(BASE_DIR + File.separator + "proxy_auth_extension_%s_%s".formatted(host, port));
-        if (dir.mkdir()) {
-            writeToFile(new File(dir, "manifest.json"), manifestJson);
-            writeToFile(new File(dir, "background.js"), backgroundJs);
-
-            // 创建 ZIP 扩展
-            File zipFile = new File(pluginPath);
-            try (FileOutputStream fos = new FileOutputStream(zipFile);
-                 BufferedOutputStream bos = new BufferedOutputStream(fos);
-                 java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(bos)) {
-
-                addToZipFile(new File(dir, "manifest.json"), zos);
-                addToZipFile(new File(dir, "background.js"), zos);
+    /**
+     * 保存 Cookies
+     *
+     * @param driver driver
+     * @param key    key
+     * @throws IOException IOException
+     */
+    public static void saveCookies(WebDriver driver, String key) throws IOException {
+        try (FileWriter fileWriter = new FileWriter(getCookieFile(key));
+             BufferedWriter writer = new BufferedWriter(fileWriter)) {
+            for (Cookie cookie : driver.manage().getCookies()) {
+                writer.write(cookie.getName() + ";" + cookie.getValue() + ";" + cookie.getDomain() +
+                        ";" + cookie.getPath() + ";" + cookie.getExpiry() + ";" + cookie.isSecure());
+                writer.newLine();
             }
-
-            return pluginPath;
-        } else {
-            throw new IOException("Failed to create extension directory");
+            log.info("key [{}] ✅ Cookies 已保存！", key);
         }
     }
 
-    private static void writeToFile(File file, String content) throws IOException {
-        try (FileWriter fw = new FileWriter(file);
-             BufferedWriter bw = new BufferedWriter(fw)) {
-            bw.write(content);
-        }
-    }
-
-    private static void addToZipFile(File file, java.util.zip.ZipOutputStream zos) throws IOException {
-        try (FileInputStream fis = new FileInputStream(file);
-             BufferedInputStream bis = new BufferedInputStream(fis)) {
-
-            java.util.zip.ZipEntry zipEntry = new java.util.zip.ZipEntry(file.getName());
-            zos.putNextEntry(zipEntry);
-
-            byte[] bytes = new byte[1024];
-            int length;
-            while ((length = bis.read(bytes)) >= 0) {
-                zos.write(bytes, 0, length);
+    /**
+     * 读取 Cookies 并重新加载
+     *
+     * @param driver driver
+     * @param key    key
+     * @throws IOException IOException
+     */
+    public static void loadCookies(WebDriver driver, String key) throws IOException {
+        try (FileReader fileReader = new FileReader(getCookieFile(key));
+             BufferedReader reader = new BufferedReader(fileReader)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String[] parts = line.split(";");
+                Cookie cookie = new Cookie(parts[0], parts[1], parts[2], parts[3], null, Boolean.parseBoolean(parts[5]));
+                driver.manage().addCookie(cookie);
             }
-        }
-    }
-}
-package cn.com.helei.browser_control;
-
-import com.alibaba.fastjson.JSONObject;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
-import org.openqa.selenium.By;
-import org.openqa.selenium.TimeoutException;
-import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.WebElement;
-import org.openqa.selenium.support.ui.ExpectedConditions;
-import org.openqa.selenium.support.ui.WebDriverWait;
-
-import java.awt.*;
-import java.awt.event.KeyEvent;
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Random;
-import java.util.Set;
-import java.util.concurrent.TimeUnit;
-
-class SeleniumInstanceTest {
-
-    private static InetSocketAddress proxy = new InetSocketAddress("localhost", 1234);
-
-    private static String username = "username";
-
-    private static String password = "password";
-
-    private static JSONObject params;
-
-    private static SeleniumInstance seleniumInstance;
-
-    @BeforeAll
-    public static void setUp() throws IOException {
-        params = new JSONObject();
-        seleniumInstance = new SeleniumInstance(proxy, username, password, params);
-    }
-
-
-    @Test
-    public void test1() throws InterruptedException {
-        seleniumInstance
-                .addExecuteFun(ExecuteGroup.builder()
-                        .name("初始化")
-                        .enterCondition((webDriver, params) -> {
-                            return true;
-                        })
-                        .executeItems(List.of(
-                                ExecuteItem.builder().name("代理验证").executeLogic(SeleniumInstanceTest::proxyVerify).build()
-                        ))
-                        .build()
-                )
-                .addExecuteFun(ExecuteGroup.builder()
-                        .name("登录HaHa")
-                        .enterCondition((webDriver, params) -> {
-                            return true;
-                        })
-                        .executeItems(List.of(
-                                ExecuteItem.builder().name("切换到目标页面").executeLogic(SeleniumInstanceTest::changeToTargetPage).build(),
-                                ExecuteItem.builder().name("登录账号").executeLogic(SeleniumInstanceTest::changeToTargetPage).build(),
-                                ExecuteItem.builder().name("导入钱包").executeLogic(SeleniumInstanceTest::changeToTargetPage).build()
-                        ))
-                        .build()
-                )
-                .addExecuteFun(ExecuteGroup.builder()
-                        .name("每日任务")
-                        .enterCondition((webDriver, params) -> {
-                            return true;
-                        })
-                        .executeItems(List.of(
-                                ExecuteItem.builder().name("进入Swap页面").executeLogic(SeleniumInstanceTest::enterSwapPage).build(),
-                                ExecuteItem.builder().name("交换Monad").executeLogic(SeleniumInstanceTest::monadSwap).build()
-                        ))
-                        .build()
-                )
-                .start(params.getString("name"));
-    }
-
-    private static void monadSwap(WebDriver webDriver, JSONObject params) {
-        WebDriverWait wait = new WebDriverWait(webDriver, Duration.ofSeconds(10));
-
-        WebElement swapCountInput = wait.until(ExpectedConditions.elementToBeClickable(By.xpath(" //*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[1]/div[2]/div/div[3]/input")));
-
-        WebDriverWait swapConfirmWait = new WebDriverWait(webDriver, Duration.ofSeconds(60));
-        Random random = new Random();
-        int monCount = random.nextInt(1, 4);
-        int successTimes = 0;
-
-        while (successTimes < monCount) {
-            WebElement token2Selector = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[3]/div[1]/button")));
-            token2Selector.click();
-
-            List<WebElement> token2List = webDriver.findElements(By.xpath(" //*[@id=\"app-content\"]/div/div[2]/div[2]/div[3]/div[2]/div[3]/div//button"));
-            token2List.removeFirst();
-
-            token2List.get(random.nextInt(token2List.size())).click();
-
-            double count = random.nextDouble(0.0001, 0.001);
-            swapCountInput.sendKeys("");
-            swapCountInput.sendKeys("%.4f".formatted(count));
-            // 等待按钮可点击
-            try {
-                WebElement swapConfirmBtn = swapConfirmWait.until(ExpectedConditions.elementToBeClickable(By.xpath(" //*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[6]/button")));
-                swapConfirmBtn.click();
-                WebElement closeTransBtn = swapConfirmWait.until(ExpectedConditions.elementToBeClickable(By.xpath(" //*[@id=\"app-content\"]/div/div[2]/div[2]/div[3]/div[2]/div/button")));
-                closeTransBtn.click();
-                successTimes++;
-            } catch (TimeoutException timeoutException) {
-                System.out.println("超时");
-            }
+            log.info("key [{}] ✅ Cookies 已加载！", key);
         }
     }
 
-    private static void enterSwapPage(WebDriver webDriver, JSONObject params) {
-        WebDriverWait wait = new WebDriverWait(webDriver, Duration.ofSeconds(10));
 
-        WebElement legacyPage = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"tab:r0:1\"]/div")));
-        legacyPage.click();
-
-        WebElement networkSelectBtn = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[1]")));
-        networkSelectBtn.click();
-
-        WebElement teesNetSelect = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[4]/div[2]/div[2]/ul/li[2]")));
-        teesNetSelect.click();
-
-        WebElement monadTestNetBtn = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[4]/div[2]/div[2]/div[2]/button[1]")));
-        monadTestNetBtn.click();
-        try {
-            TimeUnit.SECONDS.sleep(3);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
-
-        WebElement swapPageBtn = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[3]/div[2]/div[1]/div[1]/div[2]/div[2]/button[3]")));
-        swapPageBtn.click();
-        try {
-            TimeUnit.SECONDS.sleep(5);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
+    public static void saveLocalStorage(WebDriver driver, String key) {
+        JavascriptExecutor js = (JavascriptExecutor) driver;
     }
 
-    private static void importWallet(WebDriver webDriver, JSONObject params) {
-        WebDriverWait wait = new WebDriverWait(webDriver, Duration.ofSeconds(10));
 
-        WebElement importWalletBtn = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[5]/div[2]/button")));
-        importWalletBtn.click();
-
-        List<WebElement> inputs = webDriver.findElements(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[3]/div//input"));
-
-        String[] split = params.getString("wallet").split(" ");
-
-        for (int i = 0; i < inputs.size(); i++) {
-            inputs.get(i).sendKeys(split[i]);
-        }
-
-
-        WebElement importWalletConfirm
-                = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[4]/button")));
-        importWalletConfirm.click();
-
-
-        WebElement importSuccessConfirm
-                = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/button")));
-        importSuccessConfirm.click();
-
-        WebElement skipNowBtn = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div[2]/div[2]/div[3]/button[2]")));
-        skipNowBtn.click();
-
-        try {
-            TimeUnit.SECONDS.sleep(5);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
+    public static String getUserDataDir(String key) {
+        return getUserDataRootDir() + File.separator + key;
     }
 
-    private static void loginAccount(WebDriver webDriver, JSONObject params) {
-        WebDriverWait wait = new WebDriverWait(webDriver, Duration.ofSeconds(10));
 
-        WebElement button = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[3]/button[2]")));
-        button.click();
-
-        // 找到 email 输入框并输入邮箱
-        webDriver.findElement(By.cssSelector("input[type='email']")).sendKeys(params.getString("email"));
-
-        // 找到 password 输入框并输入密码
-        webDriver.findElement(By.cssSelector("input[type='password']")).sendKeys(params.getString("password"));
-
-        WebElement loginButton = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[3]/div[3]/button[1]")));
-        loginButton.click();
-
-        WebElement pinCodeInput = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[3]/div[1]/input")));
-        pinCodeInput.sendKeys("123456789");
-        WebElement pinCodeConfirmInput = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[3]/div[2]/input")));
-        pinCodeConfirmInput.sendKeys("123456789");
-        WebElement confirmPinCOde = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[4]/button")));
-        confirmPinCOde.click();
-
-        WebElement agreeBtn = wait.until(ExpectedConditions.elementToBeClickable(By.xpath("//*[@id=\"app-content\"]/div/div[2]/div[2]/label/input")));
-        agreeBtn.click();
+    public static String getUserDataRootDir() {
+        return SELENIUNM_FILE + File.separator + USER_DATA_DIR;
     }
 
-    private static void changeToTargetPage(WebDriver webDriver, JSONObject params) {
-        // 获取所有窗口句柄
-        Set<String> handles = webDriver.getWindowHandles();
-        for (String handle : handles) {
-            webDriver.switchTo().window(handle);
-            if (webDriver.getCurrentUrl().equals("data:,")) {
-                webDriver.close(); // 关闭 data:, 页面
-                break;
-            }
-        }
 
-        // 切换到第二个标签页（索引 1）
-        List<String> windowList = new ArrayList<>(webDriver.getWindowHandles());
-        webDriver.switchTo().window(windowList.getFirst());
+    public static String getCookieFile(String key) {
+        return getCookieRootDir() + File.separator + key;
     }
 
-    private static void proxyVerify(WebDriver webDriver, JSONObject params) {
-        // 使用 Robot 模拟输入用户名和密码
-        Robot robot = null;
-        try {
-            robot = new Robot();
-        } catch (AWTException e) {
-            throw new RuntimeException(e);
-        }
-        robot.delay(5000); // 等待弹框出现
-
-        // 输入用户名
-        for (char c : username.toCharArray()) {
-            robot.keyPress(KeyEvent.getExtendedKeyCodeForChar(c));
-            robot.keyRelease(KeyEvent.getExtendedKeyCodeForChar(c));
-        }
-
-        robot.keyPress(KeyEvent.VK_TAB);
-        robot.keyRelease(KeyEvent.VK_TAB);
-
-        // 输入密码
-        for (char c : password.toCharArray()) {
-            robot.keyPress(KeyEvent.getExtendedKeyCodeForChar(c));
-            robot.keyRelease(KeyEvent.getExtendedKeyCodeForChar(c));
-        }
-        robot.keyPress(KeyEvent.VK_ENTER);
-        robot.keyRelease(KeyEvent.VK_ENTER);
+    public static String getCookieRootDir() {
+        return SELENIUNM_FILE + File.separator + COOKIE_DIR;
     }
+
 }
