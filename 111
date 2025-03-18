@@ -1,294 +1,2002 @@
-package cn.com.helei.example.lens_testnet_faucet;
+package cn.com.vortexa.nameserver.processor;
 
-import cn.com.helei.bot_father.anno.BotApplication;
-import cn.com.helei.bot_father.bot.AutoLaunchBot;
-import cn.com.helei.bot_father.config.AutoBotConfig;
-import cn.com.helei.bot_father.service.BotApi;
+
+import cn.com.vortexa.nameserver.constant.ExtFieldsConstants;
+import cn.com.vortexa.nameserver.constant.RegistryState;
+import cn.com.vortexa.nameserver.constant.RemotingCommandCodeConstants;
+import cn.com.vortexa.nameserver.constant.RemotingCommandFlagConstants;
+import cn.com.vortexa.nameserver.dto.RemotingCommand;
+import cn.com.vortexa.nameserver.dto.ServiceInstance;
+import cn.com.vortexa.nameserver.protocol.Serializer;
+import cn.com.vortexa.nameserver.service.IRegistryService;
+import io.netty.channel.Channel;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.Map;
+import java.util.Objects;
+
+/**
+ * @author helei
+ * @since 2025-03-12
+ */
 @Slf4j
-@BotApplication(
-        name = "lens_testnet_faucet_bot",
-        accountParams = {LensTestnetFaucetBot.LENS_TESTNET_WALLET_ADDRESS}
-)
-public class LensTestnetFaucetBot extends AutoLaunchBot<LensTestnetFaucetBot> {
+public class ServiceRegistryProcessor {
 
-    public static final String LENS_TESTNET_WALLET_ADDRESS = "lens_testnet_wallet_address";
+    private final IRegistryService registryService;
 
-    @Override
-    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
-
+    public ServiceRegistryProcessor(IRegistryService registryService) {
+        this.registryService = registryService;
     }
 
-    @Override
-    protected LensTestnetFaucetBot getInstance() {
-        return this;
+    /**
+     * 注册客户端服务
+     *
+     * @param channel             channel
+     * @param remotingCommand remotingCommand
+     * @return CompletableFuture<RegistryState>
+     */
+    public RemotingCommand handlerClientServiceRegistry(
+            Channel channel,
+            RemotingCommand remotingCommand
+    ) {
+        String group = remotingCommand.getGroup();
+        String serviceId = remotingCommand.getServiceId();
+        String clientId = remotingCommand.getClientId();
+
+        String[] serviceAddress = channel.remoteAddress().toString().split(":");
+
+        ServiceInstance serviceInstance = ServiceInstance.builder()
+                .group(group)
+                .serviceId(serviceId)
+                .clientId(clientId)
+                .host(serviceAddress[0])
+                .port(Integer.parseInt(serviceAddress[1]))
+                .build();
+
+        Map<String, Object> serviceProps = null;
+        if (remotingCommand.getBody() != null && remotingCommand.getBody().length > 0) {
+            try {
+                serviceProps = Serializer.Algorithm.Protostuff.deserialize(remotingCommand.getBody(), Map.class);
+            } catch (Exception e) {
+                log.warn("get service props from remoting command error, {}", e.getMessage());
+            }
+        }
+
+
+        RemotingCommand response = new RemotingCommand();
+        response.setFlag(RemotingCommandFlagConstants.CLIENT_REGISTRY_SERVICE_RESPONSE);
+        response.setTransactionId(remotingCommand.getTransactionId());
+        RegistryState registryState;
+
+        try {
+            registryState = registryService.registryService(serviceInstance, serviceProps);
+
+            if (registryState == RegistryState.OK) {
+                response.setCode(RemotingCommandCodeConstants.SUCCESS);
+            } else {
+                response.setCode(RemotingCommandCodeConstants.FAIL);
+            }
+
+            log.debug("registry state [{}]", registryState);
+        } catch (Exception e) {
+            log.error("[{}]-[{}] registry error", group, serviceId, e);
+            registryState = RegistryState.UNKNOWN_ERROR;
+            response.setCode(RemotingCommandCodeConstants.FAIL);
+        }
+
+        response.addExtField(ExtFieldsConstants.NAMESERVER_REGISTRY_STATUS, registryState.name());
+        return response;
     }
-
-
 }
-package cn.com.helei.example.lens_testnet_faucet;
+package cn.com.vortexa.nameserver.processor;
 
+import cn.com.vortexa.nameserver.constant.ExtFieldsConstants;
+import cn.com.vortexa.nameserver.constant.LoadBalancePolicy;
+import cn.com.vortexa.nameserver.constant.RemotingCommandCodeConstants;
+import cn.com.vortexa.nameserver.constant.RemotingCommandFlagConstants;
+import cn.com.vortexa.nameserver.dto.RegisteredService;
+import cn.com.vortexa.nameserver.dto.RemotingCommand;
+import cn.com.vortexa.nameserver.dto.ServiceInstanceVO;
+import cn.com.vortexa.nameserver.service.IRegistryService;
+import cn.com.vortexa.websocket.netty.util.ProtostuffUtils;
+import io.netty.channel.Channel;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+
+/**
+ * @author helei
+ * @since 2025-03-12
+ */
+@Slf4j
+public class ServiceDiscoverProcessor {
+
+    private final IRegistryService registryService;
+
+    public ServiceDiscoverProcessor(IRegistryService registryService) {
+        this.registryService = registryService;
+    }
+
+    /**
+     * 处理服务发现请求
+     *
+     * @param channel channel
+     * @param remotingCommand remotingCommand
+     * @return RemotingCommand
+     */
+    public RemotingCommand handlerDiscoverService(Channel channel, RemotingCommand remotingCommand) {
+        String group = remotingCommand.getGroup();
+        String serviceId = remotingCommand.getServiceId();
+        String clientId = remotingCommand.getClientId();
+        LoadBalancePolicy policy = LoadBalancePolicy.valueOf(remotingCommand.getExtFieldsValue(
+            ExtFieldsConstants.NAMESERVER_DISCOVER_LOAD_BALANCE_POLICY)
+        );
+
+        List<RegisteredService> services = discoverServiceList(group, clientId, serviceId, policy);
+
+        RemotingCommand response = new RemotingCommand();
+        response.setFlag(RemotingCommandFlagConstants.CLIENT_DISCOVER_SERVICE_RESPONSE);
+        response.setCode(RemotingCommandCodeConstants.SUCCESS);
+        response.setBody(ProtostuffUtils.serialize(new ServiceInstanceVO(services)));
+        return response;
+    }
+
+    /**
+     * 查询服务列表
+     *
+     * @param group group
+     * @param serviceId serviceId
+     * @param clientId clientId
+     * @param policy policy
+     * @return List<RegisteredService>
+     */
+    public List<RegisteredService> discoverServiceList(
+        String group,
+        String serviceId,
+        String clientId,
+        LoadBalancePolicy policy
+    ) {
+        List<RegisteredService> serviceInstances = registryService.queryServiceInstance(group, serviceId, clientId);
+        log.debug("[{}]-[{}]-[{}] discover service total [{}]", group, serviceId, clientId, serviceInstances.size());
+        // TODO 根据策略宣泄
+
+        return serviceInstances;
+    }
+}
+package cn.com.vortexa.nameserver.processor;
+
+import cn.com.vortexa.nameserver.dto.RemotingCommand;
+import io.netty.channel.Channel;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * @author h30069248
+ * @since 2025/3/18 9:46
+ */
+@Slf4j
+public class PongCommandProcessor {
+    public RemotingCommand handlerPong(String clientName, Channel channel, RemotingCommand remotingCommand) {
+        log.debug("receive client[{}] pong", clientName);
+
+        return null;
+    }
+}
+package cn.com.vortexa.nameserver.processor;
+
+import cn.com.vortexa.nameserver.dto.RemotingCommand;
+import io.netty.channel.Channel;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * @author h30069248
+ * @since 2025/3/18 9:46
+ */
+@Slf4j
+public class PingCommandProcessor {
+    public RemotingCommand handlerPing(String clientName, Channel channel, RemotingCommand remotingCommand) {
+        log.debug("receive client[{}] ping", clientName);
+
+        return null;
+    }
+}
+package cn.com.vortexa.nameserver.constant;
+
+
+public enum NameServerState {
+    JUST_START,
+    INIT_FINISH,
+    RUNNING,
+    SHUT_DOWN
+}
+package cn.com.vortexa.nameserver.server;
+
+import cn.com.vortexa.nameserver.config.NameserverServerConfig;
+import cn.com.vortexa.nameserver.dto.ServiceInstance;
+import cn.com.vortexa.nameserver.exception.NameserverException;
+import cn.com.vortexa.nameserver.service.impl.FileRegistryService;
+import cn.com.vortexa.nameserver.service.impl.MemoryConnectionService;
+
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+
+import java.util.concurrent.TimeUnit;
+
+class NameserverServiceTest {
+
+    static NameserverServerConfig nameserverServerConfig;
+
+    static NameserverService nameserverService;
+
+    @BeforeAll
+    public static void setUp() throws NameserverException {
+        nameserverServerConfig = new NameserverServerConfig();
+
+        ServiceInstance address = ServiceInstance.builder()
+                .group("default")
+                .serviceId("sahara")
+                .clientId("sahara_test")
+                .host("127.0.0.1")
+                .port(8080)
+                .build();
+
+        nameserverServerConfig.setServiceInstance(address);
+
+
+        nameserverService = new NameserverService(NameserverServerConfig.DEFAULT);
+
+        nameserverService.init(new FileRegistryService(), new MemoryConnectionService());
+    }
+
+
+    @Test
+    public void test() throws NameserverException, InterruptedException {
+        nameserverService.start();
+
+        TimeUnit.SECONDS.sleep(10000);
+    }
+}
+package cn.com.vortexa.nameserver.server;
+
+import cn.com.vortexa.nameserver.config.NameserverServerConfig;
+import cn.com.vortexa.nameserver.constant.NameServerState;
+import cn.com.vortexa.nameserver.constant.NameserverSystemConstants;
+import cn.com.vortexa.nameserver.exception.NameserverException;
+import cn.com.vortexa.nameserver.processor.NameserverProcessorAdaptor;
+import cn.com.vortexa.nameserver.service.IConnectionService;
+import cn.com.vortexa.nameserver.service.IRegistryService;
+import cn.com.vortexa.nameserver.util.RemotingCommandDecoder;
+import cn.com.vortexa.nameserver.util.RemotingCommandEncoder;
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.*;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
+import io.netty.handler.codec.LengthFieldPrepender;
+import io.netty.handler.timeout.IdleStateHandler;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
-import javax.imageio.ImageIO;
-import java.awt.*;
-import java.awt.image.BufferedImage;
-import java.io.File;
-import java.io.IOException;
-import java.util.*;
-import java.util.List;
+import static cn.com.vortexa.nameserver.constant.NameServerState.*;
 
 @Slf4j
-public class LensChallengeResolver {
+@Getter
+public class NameserverService {
 
-    static int[][] directions = {{0, 1}, {1, 0}, {0, -1}, {-1, 0}}; // 右、下、左、上
+    private final NameserverServerConfig nameserverServerConfig;    //nameServerConfig
+    private final long startTime;   //启动时间
+    private volatile NameServerState state; // name server state
+    private ServerBootstrap serverBootstrap;    //serverBootstrap
+    private ChannelFuture nameserverChannelFuture;  //nameserverChannelFuture
 
-    public static void main(String[] args) throws IOException {
-        BufferedImage image = ImageIO.read(new File("D:\\workspace\\DepinBot\\auto-bot-v_1.1\\bot-example\\src\\main\\resources\\mate.jpg"));
+    private IRegistryService registryService;
+    private IConnectionService connectionService;
 
-        resolvetest(image);
+    public NameserverService(NameserverServerConfig nameserverServerConfig) throws NameserverException {
+        this.nameserverServerConfig = nameserverServerConfig;
+        updateNameServerState(JUST_START);
+        this.startTime = System.currentTimeMillis();
 
     }
 
-    public static List<String> resolvetest(BufferedImage image) throws IOException {
-        int width = image.getWidth();
-        int height = image.getHeight();
+    /**
+     * 初始化
+     *
+     * @param registryService registryService
+     */
+    public void init(
+        IRegistryService registryService,
+        IConnectionService connectionService
+    ) throws NameserverException {
+        this.registryService = registryService;
+        this.connectionService = connectionService;
+        NameserverProcessorAdaptor adaptor = new NameserverProcessorAdaptor(this, registryService);
 
-        int[][] maze = new int[width][height];
-        int[] target = null;
-        // 初始化地图和并查集
-        UnionFind uf = new UnionFind(width * height);
+        serverBootstrap = new ServerBootstrap()
+            .group(new NioEventLoopGroup(nameserverServerConfig.getNioThreadCount()), new NioEventLoopGroup())
+            .channel(NioServerSocketChannel.class)
+            .option(ChannelOption.SO_BACKLOG, 1024)
+            .option(ChannelOption.SO_REUSEADDR, true)
+            .childOption(ChannelOption.SO_KEEPALIVE, false)
+            .childOption(ChannelOption.TCP_NODELAY, true)
+            .childOption(ChannelOption.SO_SNDBUF, 65535)
+            .childOption(ChannelOption.SO_RCVBUF, 65535)
+            .childHandler(new ChannelInitializer<NioSocketChannel>() {
+                @Override
+                protected void initChannel(NioSocketChannel ch) throws Exception {
+                    ch.pipeline().addLast(new IdleStateHandler(
+                        0, 0, nameserverServerConfig.getServiceOfflineTtl()));
 
-        for (int i = 0; i < width; i++) {
-            for (int j = 0; j < height; j++) {
-                // 初始化矩阵
-                int color = image.getRGB(i, j);
-                if (isGreen(color)) {
-                    target = new int[]{i, j};
-                    maze[i][j] = 0;
-                } else if (isBlack(color)) {
-                    maze[i][j] = 1;
-                } else {
-                    maze[i][j] = 0;
+                    ch.pipeline().addLast(new LengthFieldBasedFrameDecoder(
+                        NameserverSystemConstants.MAX_FRAME_LENGTH, 0,
+                        4, 0, 4));
+
+                    ch.pipeline().addLast(new LengthFieldPrepender(4));
+
+                    ch.pipeline().addLast(new RemotingCommandDecoder());
+                    ch.pipeline().addLast(new RemotingCommandEncoder());
+                    ch.pipeline().addLast(adaptor);
                 }
+            });
 
-                // 初始化并查集
-                int index = getIndex(i, j, height);
+        updateNameServerState(INIT_FINISH);
+    }
 
-                for (int k = 2; k < 4; k++) {
-                    int newX = i + directions[k][0];
-                    int newY = j + directions[k][1];
-                    if (newX >= 0 && newY >= 0 && maze[newX][newY] == maze[i][j]) {
-                        uf.union(index, getIndex(newX, newY, height));
-                    }
+    /**
+     * 启动
+     *
+     * @throws NameserverException NameserverStartException
+     */
+    public void start() throws NameserverException {
+        log.info("start nameserver [{}], configuration:\n {}",
+            nameserverServerConfig.getServiceInstance(), nameserverServerConfig);
+
+        try {
+            nameserverChannelFuture = serverBootstrap.bind(
+                nameserverServerConfig.getServiceInstance().getHost(),
+                nameserverServerConfig.getServiceInstance().getPort()
+            );
+
+            nameserverChannelFuture.addListener(new ChannelFutureListener() {
+                @Override
+                public void operationComplete(ChannelFuture channelFuture) throws Exception {
+                    updateNameServerState(RUNNING);
                 }
+            });
+
+        } catch (Exception e) {
+            updateNameServerState(SHUT_DOWN);
+            throw new NameserverException("start error", e);
+        }
+    }
+
+    public String getName() {
+        return nameserverServerConfig.getServiceInstance().getGroup() + ":"
+            + nameserverServerConfig.getServiceInstance().getServiceId();
+    }
+
+    /**
+     * 关闭连接某客户端的channel连接
+     *
+     * @param channel channel
+     */
+    public void closeChannel(Channel channel) {
+
+    }
+
+    /**
+     * 更新状态
+     *
+     * @param newState newState
+     * @throws NameserverException NameserverException
+     */
+    private void updateNameServerState(NameServerState newState) throws NameserverException {
+        synchronized (this) {
+            boolean isUpdate = switch (newState) {
+                case JUST_START: {
+                    yield state == null || state == JUST_START;
+                }
+                case INIT_FINISH:
+                    yield state == JUST_START || state == INIT_FINISH;
+                case RUNNING:
+                    yield state == INIT_FINISH;
+                case SHUT_DOWN:
+                    yield state != SHUT_DOWN;
+            };
+
+            if (isUpdate) {
+                log.info("nameserver[{}] status updated [{}]->[{}]", nameserverServerConfig.getServiceInstance(), state,
+                    newState);
+                state = newState;
+            } else {
+                throw new NameserverException("state cannot from [%s] to [%s]".formatted(state, newState));
             }
         }
+    }
+}
+package cn.com.vortexa.nameserver.processor;
 
-        // 查找起点和重点
+import cn.com.vortexa.common.util.NamedThreadFactory;
+import cn.com.vortexa.nameserver.constant.*;
+import cn.com.vortexa.nameserver.dto.RemotingCommand;
+import cn.com.vortexa.nameserver.server.NameserverService;
+import cn.com.vortexa.nameserver.service.IRegistryService;
+import cn.com.vortexa.websocket.netty.base.BaseWebSocketInboundHandler;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandler;
+import io.netty.channel.ChannelHandlerContext;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 
-        int[] start = null;
-        int startCount = Integer.MAX_VALUE;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
-        for (Integer parent : uf.getParents()) {
-            int[] point = getPoint(parent, height);
-            int color = image.getRGB(point[0], point[1]);
-            log.info("{}-{}  [{}]", point[0], point[1], color);
+/**
+ * @author helei
+ * @since 2025/03/11
+ */
+@Slf4j
+@ChannelHandler.Sharable
+public class NameserverProcessorAdaptor extends BaseWebSocketInboundHandler<RemotingCommand> {
 
-            if (isBlack(color)) {
-                int rank = uf.getRank(parent);
-                if (startCount > rank) {
-                    startCount = rank;
-                    start = point;
+    @Getter
+    private final NameserverService nameserverService;
+
+    private final ExecutorService executorService;
+
+    private final PingCommandProcessor pingCommandProcessor;
+
+    private final PongCommandProcessor pongCommandProcessor;
+
+    private final ServiceRegistryProcessor serviceRegistryProcessor;
+
+    private final ServiceDiscoverProcessor serviceDiscoverProcessor;
+
+    public NameserverProcessorAdaptor(
+        NameserverService nameServerService,
+        IRegistryService registryService
+    ) {
+        super();
+        this.nameserverService = nameServerService;
+        this.executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("nameserver-processor"));
+        this.pingCommandProcessor = new PingCommandProcessor();
+        this.pongCommandProcessor = new PongCommandProcessor();
+        this.serviceRegistryProcessor = new ServiceRegistryProcessor(registryService);
+        this.serviceDiscoverProcessor = new ServiceDiscoverProcessor(registryService);
+    }
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext ctx, RemotingCommand remotingCommand) throws Exception {
+        Integer opt = remotingCommand.getFlag();
+        String txId = remotingCommand.getTransactionId();
+
+        Channel channel = ctx.channel();
+        String clientName = channel.attr(NettyConstants.CLIENT_NAME).get();
+        log.debug("receive client[{}] command [{}]", clientName, remotingCommand);
+
+        CompletableFuture.supplyAsync(() -> switch (opt) {
+                case RemotingCommandFlagConstants.PING ->
+                    pingCommandProcessor.handlerPing(clientName, channel, remotingCommand);
+                case RemotingCommandFlagConstants.PONG ->
+                    pongCommandProcessor.handlerPong(clientName, channel, remotingCommand);
+                case RemotingCommandFlagConstants.CLIENT_REGISTRY_SERVICE ->
+                    serviceRegistryProcessor.handlerClientServiceRegistry(channel, remotingCommand);
+                case RemotingCommandFlagConstants.CLIENT_DISCOVER_SERVICE ->
+                    serviceDiscoverProcessor.handlerDiscoverService(channel, remotingCommand);
+                default -> throw new IllegalStateException("Unexpected value: " + opt);
+            }, executorService)
+            .whenCompleteAsync((response, ex) -> {
+                if (ex != null) {
+                    log.error("client[{}] command process failed", clientName, ex);
                 }
-            }
-        }
-
-        log.info("start[{}], target[{}]", start, target);
-        if (start != null) {
-
-            List<int[]> path = aStar(maze, start, target);
-            if (path.size() > 2) {
-                Graphics2D graphics = image.createGraphics();
-                graphics.setColor(Color.ORANGE);
-                graphics.setStroke(new BasicStroke(2));
-
-                int[] p1 = path.getFirst();
-
-                for (int i = 1; i < path.size(); i++) {
-                    int[] p2 = path.get(i);
-                    graphics.drawLine(p1[0], p1[1], p2[0], p2[1]);
-                    p1 = p2;
+                if (response != null) {
+                    response.setTransactionId(txId);
+                    ctx.channel().writeAndFlush(response);
                 }
+            });
+    }
+
+    @Override
+    protected void handleAllIdle(ChannelHandlerContext ctx) {
+        nameserverService.closeChannel(ctx.channel());
+    }
+}
+package cn.com.vortexa.nameserver;
+
+
+import cn.com.vortexa.nameserver.config.NameserverClientConfig;
+import cn.com.vortexa.nameserver.constant.NameserverSystemConstants;
+import cn.com.vortexa.nameserver.dto.RemotingCommand;
+import cn.com.vortexa.nameserver.dto.ServiceInstance;
+import cn.com.vortexa.nameserver.processor.NameClientProcessorAdaptor;
+import cn.com.vortexa.nameserver.util.DistributeIdMaker;
+import cn.com.vortexa.nameserver.util.RemotingCommandDecoder;
+import cn.com.vortexa.nameserver.util.RemotingCommandEncoder;
+import cn.com.vortexa.websocket.netty.base.AbstractWebsocketClient;
+import cn.hutool.core.util.StrUtil;
+import io.netty.channel.*;
+import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
+import io.netty.handler.codec.LengthFieldPrepender;
+import io.netty.handler.timeout.IdleStateHandler;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.Optional;
+
+/**
+ * @author helei
+ * @since 2025-03-13
+ */
+@Slf4j
+public class NameserverClient extends AbstractWebsocketClient<RemotingCommand> {
+
+    private final NameserverClientConfig clientConfig;
+
+    public NameserverClient(NameserverClientConfig clientConfig) {
+        this(clientConfig, new NameClientProcessorAdaptor(clientConfig));
+    }
+
+    public NameserverClient(NameserverClientConfig clientConfig, NameClientProcessorAdaptor nameClientProcessorAdaptor) {
+        super(clientConfig.getRegistryCenterUrl(), clientConfig.getServiceInstance().toString(), nameClientProcessorAdaptor);
+        super.setHandshake(false);
+        this.clientConfig = clientConfig;
+        ((NameClientProcessorAdaptor) getHandler()).setNameserverClient(this);
+    }
+
+    @Override
+    public void addPipeline(ChannelPipeline p) {
+        p.addLast(new IdleStateHandler(0,
+                0, clientConfig.getServiceOfflineTtl()));
+
+        p.addLast(new LengthFieldBasedFrameDecoder(NameserverSystemConstants.MAX_FRAME_LENGTH,
+                0, 4, 0, 4));
+        p.addLast(new LengthFieldPrepender(4));
+
+        p.addLast(new RemotingCommandDecoder());
+        p.addLast(new RemotingCommandEncoder());
+        p.addLast(getHandler());
+    }
+
+    @Override
+    protected void doSendMessage(RemotingCommand message, boolean b) {
+        ServiceInstance serviceInstance = clientConfig.getServiceInstance();
+
+        if (b && StrUtil.isNotBlank(message.getTransactionId())) {
+            message.setTransactionId(
+                    DistributeIdMaker.DEFAULT.nextId(serviceInstance.getServiceId())
+            );
+        }
+
+        message.setGroup(serviceInstance.getGroup());
+        message.setServiceId(serviceInstance.getServiceId());
+        message.setClientId(serviceInstance.getClientId());
+
+        Optional.of(getChannel()).ifPresent(channel -> channel.writeAndFlush(message));
+    }
+
+    @Override
+    public void sendPing() {
+        sendRequest(RemotingCommand.PING_COMMAND);
+    }
+
+    @Override
+    public void sendPong() {
+        sendRequest(RemotingCommand.PONG_COMMAND);
+    }
+
+    /**
+     * 转换为写入channel的数据
+     */
+    @Override
+    protected RemotingCommand convertToChannelWriteData(RemotingCommand request) {
+        return request;
+    }
+}
+package cn.com.vortexa.nameserver.processor;
+
+
+import cn.com.vortexa.nameserver.NameserverClient;
+import cn.com.vortexa.nameserver.config.NameserverClientConfig;
+import cn.com.vortexa.nameserver.constant.RemotingCommandFlagConstants;
+import cn.com.vortexa.nameserver.dto.RemotingCommand;
+import cn.com.vortexa.nameserver.util.DistributeIdMaker;
+import cn.com.vortexa.websocket.netty.base.AbstractWebSocketClientHandler;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import io.netty.channel.ChannelHandlerContext;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * @author helei
+ * @since 2025-03-13
+ */
+@Slf4j
+public class NameClientProcessorAdaptor extends AbstractWebSocketClientHandler<RemotingCommand> {
+
+    @Getter
+    private final NameserverClientConfig clientConfig;
+
+    @Setter
+    private NameserverClient nameserverClient;
+
+    public NameClientProcessorAdaptor(NameserverClientConfig clientConfig) {
+        this.clientConfig = clientConfig;
+    }
+
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) {
+        ctx.channel().attr(NettyConstants.CLIENT_NAME).set(nameserverClient.getName());
+        super.channelActive(ctx);
+        sendRegistryCommand();
+    }
+
+
+    @Override
+    public Object getRequestId(RemotingCommand request) {
+        return request.getTransactionId();
+    }
+
+    @Override
+    public Object getResponseId(RemotingCommand response) {
+        return response.getTransactionId();
+    }
+
+
+    /**
+     * 发送服务注册命令
+     */
+    private void sendRegistryCommand() {
+        RemotingCommand remotingCommand = new RemotingCommand();
+        remotingCommand.setFlag(RemotingCommandFlagConstants.CLIENT_REGISTRY_SERVICE);
+        remotingCommand.setTransactionId(
+                DistributeIdMaker.DEFAULT.nextId(clientConfig.getServiceInstance().getServiceId())
+        );
+
+        remotingCommand.setBodyFromObject(clientConfig.getServiceInstance());
+
+        nameserverClient.sendRequest(remotingCommand).whenComplete((response, throwable) -> {
+            if (throwable != null) {
+                log.error("{} -> [{}] channel active error",
+                        clientConfig.getServiceInstance(), clientConfig.getRegistryCenterUrl(), throwable);
             }
-        }
 
-        ImageIO.write(image, "jpg", new File("D:\\workspace\\DepinBot\\auto-bot-v_1.1\\bot-example\\src\\main\\resources\\thinned_maze.jpg"));
-        return null;
-    }
-
-    public static List<int[]> aStar(int[][] maze, int[] start, int[] end) {
-        int rows = maze.length, cols = maze[0].length;
-        PriorityQueue<Node> openSet = new PriorityQueue<>();
-        boolean[][] visited = new boolean[rows][cols];
-
-        openSet.add(new Node(start[0], start[1], 0, heuristic(start, end), null));
-
-        while (!openSet.isEmpty()) {
-            Node current = openSet.poll();
-
-            if (current.x == end[0] && current.y == end[1]) {
-                return reconstructPath(current);
+            if (response.getFlag() == RemotingCommandFlagConstants.CLIENT_REGISTRY_SERVICE_RESPONSE) {
+                log.info("{} client registry success",  clientConfig.getServiceInstance());
             }
+        });
+    }
+}
+package cn.com.vortexa.nameserver.service.impl;
 
-            if (visited[current.x][current.y]) continue;
-            visited[current.x][current.y] = true;
+import cn.com.vortexa.nameserver.service.IConnectionService;
 
-            for (int[] dir : directions) {
-                int newX = current.x + dir[0], newY = current.y + dir[1];
+/**
+ * @author h30069248
+ * @since 2025/3/18 15:03
+ */
+public class MemoryConnectionService implements IConnectionService {
+}
+package cn.com.vortexa.websocket.netty.base;
 
-                if (isValid(maze, visited, newX, newY)) {
-                    int g = current.g + 1;
-                    int h = heuristic(new int[]{newX, newY}, end);
-                    openSet.add(new Node(newX, newY, g, h, current));
-                }
+import java.util.concurrent.CompletableFuture;
+
+/**
+ * @author h30069248
+ * @since 2025/3/18 11:50
+ */
+public interface IWSService {
+    /**
+     * 获取服务名字
+     *
+     * @return String
+     */
+    String getName();
+
+    /**
+     * 发送ping
+     */
+    void sendPing();
+
+    /**
+     * 发送pong
+     */
+    void sendPong();
+
+}
+package cn.com.vortexa.nameserver.service;
+
+import cn.com.vortexa.nameserver.constant.RegistryState;
+import cn.com.vortexa.nameserver.dto.RegisteredService;
+import cn.com.vortexa.nameserver.dto.ServiceInstance;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * @author helei
+ * @since 2025-03-17
+ */
+public interface IRegistryService {
+
+    /**
+     * 注册服务
+     *
+     * @param serviceInstance serviceInstance
+     * @return 注册状态
+     */
+    RegistryState registryService(ServiceInstance serviceInstance, Map<String, Object> props);
+
+    /**
+     * 保存注册信息
+     *
+     * @return Boolean
+     */
+    Boolean saveRegistryInfo() throws IOException;
+
+    /**
+     * 查找服务实例
+     *
+     * @param groupId groupId
+     * @param serviceId serviceId
+     * @param clientId clientId
+     * @return List<ServiceInstance>
+     */
+    List<RegisteredService> queryServiceInstance(
+        String groupId,
+        String serviceId,
+        String clientId
+    );
+}
+package cn.com.vortexa.nameserver.service;
+
+/**
+ * @author h30069248
+ * @since 2025/3/18 15:02
+ */
+public interface IConnectionService {
+
+}
+package cn.com.vortexa.nameserver.service.impl;
+
+import cn.com.vortexa.nameserver.constant.RegistryState;
+import cn.com.vortexa.nameserver.dto.RegisteredService;
+import cn.com.vortexa.nameserver.dto.ServiceInstance;
+import cn.com.vortexa.nameserver.service.IRegistryService;
+import cn.hutool.core.util.BooleanUtil;
+import cn.hutool.core.util.StrUtil;
+
+import com.alibaba.fastjson.JSONObject;
+
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * @author helei
+ * @since 2025-03-17
+ */
+@Slf4j
+public class FileRegistryService implements IRegistryService {
+
+    private final static String STORE_FILE_RESOURCE_PATH = System.getProperty("user.dir") +
+        File.separator + "nameserver" + File.separator + "nameserver-registry.dat";
+
+    private final ConcurrentHashMap<String, RegisteredService> registryServiceMap = new ConcurrentHashMap<>();
+
+    @Override
+    public RegistryState registryService(ServiceInstance serviceInstance, Map<String, Object> props) {
+        String group = serviceInstance.getGroup();
+        String serviceId = serviceInstance.getServiceId();
+        String clientId = serviceInstance.getClientId();
+
+        if (StrUtil.isBlank(group) && StrUtil.isBlank(serviceId) && StrUtil.isBlank(clientId)) {
+            return RegistryState.PARAM_ERROR;
+        }
+
+        try {
+            String key = generateServiceInstanceKey(group, serviceId, clientId);
+
+            // 存内存
+            registryServiceMap.put(key, new RegisteredService(serviceInstance, props));
+
+            // 存磁盘
+            Boolean b = null;
+            try {
+                b = saveRegistryInfo();
+                return BooleanUtil.isTrue(b) ? RegistryState.OK : RegistryState.STORE_ERROR;
+            } catch (Exception e) {
+                log.error("store registry error", e);
+                return RegistryState.STORE_ERROR;
             }
+        } catch (Exception e) {
+            log.error("registry config error", e);
+            return RegistryState.UNKNOWN_ERROR;
         }
-        return Collections.emptyList();
     }
 
-    private static int heuristic(int[] a, int[] b) {
-        return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]); // 曼哈顿距离
-    }
-
-    private static boolean isValid(int[][] maze, boolean[][] visited, int x, int y) {
-        return x >= 0 && y >= 0 && x < maze.length && y < maze[0].length && maze[x][y] == 0 && !visited[x][y];
-    }
-
-    private static List<int[]> reconstructPath(Node node) {
-        List<int[]> path = new ArrayList<>();
-        while (node != null) {
-            path.add(new int[]{node.x, node.y});
-            node = node.parent;
+    @Override
+    public Boolean saveRegistryInfo() throws IOException {
+        Path path = Paths.get(STORE_FILE_RESOURCE_PATH);
+        if (!Files.exists(path.getParent())) {
+            Files.createDirectories(path.getParent());
         }
-        Collections.reverse(path);
-        return path;
-    }
 
-    private static boolean isWhite(int color) {
-        int r = (color >> 16) & 0xFF;
-        int g = (color >> 8) & 0xFF;
-        int b = (color) & 0xFF;
-        return r > 200 && g > 200 && b > 200;
-    }
-
-    private static boolean isBlack(int color) {
-        int r = (color >> 16) & 0xFF;
-        int g = (color >> 8) & 0xFF;
-        int b = (color) & 0xFF;
-        return r < 50 && g < 50 && b < 50;
-    }
-
-    private static boolean isGreen(int color) {
-        int r = (color >> 16) & 0xFF;
-        int g = (color >> 8) & 0xFF;
-        int b = (color) & 0xFF;
-        float[] hsv = Color.RGBtoHSB(r, g, b, null);
-        float h = hsv[0] * 360, s = hsv[1], v = hsv[2];
-
-        return h >= 60 && h <= 180 && s > 0.4 && v > 0.2;
-    }
-
-
-    private static int getIndex(int x, int y, int height) {
-        return x * height + y;
-    }
-
-    private static int[] getPoint(int index, int height) {
-        int x = index / height;
-        int y = index % height;
-        return new int[]{x, y};
-    }
-
-    static class Node implements Comparable<Node> {
-        int x, y, g, h, f;
-        Node parent;
-
-        public Node(int x, int y, int g, int h, Node parent) {
-            this.x = x;
-            this.y = y;
-            this.g = g;  // 从起点到当前点的代价
-            this.h = h;  // 估算的剩余代价
-            this.f = g + h;
-            this.parent = parent;
+        try (BufferedWriter bw = new BufferedWriter(new FileWriter(path.toFile()))) {
+            bw.write(JSONObject.toJSONString(registryServiceMap));
+            bw.flush();
+            return true;
         }
+    }
+
+    @Override
+    public List<RegisteredService> queryServiceInstance(
+        String groupId,
+        String serviceId,
+        String clientId
+    ) {
+        String keyPattern = generateServiceInstanceKey(
+            StrUtil.isBlank(groupId) ? "*" : groupId,
+            StrUtil.isBlank(serviceId) ? "*" : serviceId,
+            StrUtil.isBlank(clientId) ? "*" : clientId
+        );
+        Pattern compile = Pattern.compile(keyPattern);
+
+        return registryServiceMap.keySet().stream().filter(key -> {
+            Matcher matcher = compile.matcher(key);
+            return matcher.find();
+        }).map(registryServiceMap::get).toList();
+    }
+
+    private String generateServiceInstanceKey(String group, String serviceId, String clientId) {
+        return group + "#%&%#" + serviceId + "#%&%#" + clientId;
+    }
+}
+package cn.com.vortexa.nameserver.constant;
+
+public class ExtFieldsConstants {
+
+    /**
+     * 服务注册的注册状态
+     */
+    public static final String NAMESERVER_REGISTRY_STATUS = "nameserver_registry_status";
+
+    /**
+     * 服务发现的service name
+     */
+    public static final String NAMESERVER_DISCOVER_SERVICE_NAME = "nameserver_discover_service_name";
+
+    /**
+     * 服务发现负载均衡策略
+     */
+    public static final String NAMESERVER_DISCOVER_LOAD_BALANCE_POLICY = "nameserver_load_balance_policy";
+}
+package cn.com.vortexa.bot_father.websocket;
+
+import cn.com.vortexa.common.entity.AccountContext;
+
+import com.alibaba.fastjson.JSONObject;
+
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@Setter
+public abstract class BotJsonWSClient extends BaseBotWSClient<JSONObject, JSONObject> {
+
+    private String idFieldName = "id";
+
+    public BotJsonWSClient(
+            AccountContext accountContext,
+            String connectUrl
+    ) {
+        super(accountContext, connectUrl, new SimpleBotWSClientHandler());
+        ((SimpleBotWSClientHandler) getHandler()).setWsClient(this);
+    }
+
+    @Override
+    public Object getRequestId(JSONObject request) {
+        return request.get(idFieldName);
+    }
+
+    @Override
+    public Object getResponseId(JSONObject response) {
+        return response.get(idFieldName);
+    }
+
+
+
+    @Setter
+    @Getter
+    private static class SimpleBotWSClientHandler extends BaseBotWSClientHandler<JSONObject, JSONObject, Object> {
+
+        private BotJsonWSClient wsClient;
 
         @Override
-        public int compareTo(Node other) {
-            return Integer.compare(this.f, other.f);
+        public JSONObject convertMessageToRespType(String message) {
+            return JSONObject.parseObject(message);
+        }
+
+
+    }
+}
+package cn.com.vortexa.websocket.netty.base;
+
+import io.netty.channel.*;
+import io.netty.handler.timeout.IdleStateEvent;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * WebSocket客户端处理器基础类
+ * 处理连接握手
+ *
+ */
+@Slf4j
+@ChannelHandler.Sharable
+public abstract class BaseWebSocketInboundHandler<T> extends SimpleChannelInboundHandler<T> {
+
+    @Override
+    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+        // IdleStateHandler 所产生的 IdleStateEvent 的处理逻辑.
+        if (evt instanceof IdleStateEvent e) {
+            switch (e.state()) {
+                case READER_IDLE:
+                    handleReaderIdle(ctx);
+                    break;
+                case WRITER_IDLE:
+                    handleWriterIdle(ctx);
+                    break;
+                case ALL_IDLE:
+                    handleAllIdle(ctx);
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    /**
+     * 超过限定时间channel没有读时触发
+     *
+     * @param ctx ctx
+     */
+    protected void handleReaderIdle(ChannelHandlerContext ctx) {
+    }
+
+    /**
+     * 超过限定时间channel没有写时触发
+     *
+     * @param ctx ctx
+     */
+    protected void handleWriterIdle(ChannelHandlerContext ctx) {
+    }
+
+    /**
+     * 超过限定时间channel没有读写时触发
+     *
+     * @param ctx ctx
+     */
+    protected void handleAllIdle(ChannelHandlerContext ctx) {
+    }
+}
+package cn.com.vortexa.bot_father.websocket;
+
+import cn.com.vortexa.common.dto.ConnectStatusInfo;
+import cn.com.vortexa.websocket.netty.base.AbstractWebSocketClientHandler;
+import cn.com.vortexa.websocket.netty.base.HandlerEntity;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.http.FullHttpResponse;
+import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.PongWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.TextWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.WebSocketFrame;
+import io.netty.handler.codec.http.websocketx.WebSocketHandshakeException;
+import io.netty.util.CharsetUtil;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+public abstract class BaseBotWSClientHandler<T> extends AbstractWebSocketClientHandler<T> {
+
+    @Override
+    public void channelRead0(ChannelHandlerContext ctx, T msg) throws Exception {
+        Channel ch = ctx.channel();
+        // 如果握手未完成，处理 FullHttpResponse
+        if (getHandshaker() != null && !getHandshaker().isHandshakeComplete()) {
+            if (msg instanceof FullHttpResponse response) {
+                try {
+
+                    getHandshaker().finishHandshake(ch, response);
+                    log.info("WebSocket client [{}] Handshake complete!", ch.attr(NettyConstants.CLIENT_NAME).get());
+                    getHandshakeFuture().setSuccess();
+
+                    connectCompleteHandler(ch);
+                } catch (WebSocketHandshakeException e) {
+                    log.info("WebSocket client [{}] Handshake failed!", ch.attr(NettyConstants.CLIENT_NAME).get());
+                    getHandshakeFuture().setFailure(e);
+                }
+                return;
+            }
+        }
+
+        if (msg instanceof FullHttpResponse response) {
+            if (response.status().code() / 100 > 3) {
+                throw new IllegalStateException(
+                    "Unexpected FullHttpResponse (getStatus=" + response.status() +
+                        ", content=" + response.content().toString(CharsetUtil.UTF_8) + ')');
+            }
+        } else if (msg instanceof WebSocketFrame frame) {
+            switch (frame) {
+                case TextWebSocketFrame textFrame -> {
+                    log.debug("websocket client [{}] 接收到的消息：{}", ch.attr(NettyConstants.CLIENT_NAME).get(), textFrame.text());
+                    whenReceiveMessage(textFrame.text());
+                }
+                case PongWebSocketFrame pongWebSocketFrame -> handlerPong(ch, pongWebSocketFrame);
+                case PingWebSocketFrame pingWebSocketFrame -> handlerPing(ch, pingWebSocketFrame);
+                case CloseWebSocketFrame closeWebSocketFrame -> handlerClose(ch, closeWebSocketFrame);
+                default -> {
+                    log.warn("channel[{}]收到位置类型的消息[{}]", ch.attr(NettyConstants.CLIENT_NAME).get(), frame.getClass().getName());
+                }
+            }
+        }
+    }
+    /**
+     * channel 空闲，向其发送心跳
+     *
+     * @param ctx ctx
+     */
+    @Override
+    protected void handleAllIdle(ChannelHandlerContext ctx) {
+        BaseBotWSClient<T, T> botWSClient = getBotWSClient();
+
+
+        T heartbeatMessage = botWSClient.getHeartbeatMessage();
+        if (heartbeatMessage != null) {
+            botWSClient
+                    .sendMessage(heartbeatMessage)
+                    .whenCompleteAsync((unused, throwable) -> {
+                        ConnectStatusInfo connectStatusInfo = botWSClient
+                                .getAccountContext()
+                                .getConnectStatusInfo();
+
+                        if (throwable != null) {
+                            log.error("client[{}] 发送心跳异常", autoConnectWSService.getName(), throwable);
+                            // 发送心跳失败，记录次数
+                            connectStatusInfo.getErrorHeartBeat().getAndIncrement();
+                        }
+
+                        // 心跳计数
+                        connectStatusInfo.getHeartBeat()
+                                .getAndIncrement();
+                    }, botWSClient.getCallbackInvoker());
+        }
+    }
+
+    protected void whenReceiveMessage(String text) {
+        T message = convertMessageToRespType(text);
+
+        Object responseId = getResponseId(message);
+
+        if (responseId != null) {
+            //有id，是发送请求的响应
+            //提交response
+            handleResponseMessage(responseId, message);
+        } else {
+            //没有id，按其它格式处理
+            handleOtherMessage(message);
         }
     }
 
 
-    static class UnionFind {
-        private final int[] parent;
-        private final int[] rank;
-        @Getter
-        private int count;
+    /**
+     * 将websocket收到的文本消息转换为响应类型 Resp
+     *
+     * @param message websocket收到的原始消息
+     * @return typedMessage
+     */
+    public abstract T convertMessageToRespType(String message);
 
-        public UnionFind(int size) {
-            parent = new int[size];
-            rank = new int[size];
-            count = size;
-            for (int i = 0; i < size; i++) {
-                parent[i] = i;
-                rank[i] = 1;
-            }
+
+    /**
+     * 获取请求id
+     *
+     * @param request request
+     * @return id
+     */
+    public Object getRequestId(T request) {
+        return getBotWSClient().getRequestId(request);
+    }
+
+    /**
+     * 获取响应id
+     *
+     * @param response 响应
+     * @return id
+     */
+    public Object getResponseId(T response) {
+        return getBotWSClient().getResponseId(response);
+    }
+
+
+    /**
+     * 处理请求响应的消息
+     *
+     * @param id       id
+     * @param response 响应消息体
+     */
+    protected void handleResponseMessage(Object id, T response) {
+        HandlerEntity<T> handlerEntity = requestIdMap.get(id);
+
+        if (System.currentTimeMillis() > handlerEntity.getExpireTime()) {
+            log.warn("请求[{}]得到响应超时", id);
+        } else {
+            autoConnectWSService.getCallbackInvoker().execute(() -> handlerEntity.getCallback().accept(response));
         }
+    }
+
+    /**
+     * 处理其他类型消息
+     *
+     * @param message 消息
+     */
+    protected void handleOtherMessage(T message) {
+        getBotWSClient().whenAccountReceiveMessage(message);
+    }
+
+    /**
+     * 处理close消息
+     *
+     * @param ch   Channel ch
+     * @param ping closeWebSocketFrame
+     */
+    protected void handlerClose(Channel ch, CloseWebSocketFrame ping) {
+        log.warn("websocket client关闭");
+        ch.close();
+    }
 
 
-        public int find(int x) {
-            if (parent[x] != x) {
-                parent[x] = find(parent[x]);
+    /**
+     * 处理pong消息
+     *
+     * @param ch                 Channel ch
+     * @param pongWebSocketFrame pongWebSocketFrame
+     */
+    protected void handlerPong(Channel ch, PongWebSocketFrame pongWebSocketFrame) {
+        log.info("WebSocket Client [{}] received pong", ch.attr(NettyConstants.CLIENT_NAME).get());
+    }
+
+
+    /**
+     * 处理ping消息
+     *
+     * @param ch                 ch
+     * @param pingWebSocketFrame pingWebSocketFrame
+     */
+    protected void handlerPing(Channel ch, PingWebSocketFrame pingWebSocketFrame) {
+        log.info("WebSocket Client [{}] received ping", ch.attr(NettyConstants.CLIENT_NAME).get());
+        autoConnectWSService.sendPong();
+    }
+
+    private BaseBotWSClient<T, T> getBotWSClient() {
+        return (BaseBotWSClient<T, T>) autoConnectWSService;
+    }
+}
+package cn.com.vortexa.bot_father.websocket;
+
+import cn.com.vortexa.common.constants.ConnectStatus;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.websocket.netty.base.AbstractWebsocketClient;
+import cn.com.vortexa.websocket.netty.constants.WebsocketClientStatus;
+import io.netty.channel.ChannelPipeline;
+import io.netty.handler.codec.http.HttpClientCodec;
+import io.netty.handler.codec.http.HttpObjectAggregator;
+import io.netty.handler.codec.http.websocketx.PingWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.PongWebSocketFrame;
+import io.netty.handler.codec.http.websocketx.WebSocketFrameAggregator;
+import io.netty.handler.stream.ChunkedWriteHandler;
+import io.netty.handler.timeout.IdleStateHandler;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.time.LocalDateTime;
+import java.util.concurrent.TimeUnit;
+
+@Slf4j
+@Getter
+public abstract class BaseBotWSClient<T> extends AbstractWebsocketClient<T> {
+
+    private static final int MAX_FRAME_SIZE = 10 * 1024 * 1024;  // 10 MB or set to your desired size
+
+    /**
+     * client对应的账号
+     */
+    private final AccountContext accountContext;
+
+    public BaseBotWSClient(
+        AccountContext accountContext,
+        String connectUrl,
+        BaseBotWSClientHandler<T> handler
+    ) {
+        super(connectUrl, accountContext.getName(), handler);
+
+        super.setProxy(accountContext.getProxy());
+        super.setClientStatusChangeHandler(this::whenClientStatusChange);
+
+        this.accountContext = accountContext;
+
+        updateClientStatus(WebsocketClientStatus.NEW);
+    }
+
+    public abstract T getHeartbeatMessage();
+
+    public abstract void whenAccountReceiveResponse(Object id, T response);
+
+    public abstract void whenAccountReceiveMessage(T message);
+
+    public abstract Object getRequestId(T request);
+
+    public abstract Object getResponseId(T response);
+
+    public void whenAccountClientStatusChange(WebsocketClientStatus clientStatus) {
+    }
+
+    @Override
+    public void addPipeline(ChannelPipeline p) {
+        p.addLast("http-chunked", new ChunkedWriteHandler()); // 支持大数据流
+
+        p.addLast(new HttpClientCodec());
+        p.addLast(new HttpObjectAggregator(81920));
+        p.addLast(new IdleStateHandler(0, 0, getAllIdleTimeSecond(), TimeUnit.SECONDS));
+        p.addLast(new ChunkedWriteHandler());
+
+        p.addLast(new WebSocketFrameAggregator(MAX_FRAME_SIZE));  // 设置聚合器的最大帧大小
+
+        p.addLast(getHandler());
+    }
+
+    @Override
+    public void sendPing() {
+        log.debug("client [{}] send ping to [{}]", getName(), getUrl());
+        getChannel().writeAndFlush(new PingWebSocketFrame());
+    }
+
+    @Override
+    public void sendPong() {
+        log.debug("client [{}] send pong {}", getName(), getUrl());
+        getChannel().writeAndFlush(new PongWebSocketFrame());
+    }
+
+    /**
+     * ws客户端状态改变，同步更新账户状态
+     *
+     * @param newClientStatus 最新的客户端状态
+     */
+    public void whenClientStatusChange(WebsocketClientStatus newClientStatus) {
+        ConnectStatus connectStatus = switch (newClientStatus) {
+            case WebsocketClientStatus.NEW -> {
+                accountContext.getConnectStatusInfo().setStartDateTime(LocalDateTime.now());
+                accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
+                yield ConnectStatus.NEW;
             }
-            return parent[x];
-        }
+            case WebsocketClientStatus.STARTING -> {
+                accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
+                yield ConnectStatus.STARTING;
+            }
+            case WebsocketClientStatus.RUNNING -> {
+                accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
+                yield ConnectStatus.RUNNING;
+            }
+            case WebsocketClientStatus.STOP, WebsocketClientStatus.SHUTDOWN -> {
+                accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
+                yield ConnectStatus.STOP;
+            }
+        };
 
-        public void union(int a, int b) {
-            int rootA = find(a);
-            int rootB = find(b);
+        accountContext.getConnectStatusInfo().setConnectStatus(connectStatus);
 
-            if (rootA != rootB) {
-                if (rank[rootA] > rank[rootB]) {
-                    parent[rootB] = rootA;
-                } else if (rank[rootA] < rank[rootB]) {
-                    parent[rootA] = rootB;
-                } else {
-                    parent[rootB] = rootA;
-                    rank[rootA]++;
+        whenAccountClientStatusChange(newClientStatus);
+    }
+
+}
+package cn.com.vortexa.websocket.netty.base;
+
+import cn.com.vortexa.common.entity.ProxyInfo;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import cn.com.vortexa.websocket.netty.constants.WebsocketClientStatus;
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.Channel;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.handler.codec.http.HttpHeaders;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
+
+import javax.net.ssl.SSLException;
+
+/**
+ * @author h30069248
+ * @since 2025/3/18 10:52
+ */
+@Slf4j
+@Setter
+@Getter
+public abstract class AutoConnectWSService implements IWSService {
+    private final AtomicInteger reconnectTimes = new AtomicInteger(0);  //重链接次数
+    private final ReentrantLock reconnectLock = new ReentrantLock();    //重连锁
+    private final Condition startingWaitCondition = reconnectLock.newCondition();   //启动中阻塞的condition
+    private final EventLoopGroup eventLoopGroup;    //netty线程组
+    private final String url; //websocket的url字符串
+    private Bootstrap bootstrap; //netty bootstrap
+    private Channel channel;    //连接channel
+    private String host;    //连接host
+    private int port;    //连接port
+    private boolean useSSL; //是否ssl
+    private HttpHeaders headers;    //请求头
+    private ProxyInfo proxy = null; //代理
+    private int reconnectCountDownSecond = 180; //重连次数减少的间隔
+    private int reconnectLimit = 3; //重连次数限制
+    private volatile WebsocketClientStatus clientStatus = WebsocketClientStatus.NEW;    //客户端当前状态
+    private Consumer<WebsocketClientStatus> clientStatusChangeHandler = socketCloseStatus -> {};    //clientStatus更新的回调
+
+    protected AutoConnectWSService(String url) {
+        this.url = url;
+        this.eventLoopGroup = new NioEventLoopGroup();
+    }
+
+    protected abstract void init() throws SSLException, URISyntaxException;
+
+    public final CompletableFuture<Boolean> connect() {
+        return switch (clientStatus) {
+            case NEW, STOP -> reconnect();
+            case STARTING -> waitForStarting();
+            case RUNNING -> {
+                log.warn("ws service [{}] in running, clientStatus[{}]", getName(), clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN -> throw new RuntimeException("");
+        };
+    }
+
+    public CompletableFuture<Boolean> reconnect() {
+        return switch (clientStatus) {
+            case NEW, STOP -> reconnectLogic();
+            case STARTING -> waitForStarting().thenApplyAsync(success -> {
+                if (success) {
+                    return true;
                 }
-                count--;
-            }
-        }
-
-        public boolean connected(int a, int b) {
-            return find(a) == find(b);
-        }
-
-        public List<Integer> getParents() {
-            List<Integer> res = new ArrayList<>();
-            for (int i = 0; i < parent.length; i++) {
-                if (parent[i] == i) {
-                    res.add(i);
+                try {
+                    return reconnectLogic().get();
+                } catch (InterruptedException | ExecutionException e) {
+                    throw new RuntimeException(e);
                 }
+            });
+            case RUNNING -> {
+                log.warn("ws service [{}] in running, can't reconnect. clientStatus[{}]", getName(), clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
             }
-            return res;
+            case SHUTDOWN -> CompletableFuture.supplyAsync(() -> {
+                log.error("client[{}] already shutdown", getName());
+                return false;
+            });
+        };
+    }
+
+    private CompletableFuture<Boolean> reconnectLogic() {
+        updateClientStatus(WebsocketClientStatus.STARTING);
+
+        String name = getName();
+
+        return CompletableFuture.supplyAsync(() -> {
+            //Step 1 重连次数超过限制，关闭
+            if (reconnectTimes.get() >= reconnectLimit) {
+                log.error("reconnect times out of limit [{}], close websocket client", reconnectLimit);
+                close();
+                return false;
+            }
+
+            AtomicBoolean isSuccess = new AtomicBoolean(false);
+
+            //Step 2 重连逻辑
+            //Step 2.1 加锁保证只要一个线程进行重连
+            reconnectLock.lock();
+            try {
+                //Step 2.2 已经再running状态，直接返回true。变为shutdown、stop状态，直接返回false
+                if (clientStatus.equals(WebsocketClientStatus.RUNNING)) {
+                    log.info("client started by other thread");
+                    return true;
+                } else if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN) || clientStatus.equals(
+                    WebsocketClientStatus.STOP)) {
+                    log.error("clint {} when client starting", clientStatus);
+                    return false;
+                }
+
+                //Step 3 初始化
+                log.info("开始初始化WS客户端");
+                try {
+                    resolveParamFromUrl();
+
+                    init();
+                } catch (SSLException | URISyntaxException e) {
+                    throw new RuntimeException("初始化WS客户端发生错误", e);
+                }
+                log.info("初始化WS客户端完成，开始链接服务器 [{}]", url);
+
+                //Step 4 链接服务器
+                if (reconnectTimes.incrementAndGet() <= reconnectLimit) {
+
+                    //Step 4.1 每进行重连都会先将次数加1并设置定时任务将重连次数减1
+                    eventLoopGroup.schedule(() -> {
+                        reconnectTimes.decrementAndGet();
+                    }, reconnectCountDownSecond, TimeUnit.SECONDS);
+
+                    log.info("start connect client [{}], url[{}], current times [{}]", name, url, reconnectTimes.get());
+
+                    //Step 4.2 latch用于同步等等链接完成
+                    CountDownLatch latch = new CountDownLatch(1);
+
+                    //Step 4.3 延迟再进行连接
+                    eventLoopGroup.schedule(() -> {
+                        try {
+                            channel = bootstrap.connect(host, port).sync().channel();
+
+                            afterBoostrapConnected();
+
+                            log.info("success connect to {}", url);
+                            //Step 4.4 连接成功设置标识
+                            isSuccess.set(true);
+                        } catch (Exception e) {
+                            log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(), e);
+                            isSuccess.set(false);
+                        } finally {
+                            latch.countDown();
+                        }
+                    }, NettyConstants.RECONNECT_DELAY_SECONDS, TimeUnit.SECONDS);
+
+                    //Step 4.5 等待链接完成
+                    try {
+                        latch.await();
+                    } catch (InterruptedException e) {
+                        log.error("connect client [{}], url[{}] interrupted, times [{}]", name, url, reconnectTimes.get(), e);
+                    }
+
+                    //Step 6 未成功启动，关闭
+                    if (!isSuccess.get()) {
+                        log.info("connect client [{}], url[{}] fail, current times [{}]", name, url, reconnectTimes.get());
+
+                        close();
+                    } else {
+                        log.info("connect client [{}], url[{}] success, current times [{}]", name, url, reconnectTimes.get());
+
+                        updateClientStatus(WebsocketClientStatus.RUNNING);
+                        reconnectTimes.set(0);
+                    }
+                }
+            } catch (Exception e) {
+                //exception 遇到未处理异常，直接关闭
+                close();
+                throw new RuntimeException(String.format("connect client [%s] appear unknown error", name), e);
+            } finally {
+                //Step 5 释放等待启动的线程
+                startingWaitCondition.signalAll();
+                reconnectLock.unlock();
+            }
+
+            return isSuccess.get();
+        }, getCallbackInvoker());
+    }
+
+    public void close() {
+        if (clientStatus.equals(WebsocketClientStatus.STOP)
+            || clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+            return;
         }
 
-        public int getRank(int a) {
-            return rank[a];
+        updateClientStatus(WebsocketClientStatus.STOP);
+
+        log.info("closing websocket client [{}], [{}]", getName(), channel == null ? "null" : getChannel().hashCode());
+        if (channel != null) {
+            channel.close();
+            channel = null;
+        }
+        log.warn("web socket client [{}] closed", getName());
+    }
+
+    public final void shutdown() {
+        updateClientStatus(WebsocketClientStatus.SHUTDOWN);
+
+        if (channel != null) {
+            channel.close();
+            channel = null;
+        }
+        eventLoopGroup.shutdownGracefully();
+        log.warn("web socket client [{}] already shutdown !", getName());
+    }
+
+    /**
+     * 更新status
+     *
+     * @param newStatus newStatus
+     */
+    protected void updateClientStatus(WebsocketClientStatus newStatus) {
+        synchronized ("CLIENT_STATUS_LOCK") {
+            if (clientStatus.equals(newStatus)) {
+                return;
+            }
+
+            if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+                throw new IllegalArgumentException("client status is shutdown，new status can not be " + newStatus);
+            }
+
+            try {
+                if (newStatus != clientStatus && clientStatusChangeHandler != null) {
+                    clientStatusChangeHandler.accept(newStatus);
+                }
+            } finally {
+                log.info("client status [{}] -> [{}]", clientStatus, newStatus);
+                clientStatus = newStatus;
+            }
+        }
+    }
+
+    /**
+     * 获取回调执行线程池
+     *
+     * @return ExecutorService
+     */
+    public abstract ExecutorService getCallbackInvoker();
+
+    /**
+     * 每次netty bootstrap 连接后调用
+     *
+     * @throws InterruptedException InterruptedException
+     */
+    protected abstract void afterBoostrapConnected() throws InterruptedException;
+
+    /**
+     * 等待启动完成
+     *
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Boolean> waitForStarting() {
+        return CompletableFuture.supplyAsync(() -> {
+            log.warn("client [{}] is starting, waiting for complete", getName());
+            reconnectLock.lock();
+            try {
+                while (clientStatus.equals(WebsocketClientStatus.STARTING)) {
+                    startingWaitCondition.await();
+                }
+
+                if (clientStatus.equals(WebsocketClientStatus.STOP) || clientStatus.equals(
+                    WebsocketClientStatus.SHUTDOWN)) {
+                    log.error("启动WS客户端[{}]失败, ClientStatus [{}}", getName(), clientStatus);
+                    return false;
+                }
+                return true;
+            } catch (InterruptedException e) {
+                log.error("waiting for start client [{}] error", getName());
+                throw new RuntimeException(e);
+            } finally {
+                reconnectLock.unlock();
+            }
+        }, getCallbackInvoker());
+    }
+
+    /**
+     * 解析参数
+     *
+     * @throws URISyntaxException url解析错误
+     */
+    private void resolveParamFromUrl() throws URISyntaxException {
+        URI uri = new URI(url);
+        String scheme = uri.getScheme() == null ? "ws" : uri.getScheme();
+        host = uri.getHost() == null ? "127.0.0.1" : uri.getHost();
+        if (uri.getPort() == -1) {
+            if ("ws".equalsIgnoreCase(scheme)) {
+                port = 80;
+            } else if ("wss".equalsIgnoreCase(scheme)) {
+                port = 443;
+            } else {
+                port = -1;
+            }
+        } else {
+            port = uri.getPort();
+        }
+
+        if (!"ws".equalsIgnoreCase(scheme) && !"wss".equalsIgnoreCase(scheme)) {
+            log.error("Only WS(S) is supported.");
+            throw new IllegalArgumentException("url error, Only WS(S) is supported.");
+        }
+
+        useSSL = "wss".equalsIgnoreCase(scheme);
+    }
+}
+package cn.com.vortexa.websocket.netty.base;
+
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import cn.com.vortexa.websocket.netty.constants.WebsocketClientStatus;
+import io.netty.channel.*;
+
+import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
+
+/**
+ * WebSocket客户端处理器抽象类
+ * 能够处理请求响应类型的消息。
+ * 其它类型的消息要通过handleOtherMessage()抽象方法处理
+ *
+ * @param <T>
+ */
+@Slf4j
+@ChannelHandler.Sharable
+public abstract class AbstractWebSocketClientHandler<T> extends BaseWebSocketInboundHandler<T> {
+
+    /**
+     * 存放请求响应的回调
+     */
+    protected final ConcurrentMap<Object, HandlerEntity<T>> requestIdMap = new ConcurrentHashMap<>();
+    @Getter
+
+    private WebSocketClientHandshaker handshaker;
+
+    @Getter
+    private ChannelPromise handshakeFuture;
+
+    protected AutoConnectWSService autoConnectWSService;
+
+    public void init(WebSocketClientHandshaker handshaker) {
+        this.handshaker = handshaker;
+    }
+
+    @Override
+    public void handlerAdded(ChannelHandlerContext ctx) {
+        handshakeFuture = ctx.newPromise();
+    }
+
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) {
+        Channel channel = ctx.channel();
+        if (handshaker != null) {
+            handshaker.handshake(channel);
+        }
+    }
+
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) {
+        log.warn("WebSocket Client [{}] disconnected!", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
+        autoConnectWSService.close();
+    }
+
+    @Override
+    public void channelUnregistered(ChannelHandlerContext ctx) throws Exception {
+        log.warn("WebSocket Client [{}] unregistered!", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
+        autoConnectWSService.close();
+
+        if (!autoConnectWSService.getClientStatus().equals(WebsocketClientStatus.SHUTDOWN)) {
+            autoConnectWSService.reconnect();
+        }
+    }
+
+    @Override
+    protected void channelRead0(ChannelHandlerContext ctx, T message) throws Exception {
+        Object id = getResponseId(message);
+
+        HandlerEntity<T> handlerEntity = requestIdMap.get(id);
+        if (handlerEntity != null) {
+            try {
+                log.debug("invoke request id[{}] call back", id);
+                handlerEntity.getCallback().accept(message);
+            } catch (Exception e) {
+                log.error("request id[{}] callback invoke error", id, e);
+            }
+        }
+    }
+
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        if (handshakeFuture != null && !handshakeFuture.isDone()) {
+            handshakeFuture.setFailure(cause);
+        }
+        ctx.close();
+        log.error("业务处理错误，websocket client关闭", cause);
+    }
+
+    /**
+     * 注册request
+     *
+     * @param request request
+     * @return 是否注册成功
+     */
+    public boolean registryRequest(T request, Consumer<T> callback) {
+        AtomicBoolean res = new AtomicBoolean(false);
+        Object requestId = getRequestId(request);
+
+        if (requestId == null) {
+            return false;
+        }
+
+        requestIdMap.compute(requestId, (k, v) -> {
+            if (v == null) {
+                res.set(true);
+                long expireTime = System.currentTimeMillis() + NettyConstants.REQUEST_WAITE_SECONDS * 1000;
+                v = new HandlerEntity<>(expireTime, callback);
+                log.debug("registry request id[{}] success, expire time [{}]", requestId, expireTime);
+            }
+            return v;
+        });
+
+        return res.get();
+    }
+
+    /**
+     * 超过限定时间channel没有读写时触发
+     *
+     * @param ctx ctx
+     */
+    @Override
+    protected void handleAllIdle(ChannelHandlerContext ctx) {
+        autoConnectWSService.sendPing();
+    }
+
+    /**
+     * 连接完成
+     *
+     * @param ch ch
+     */
+    protected void connectCompleteHandler(Channel ch) {
+        log.debug("websocket active");
+    }
+
+    /**
+     * 获取请求id
+     *
+     * @param request request
+     * @return id
+     */
+    public abstract Object getRequestId(T request);
+
+    /**
+     * 获取响应id
+     *
+     * @param response 响应
+     * @return id
+     */
+    public abstract Object getResponseId(T response);
+
+    public ChannelFuture handshakeFuture() {
+        return handshakeFuture;
+    }
+}
+package cn.com.vortexa.websocket.netty.base;
+
+import cn.com.vortexa.common.entity.ProxyInfo;
+import cn.com.vortexa.common.util.NamedThreadFactory;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import cn.hutool.core.util.StrUtil;
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.*;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.codec.http.websocketx.*;
+import io.netty.handler.proxy.HttpProxyHandler;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslContextBuilder;
+import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+import javax.net.ssl.SSLException;
+
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicReference;
+
+/**
+ * Websocket客户端
+ *
+ */
+@Slf4j
+@Setter
+@Getter
+public abstract class AbstractWebsocketClient< T> extends AutoConnectWSService {
+    private static final int MAX_FRAME_SIZE = 10 * 1024 * 1024;  // 10 MB or set to your desired size
+
+    private final AbstractWebSocketClientHandler<T> handler;   //netty pipeline 最后一个执行的handler
+    private final ExecutorService callbackInvoker;  //执行回调的线程池
+    private final String name;
+    private boolean handshake = true;
+    private int allIdleTimeSecond = 10; //空闲时间
+
+    public AbstractWebsocketClient(
+        String url,
+        String name,
+        AbstractWebSocketClientHandler<T> handler
+    ) {
+        super(url);
+
+        this.name = name;
+        this.handler = handler;
+        this.handler.autoConnectWSService = this;
+
+        this.callbackInvoker = Executors.newThreadPerTaskExecutor(new NamedThreadFactory(name));
+    }
+
+    @Override
+    protected void afterBoostrapConnected() throws InterruptedException {
+        if (handshake && handler.handshakeFuture() != null) {
+            handler.handshakeFuture().sync();
+        }
+    }
+
+    @Override
+    protected void init() throws SSLException, URISyntaxException {
+        URI uri = new URI(getUrl());
+
+        WebSocketClientHandshaker webSocketClientHandshaker = handshake ?  WebSocketClientHandshakerFactory.newHandshaker(
+            uri, WebSocketVersion.V13, null, true, getHeaders(), MAX_FRAME_SIZE
+        ) : null;
+
+        handler.init(webSocketClientHandshaker);
+
+        final SslContext sslCtx;
+        if (isUseSSL()) {
+            sslCtx = SslContextBuilder
+                .forClient()
+                .trustManager(InsecureTrustManagerFactory.INSTANCE)
+                .build();
+        } else {
+            sslCtx = null;
+        }
+
+        setBootstrap(new Bootstrap());
+        getBootstrap().group(getEventLoopGroup())
+            .channel(NioSocketChannel.class)
+            .option(ChannelOption.TCP_NODELAY, true)
+            .option(ChannelOption.SO_KEEPALIVE, true)
+            .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10000) // 设置连接超时为10秒
+            .handler(new ChannelInitializer<NioSocketChannel>() {
+                @Override
+                protected void initChannel(NioSocketChannel ch) {
+
+                    ChannelPipeline p = ch.pipeline();
+                    ProxyInfo proxy = getProxy();
+
+                    if (proxy != null) {
+                        // 添加 HttpProxyHandler 作为代理
+                        if (StrUtil.isNotBlank(proxy.getUsername())) {
+                            p.addFirst(new HttpProxyHandler(proxy.generateAddress(), proxy.getUsername(),
+                                proxy.getPassword()));
+                        } else {
+                            p.addFirst(new HttpProxyHandler(proxy.generateAddress()));
+                        }
+                    }
+
+                    if (sslCtx != null) {
+                        p.addLast(sslCtx.newHandler(ch.alloc(), uri.getHost(), uri.getPort()));
+                    }
+
+                    addPipeline(p);
+                }
+            });
+    }
+
+    /**
+     * 添加 pipeline
+     *
+     * @param p p
+     */
+    public abstract void addPipeline(ChannelPipeline p);
+
+    /**
+     * 发送消息，没有回调
+     *
+     * @param message message
+     * @return CompletableFuture<Void>
+     */
+    public CompletableFuture<Void> sendMessage(T message) {
+        return CompletableFuture.runAsync(() -> {
+            if (message == null) {
+                throw new IllegalArgumentException("message is null");
+            }
+
+            doSendMessage(message, false);
+        }, callbackInvoker);
+    }
+
+    /**
+     * 发送请求, 注册响应监听
+     *
+     * @param request 请求体
+     */
+    public CompletableFuture<T> sendRequest(T request) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (request == null) {
+                log.error("request is null");
+                return null;
+            }
+
+            CountDownLatch latch = new CountDownLatch(1);
+            AtomicReference<T> jb = new AtomicReference<>(null);
+
+            boolean flag = handler.registryRequest(request, response -> {
+                latch.countDown();
+                jb.set(response);
+            });
+
+            if (flag) {
+                doSendMessage(request, true);
+            } else {
+                log.error("request id registered");
+                return null;
+            }
+
+            try {
+                if (!latch.await(NettyConstants.REQUEST_WAITE_SECONDS, TimeUnit.SECONDS)) {
+                    return null;
+                }
+
+                return jb.get();
+            } catch (InterruptedException e) {
+                log.error("send request interrupted", e);
+                return null;
+            }
+        }, callbackInvoker);
+    }
+
+    /**
+     * 转换为写入channel的数据
+     *
+     * @param request request
+     */
+    protected abstract T convertToChannelWriteData(T request);
+
+    /**
+     * 发送消息
+     *
+     * @param message message
+     * @param isRequest isRequest
+     */
+    protected void doSendMessage(T message, boolean isRequest) {
+        try {
+            log.debug("send request [{}]", message);
+            getChannel().writeAndFlush(convertToChannelWriteData(message));
+            log.debug("send request [{}] success", message);
+        } catch (Exception e) {
+            throw new RuntimeException("send message [" + message + "] error");
         }
     }
 }
