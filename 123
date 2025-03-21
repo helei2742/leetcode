@@ -1,376 +1,2439 @@
-package cn.com.helei.example.stork_bot;
+package cn.com.vortexa.bot_platform.service.impl;
 
-import cn.com.helei.bot_father.BotLauncher;
-import cn.com.helei.bot_father.anno.BotApplication;
-import cn.com.helei.bot_father.anno.BotMethod;
-import cn.com.helei.bot_father.bot.AutoLaunchBot;
-import cn.com.helei.bot_father.config.AutoBotConfig;
-import cn.com.helei.bot_father.service.BotApi;
-import cn.com.helei.common.constants.BotJobType;
-import cn.com.helei.common.dto.Result;
-import cn.com.helei.common.entity.AccountContext;
-import cn.com.helei.common.exception.BotInitException;
-import cn.com.helei.common.exception.BotStartException;
+import cn.com.vortexa.db_layer.service.IAccountBaseInfoService;
+import cn.com.vortexa.rpc.IAccountBaseInfoRPC;
+import cn.com.vortexa.common.config.SystemConfig;
+import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.excel.ExcelReadUtil;
+import cn.com.vortexa.db_layer.mapper.AccountBaseInfoMapper;
+import cn.com.vortexa.db_layer.service.AbstractBaseService;
+import cn.com.vortexa.common.entity.AccountBaseInfo;
+import cn.hutool.core.lang.Pair;
+import cn.hutool.core.util.StrUtil;
+import lombok.extern.slf4j.Slf4j;
 
-import java.util.ArrayList;
+import org.springframework.stereotype.Service;
+
+import java.io.IOException;
+import java.io.Serializable;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@Service
+public class AccountBaseInfoServiceImpl extends AbstractBaseService<AccountBaseInfoMapper, AccountBaseInfo>
+    implements IAccountBaseInfoRPC, IAccountBaseInfoService
+{
+
+    public static final String DEFAULT_ACCOUNT_TYPE = "default";
+
+    public AccountBaseInfoServiceImpl() {
+        super(accountBaseInfo -> {
+            accountBaseInfo.setInsertDatetime(LocalDateTime.now());
+            accountBaseInfo.setUpdateDatetime(LocalDateTime.now());
+            accountBaseInfo.setIsValid(1);
+        });
+    }
+
+    @Override
+    public AccountBaseInfo queryByIdRPC(Serializable id) {
+        return super.queryById(id);
+    }
+
+    @Override
+    public PageResult<AccountBaseInfo> conditionPageQueryRPC(int page, int limit, Map<String, Object> filterMap)
+        throws SQLException {
+        return super.conditionPageQuery(page, limit, filterMap);
+    }
+
+    @Override
+    public Result saveAccountBaseInfos(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            log.error("导入账户数据失败", e.getCause());
+            return Result.fail("导入账户数据失败," + e.getMessage());
+        }
+    }
+
+    @Override
+    public Result queryTypedInfo() {
+        try {
+            List<Pair<String, Integer>> typedInfo = getBaseMapper().queryTypedInfo();
+            return Result.ok(typedInfo);
+        } catch (Exception e) {
+            log.error("查询AccountBaseInfo分类信息失败,", e.getCause());
+            return Result.fail(e.getCause().getMessage());
+        }
+    }
+
+    @Override
+    public Integer importFromExcel(String botConfigPath) {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, botConfigPath);
+        AtomicInteger total = new AtomicInteger();
+        try {
+            ExcelReadUtil.readExcelAsMap(
+                proxyFilePath,
+                (type, map) -> AccountBaseInfo.builder()
+                    .type(type)
+                    .name(autoCast(map.remove("name")))
+                    .email(autoCast(map.remove("email")))
+                    .password(autoCast(map.remove("password")))
+                    .params(map)
+                    .build(),
+                (type, accountBaseInfos) -> CompletableFuture.runAsync(() -> {
+                    log.info("[{}] 账号基本信息读取完毕, 共[{}]", type, accountBaseInfos.size());
+                    Integer insertCount = null;
+                    try {
+                        insertCount = insertOrUpdateBatch(accountBaseInfos);
+                    } catch (SQLException e) {
+                        throw new RuntimeException(e);
+                    }
+
+                    log.info("[{}] 账号基本信息保存成功, 新增[{}], 共[{}]", type, insertCount, accountBaseInfos.size());
+
+                    total.addAndGet(accountBaseInfos.size());
+                })
+            );
+
+        } catch (IOException e) {
+            log.error("从文件导入账号基本信息出错", e);
+        }
+
+        return total.get();
+    }
+
+    @Override
+    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
+        log.info("导入账户基本信息，共[{}]条", rawLines.size());
+        List<AccountBaseInfo> list = rawLines.stream().map(map -> {
+            String type = autoCast(map.remove("type"));
+
+            return AccountBaseInfo.builder()
+                .type(StrUtil.isBlank(type) ? DEFAULT_ACCOUNT_TYPE : type)
+                .name(autoCast(map.remove("name")))
+                .email(autoCast(map.remove("email")))
+                .password(autoCast(map.remove("password")))
+                .params(map)
+                .build();
+        }).toList();
+
+        return insertOrUpdateBatch(list);
+    }
+}
+package cn.com.vortexa.bot_platform.service.impl;
+
+import cn.com.vortexa.db_layer.service.AbstractBaseService;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.BotInfo;
+import cn.com.vortexa.db_layer.mapper.BotInfoMapper;
+import cn.com.vortexa.db_layer.service.IBotInfoService;
+import cn.com.vortexa.rpc.IBotInfoRPC;
+import cn.hutool.core.util.StrUtil;
+import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.stereotype.Service;
+
+import java.sql.SQLException;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
-@BotApplication(name = "stork_bot" )
-public class StorkBot extends AutoLaunchBot<StorkBot> {
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-07
+ */
+@Slf4j
+@Service
+public class BotInfoServiceImpl extends AbstractBaseService<BotInfoMapper, BotInfo> implements IBotInfoService, IBotInfoRPC {
 
-    private StorkBotAPI storkBotAPI;
 
-    @Override
-    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
-        storkBotAPI = new StorkBotAPI(this);
+    public BotInfoServiceImpl() {
+        super(botInfo -> {
+            botInfo.setInsertDatetime(LocalDateTime.now());
+            botInfo.setUpdateDatetime(LocalDateTime.now());
+            botInfo.setIsValid(1);
+        });
     }
 
     @Override
-    protected StorkBot getInstance() {
-        return this;
+    public Result bindBotAccountBaseInfo(Integer botId, String botKey, List<Integer> bindAccountBaseInfoList) {
+
+        // Step 1 参数校验
+        if (botId == null || StrUtil.isBlank(botKey)) {
+            log.error("Bot[{}]-[{}]绑定账户时参数botId/botKey为空", botId, botKey);
+            return Result.fail("参数botId/botKey不能为空");
+        }
+
+        BotInfo dbBotInfo = query().eq("id", botId).one();
+        if (dbBotInfo == null) {
+            log.error("Bot[{}]-[{}] 不存在该bot", botId, botKey);
+            return Result.fail("不存在该bot");
+        }
+
+        if (bindAccountBaseInfoList == null) bindAccountBaseInfoList = List.of();
+
+        return Result.ok(bindAccountBaseInfoList);
     }
 
-    @BotMethod(jobType = BotJobType.REGISTER)
-    public Result signUp(AccountContext exampleAC, List<AccountContext> sameABIList, String inviteCode) {
-        return storkBotAPI.signup(exampleAC, sameABIList, inviteCode);
+
+    @Override
+    public Integer insertOrUpdateRPC(BotInfo botInfo) throws SQLException {
+        return insertOrUpdate(botInfo);
     }
 
-    @BotMethod(jobType = BotJobType.LOGIN)
-    public Result login(AccountContext accountContext) {
-        return storkBotAPI.login(accountContext);
+    @Override
+    public List<BotInfo> conditionQueryRPC(Map<String, Object> filterMap) throws SQLException {
+        return conditionQuery(filterMap);
+    }
+}
+package cn.com.vortexa.bot_platform.service.impl;
+
+import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.db_layer.mapper.BotInfoMapper;
+import cn.com.vortexa.db_layer.service.AbstractBaseService;
+import cn.com.vortexa.common.entity.BotInfo;
+import cn.com.vortexa.common.entity.BotInstance;
+import cn.com.vortexa.db_layer.mapper.BotInstanceMapper;
+import cn.com.vortexa.db_layer.service.IBotInstanceService;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+
+import cn.com.vortexa.rpc.IBotInstanceRPC;
+import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-18
+ */
+@Slf4j
+@Service
+public class BotInstanceServiceImpl extends AbstractBaseService<BotInstanceMapper, BotInstance>
+    implements IBotInstanceRPC, IBotInstanceService {
+
+    @Autowired
+    private BotInfoMapper botInfoMapper;
+
+    public BotInstanceServiceImpl() {
+        super(botInstance -> {
+            botInstance.setInsertDatetime(LocalDateTime.now());
+            botInstance.setUpdateDatetime(LocalDateTime.now());
+            botInstance.setIsValid(1);
+        });
     }
 
-    @BotMethod(jobType = BotJobType.TIMED_TASK)
-    public void keepAlive(AccountContext accountContext) {
-        storkBotAPI.keepAlive(accountContext);
+    @Override
+    public PageResult<BotInstance> conditionPageQuery(int page, int limit, Map<String, Object> filterMap) throws SQLException {
+
+        PageResult<BotInstance> result = super.conditionPageQuery(page, limit, filterMap);
+
+        // 填充botInfo
+        List<Integer> botIds = result.getList().stream().map(BotInstance::getBotId).toList();
+        Map<Integer, BotInfo> idMapBotInfo = botInfoMapper.selectBatchIds(botIds)
+                .stream().collect(Collectors.toMap(BotInfo::getId, botInfo -> botInfo));
+
+        for (BotInstance instance : result.getList()) {
+            instance.setBotInfo(idMapBotInfo.get(instance.getBotId()));
+        }
+
+        return result;
     }
 
-    public static void main(String[] args) throws BotStartException, BotInitException {
-        List<String> list = new ArrayList<>(List.of(args));
 
-        list.add("--bot.botKey=stork_test");
-        list.add("--bot.accountConfig.configFilePath=stork_google.xlsx");
-        list.add("--add-opens java.base/java.lang=ALL-UNNAMED");
+    @Override
+    public Boolean existsBotInstance(BotInstance query) {
+        return getBaseMapper().exists(new QueryWrapper<>(query));
+    }
 
-        BotLauncher.launch(StorkBot.class, list.toArray(new String[0]));
+    @Override
+    public Boolean existsBotInstanceRPC(BotInstance query) {
+        return existsBotInstance(query);
+    }
+
+    @Override
+    public Integer insertOrUpdateRPC(BotInstance instance) throws SQLException {
+        return insertOrUpdate(instance);
+    }
+}
+package cn.com.vortexa.bot_platform.service.impl;
+
+import cn.com.vortexa.db_layer.service.IBrowserEnvService;
+import cn.com.vortexa.rpc.IBrowserEnvRPC;
+import cn.com.vortexa.rpc.anno.RPCConsumer;
+import cn.com.vortexa.common.config.SystemConfig;
+import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.excel.ExcelReadUtil;
+import cn.com.vortexa.db_layer.service.AbstractBaseService;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.BrowserEnv;
+import cn.com.vortexa.common.util.pool.IdMarkPool;
+import cn.com.vortexa.db_layer.mapper.BrowserEnvMapper;
+import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.stereotype.Service;
+
+import java.io.Serializable;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
+import static cn.com.vortexa.common.entity.BrowserEnv.USER_AGENT_KEY;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@Service
+public class BrowserEnvServiceImpl extends AbstractBaseService<BrowserEnvMapper, BrowserEnv>
+    implements IBrowserEnvRPC, IBrowserEnvService {
+
+    private IdMarkPool<BrowserEnv> pool;
+
+    public BrowserEnvServiceImpl() {
+        super(browserEnv -> {
+            browserEnv.setInsertDatetime(LocalDateTime.now());
+            browserEnv.setUpdateDatetime(LocalDateTime.now());
+            browserEnv.setIsValid(1);
+        });
+    }
+
+
+
+    @Override
+    public Result saveBrowserEnvs(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail("导入浏览器环境失败," + e.getMessage());
+        }
+    }
+
+    @Override
+    public synchronized List<BrowserEnv> getUselessBrowserEnv(int count) {
+        if (pool == null) {
+            log.info("loading Browser Env pool...");
+            this.pool = IdMarkPool.create(list(), BrowserEnv.class);
+            log.info("loading Browser Env pool success");
+        }
+
+        return pool.getLessUsedItem(count);
+    }
+
+    @Override
+    public Integer importFromExcel(String fileBotConfigPath) throws SQLException {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        List<Map<String, Object>> headerList = ExcelReadUtil.readExcelToMap(proxyFilePath);
+
+        log.info("文件解析成功, 共[{}]个", headerList.size());
+        return importFromRaw(headerList);
+    }
+
+    @Override
+    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
+
+        List<BrowserEnv> list = rawLines.stream().map(map -> {
+            Object userAgent = map.remove(USER_AGENT_KEY);
+            if (userAgent == null) {
+                return null;
+            }
+
+            BrowserEnv browserEnv = new BrowserEnv();
+            browserEnv.setUserAgent((String) userAgent);
+            browserEnv.setOtherHeader(map);
+            return browserEnv;
+        }).filter(Objects::nonNull).toList();
+
+        return insertOrUpdateBatch(list);
+    }
+
+    @Override
+    public BrowserEnv queryByIdRPC(Serializable id) {
+        return super.queryById(id);
+    }
+
+    @Override
+    public PageResult<BrowserEnv> conditionPageQueryRPC(int page, int limit, Map<String, Object> filterMap)
+        throws SQLException {
+        return super.conditionPageQuery(page, limit, filterMap);
+    }
+}
+package cn.com.vortexa.bot_platform.service.impl;
+
+import cn.com.vortexa.db_layer.service.IDiscordAccountService;
+import cn.com.vortexa.rpc.IDiscordAccountRPC;
+import cn.com.vortexa.rpc.anno.RPCConsumer;
+import cn.com.vortexa.common.config.SystemConfig;
+import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.excel.ExcelReadUtil;
+import cn.com.vortexa.db_layer.service.AbstractBaseService;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.DiscordAccount;
+import cn.com.vortexa.db_layer.mapper.DiscordAccountMapper;
+import cn.com.vortexa.rpc.constants.BotPlatFromRCCode;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import java.io.Serializable;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@Service
+public class DiscordAccountServiceImpl extends AbstractBaseService<DiscordAccountMapper, DiscordAccount> implements
+    IDiscordAccountRPC, IDiscordAccountService {
+
+    public DiscordAccountServiceImpl() {
+        super(discordAccount -> {
+            discordAccount.setInsertDatetime(LocalDateTime.now());
+            discordAccount.setUpdateDatetime(LocalDateTime.now());
+            discordAccount.setIsValid(1);
+        });
+    }
+
+
+
+
+    public Result saveDiscordAccounts(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail("导入discord账号失败," + e.getMessage());
+        }
+    }
+
+    @Override
+    public Integer importFromExcel(String fileBotConfigPath) {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        try {
+            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(dirResourcePath);
+
+            return importFromRaw(rawLines);
+        } catch (Exception e) {
+            log.error("读取discord account 文件[{}]发生异常", dirResourcePath, e);
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
+        List<DiscordAccount> discordAccounts = rawLines.stream().map(map -> DiscordAccount.builder()
+                .username(autoCast(map.remove("username")))
+                .password(autoCast(map.remove("password")))
+                .bindEmail(autoCast(map.remove("bind_email")))
+                .bindEmailPassword(autoCast(map.remove("bind_email_password")))
+                .token(autoCast(map.remove("token")))
+                .params(map)
+                .build()
+        ).toList();
+
+        return insertOrUpdateBatch(discordAccounts);
+    }
+
+    @Override
+    public DiscordAccount queryByIdRPC(Serializable id) {
+        return super.queryById(id);
+    }
+
+    @Override
+    public PageResult<DiscordAccount> conditionPageQueryRPC(int page, int limit, Map<String, Object> filterMap)
+        throws SQLException {
+        return super.conditionPageQuery(page, limit, filterMap);
+    }
+}
+package cn.com.vortexa.bot_platform.service.impl;
+
+import cn.com.vortexa.db_layer.service.AbstractBaseService;
+import cn.com.vortexa.common.entity.ProjectInfo;
+import cn.com.vortexa.db_layer.mapper.ProjectInfoMapper;
+import cn.com.vortexa.db_layer.service.IProjectInfoService;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-07
+ */
+@Service
+public class ProjectInfoServiceImpl extends AbstractBaseService<ProjectInfoMapper, ProjectInfo> implements
+    IProjectInfoService {
+
+    public ProjectInfoServiceImpl() {
+        super(projectInfo -> {
+            projectInfo.setInsertDatetime(LocalDateTime.now());
+            projectInfo.setUpdateDatetime(LocalDateTime.now());
+            projectInfo.setIsValid(1);
+        });
     }
 
 }
-package cn.com.helei.example.stork_bot;
+package cn.com.vortexa.bot_platform.service.impl;
 
-import cn.com.helei.common.constants.HttpMethod;
-import cn.com.helei.common.dto.Result;
-import cn.com.helei.common.entity.AccountContext;
-import cn.com.helei.mail.constants.MailProtocolType;
-import cn.com.helei.mail.factory.MailReaderFactory;
-import cn.com.helei.mail.reader.MailReader;
-import cn.hutool.core.util.StrUtil;
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
-import org.jetbrains.annotations.NotNull;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import cn.com.vortexa.db_layer.service.IProxyInfoService;
+import cn.com.vortexa.rpc.IProxyInfoRPC;
+import cn.com.vortexa.rpc.anno.RPCConsumer;
+import cn.com.vortexa.common.config.SystemConfig;
+import cn.com.vortexa.common.constants.ProxyProtocol;
+import cn.com.vortexa.common.constants.ProxyType;
+import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.excel.ExcelReadUtil;
+import cn.com.vortexa.db_layer.service.AbstractBaseService;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.ProxyInfo;
+import cn.com.vortexa.db_layer.mapper.ProxyInfoMapper;
+import cn.com.vortexa.rpc.constants.BotPlatFromRCCode;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
 
-import javax.mail.Message;
-import javax.mail.MessagingException;
-import java.util.Arrays;
+import java.io.Serializable;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@Service
+public class ProxyInfoServiceImpl extends AbstractBaseService<ProxyInfoMapper, ProxyInfo> implements IProxyInfoRPC,IProxyInfoService {
 
 
-public class StorkBotAPI {
-    private static final String CLIENT_ID = "5msns4n49hmg3dftp2tp1t2iuh";
+    public ProxyInfoServiceImpl() {
+        super(proxyInfo -> {
+            proxyInfo.setInsertDatetime(LocalDateTime.now());
+            proxyInfo.setUpdateDatetime(LocalDateTime.now());
+            proxyInfo.setIsValid(1);
+        });
 
-    private static final String SIGNUP_APi = "https://cognito-idp.ap-northeast-1.amazonaws.com/";
-
-    private static final String LOGIN_API = "";
-
-    private static final String STORK_SIGNED_PRICE_API = "https://app-api.jp.stork-oracle.network/v1/stork_signed_prices";
-
-    private static final String VALIDATE_SIGNED_PRICE_API = "https://app-api.jp.stork-oracle.network/v1/stork_signed_prices/validations";
-
-    private static final String MAIL_FROM = "noreply@stork.network";
-
-    private static final Pattern V_CODE_PATTERN = Pattern.compile("he verification code to your new account is\\s+(\\d{6})");
-
-    public static final String PASSWORD_KEY = "stork_password";
-
-    public static final String IMAP_PASSWORD_KEY = "imap_password";
-
-    public static final String TOKEN_KEY = "stork_token";
-
-
-    private static final MailReader mailReader = MailReaderFactory.getMailReader(MailProtocolType.imap,
-            "imap.gmail.com", "993", true);
-    private static final Logger log = LoggerFactory.getLogger(StorkBotAPI.class);
-
-    private final StorkBot bot;
-
-
-    public StorkBotAPI(StorkBot bot) {
-        this.bot = bot;
     }
 
 
-    /**
-     * 注册
-     *
-     * @param exampleAC     exampleAC
-     * @param sameABIACList sameABIACList
-     * @param inviteCode    inviteCode
-     * @return Result
-     */
-    public Result signup(AccountContext exampleAC, List<AccountContext> sameABIACList, String inviteCode) {
-        bot.logger.info("%s start signup".formatted(exampleAC.getSimpleInfo()));
-
-        CompletableFuture<String> signupFuture = sendSignUpRequest(exampleAC, inviteCode)
-                .thenApplyAsync(responseStr -> queryCheckCode(exampleAC))
-                .thenApplyAsync(checkCode -> confirmSignup(exampleAC, checkCode));
+    @Override
+    public Result saveProxyInfos(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
 
         try {
-            String confirmResponse = signupFuture.get();
-            bot.logger.info("%s sign up finish, %s".formatted(exampleAC.getSimpleInfo(), confirmResponse));
+            importFromRaw(rawLines);
             return Result.ok();
-        } catch (InterruptedException | ExecutionException e) {
-            String errorMsg = "%s signup error, %s".formatted(exampleAC.getSimpleInfo(),
-                    e.getCause() == null ? e.getCause().getMessage() : e.getMessage());
-            bot.logger.error(errorMsg, e);
-            return Result.fail(errorMsg);
+        } catch (Exception e) {
+            log.error("saveProxyInfos error", e);
+            return Result.fail("导入代理信息失败," + e.getMessage());
         }
     }
 
-    /**
-     * 登录
-     *
-     * @param accountContext accountContext
-     * @return Result
-     */
-    public Result login(AccountContext accountContext) {
-        bot.logger.info("%s start login".formatted(accountContext.getSimpleInfo()));
+    @Override
+    public Integer importFromExcel(String botConfigPath) {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, botConfigPath);
 
-        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
-        headers.put("Accept", "/");
-
-        JSONObject body = new JSONObject();
-        body.put("grant_type", "refresh_token");
-        body.put("ClientId", CLIENT_ID);
+        int total = 0;
 
         try {
-            String responseStr = bot.syncRequest(
-                    accountContext.getProxy(),
-                    LOGIN_API,
-                    HttpMethod.POST,
-                    headers,
-                    null,
-                    body,
-                    () -> accountContext.getSimpleInfo() + " start login"
-            ).get();
+            List<Map<String, Object>> staticProxies = ExcelReadUtil.readExcelToMap(proxyFilePath, "static");
 
-            JSONObject result = JSONObject.parseObject(responseStr);
-            bot.logger.info("%s login success, %s".formatted(accountContext.getSimpleInfo(), responseStr));
+            total += importFromRaw(staticProxies);
+
+            List<Map<String, Object>> dynamicProxies = ExcelReadUtil.readExcelToMap(proxyFilePath, "dynamic");
+
+            total += importFromRaw(dynamicProxies);
+
+            log.info("代理配置文件解析成功，static-proxy:[{}], dynamic-proxy:[{}]", staticProxies.size(), dynamicProxies.size());
+
+            return total;
+        } catch (Exception e) {
+            log.error("解析代理配置文件[{}]错误", proxyFilePath, e);
+
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
+
+        List<ProxyInfo> list = rawLines.stream().map(map -> {
+            String proxyProtocol = autoCast(map.remove("proxy_protocol"));
+            if (proxyProtocol == null) proxyProtocol = autoCast(map.remove("proxyProtocol"));
+
+            Object port = map.remove("port");
+            return ProxyInfo.builder()
+                    .proxyType(ProxyType.STATIC)
+                    .host(autoCast(map.remove("host")))
+                    .port(port instanceof Integer ? (Integer) port : Integer.parseInt(autoCast(port)))
+                    .proxyProtocol(ProxyProtocol.valueOf(proxyProtocol.toUpperCase()))
+                    .username(autoCast(map.remove("username")))
+                    .password(autoCast(map.remove("password")))
+                    .params(map)
+                    .build();
+        }).toList();
+
+        return insertOrUpdateBatch(list);
+    }
+
+    @Override
+    public ProxyInfo queryByIdRPC(Serializable id) {
+        return super.queryById(id);
+    }
+
+    @Override
+    public PageResult<ProxyInfo> conditionPageQueryRPC(int page, int limit, Map<String, Object> filterMap)
+        throws SQLException {
+        return super.conditionPageQuery(page, limit, filterMap);
+    }
+}
+package cn.com.vortexa.bot_platform.service.impl;
+
+import cn.com.vortexa.db_layer.service.ITelegramAccountService;
+import cn.com.vortexa.rpc.ITelegramAccountRPC;
+import cn.com.vortexa.rpc.anno.RPCConsumer;
+import cn.com.vortexa.common.config.SystemConfig;
+import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.excel.ExcelReadUtil;
+import cn.com.vortexa.db_layer.service.AbstractBaseService;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.TelegramAccount;
+import cn.com.vortexa.db_layer.mapper.TelegramAccountMapper;
+import cn.com.vortexa.rpc.constants.BotPlatFromRCCode;
+import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.convert.ConversionService;
+import org.springframework.stereotype.Service;
+
+import java.io.Serializable;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-06
+ */
+@Slf4j
+@Service
+public class TelegramAccountServiceImpl extends AbstractBaseService<TelegramAccountMapper, TelegramAccount> implements
+    ITelegramAccountRPC, ITelegramAccountService {
+
+    private final ConversionService conversionService;
+
+    public TelegramAccountServiceImpl(
+        @Qualifier("conversionService") ConversionService conversionService) {
+        super(telegramAccount -> {
+            telegramAccount.setInsertDatetime(LocalDateTime.now());
+            telegramAccount.setUpdateDatetime(LocalDateTime.now());
+            telegramAccount.setIsValid(1);
+        });
+        this.conversionService = conversionService;
+    }
+
+
+
+    @Override
+    public Result saveTelegrams(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importFromRaw(rawLines);
             return Result.ok();
-        } catch (InterruptedException | ExecutionException e) {
-            String errorMsg = "%s login error, %s".formatted(accountContext.getSimpleInfo(),
-                    e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
-            bot.logger.error(errorMsg, e);
-            return Result.fail(errorMsg);
+        } catch (Exception e) {
+            return Result.fail("导入telegram账号失败," + e.getMessage());
         }
     }
 
+    @Override
+    public Integer importFromExcel(String fileBotConfigPath) throws SQLException {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
 
-    /**
-     * keepAlive
-     *
-     * @param accountContext accountContext
-     */
-    public void keepAlive(AccountContext accountContext) {
-        // TODO check token refresh it
         try {
-            String msgHash = getSignedPrice(accountContext).get();
+            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(dirResourcePath);
 
-            String response = validateSignedPrice(accountContext, msgHash).get();
-
-            bot.logger.info(accountContext + "%s keep alive success, " + response);
-        } catch (InterruptedException | ExecutionException e) {
-            bot.logger.error(accountContext + " keep alive error " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+            return importFromRaw(rawLines);
+        } catch (Exception e) {
+            log.error("读取telegram account 文件[{}]发生异常", dirResourcePath, e);
+            return 0;
         }
     }
 
+    @Override
+    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
+        List<TelegramAccount> telegramAccounts = rawLines.stream().map(map -> TelegramAccount.builder()
+            .username(autoCast(map.remove("username")))
+            .password(autoCast(map.remove("password")))
+            .phonePrefix(autoCast(map.remove("phone_prefix")))
+            .phone(autoCast(map.remove("phone")))
+            .token(autoCast(map.remove("token")))
+            .params(map)
+            .build()
+        ).toList();
+
+        return insertOrUpdateBatch(telegramAccounts);
+    }
+
+    @Override
+    public TelegramAccount queryByIdRPC(Serializable id) {
+        return queryById(id);
+    }
+
+    @Override
+    public PageResult<TelegramAccount> conditionPageQueryRPC(int page, int limit, Map<String, Object> filterMap)
+        throws SQLException {
+        return super.conditionPageQuery(page, limit, filterMap);
+    }
+}
+package cn.com.vortexa.bot_platform.service.impl;
+
+import cn.com.vortexa.db_layer.service.ITwitterAccountService;
+import cn.com.vortexa.rpc.ITwitterAccountRPC;
+import cn.com.vortexa.common.config.SystemConfig;
+import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.excel.ExcelReadUtil;
+import cn.com.vortexa.db_layer.service.AbstractBaseService;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.TwitterAccount;
+import cn.com.vortexa.db_layer.mapper.TwitterAccountMapper;
+import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.stereotype.Service;
+
+import java.io.Serializable;
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+@Slf4j
+@Service
+public class TwitterAccountServiceImpl extends AbstractBaseService<TwitterAccountMapper, TwitterAccount>
+    implements ITwitterAccountRPC, ITwitterAccountService {
+
+    public TwitterAccountServiceImpl() {
+        super(twitterAccount -> {
+            twitterAccount.setInsertDatetime(LocalDateTime.now());
+            twitterAccount.setUpdateDatetime(LocalDateTime.now());
+            twitterAccount.setIsValid(1);
+        });
+    }
+
+    @Override
+    public TwitterAccount queryByIdRPC(Serializable id) {
+        return super.queryById(id);
+    }
+
+    @Override
+    public PageResult<TwitterAccount> conditionPageQueryRPC(int page, int limit, Map<String, Object> filterMap)
+        throws SQLException {
+        return super.conditionPageQuery(page, limit, filterMap);
+    }
+
+    @Override
+    public Result saveTwitters(List<Map<String, Object>> rawLines) {
+        if (rawLines == null || rawLines.isEmpty()) {
+            return Result.fail("导入数据不能为空");
+        }
+
+        try {
+            importFromRaw(rawLines);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail("导入twitter 账号失败," + e.getMessage());
+        }
+    }
+
+    @Override
+    public Integer importFromExcel(String fileBotConfigPath) throws SQLException {
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+
+        try {
+            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(proxyFilePath);
+
+            return importFromRaw(rawLines);
+        } catch (Exception e) {
+            log.error("读取twitter account 文件[{}]发生异常", proxyFilePath, e);
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
+        List<TwitterAccount> twitterAccounts = rawLines.stream().map(map -> TwitterAccount.builder()
+            .username(autoCast(map.remove("username")))
+            .password(autoCast(map.remove("password")))
+            .email(autoCast(map.remove("email")))
+            .emailPassword(autoCast(map.remove("email_password")))
+            .token(autoCast(map.remove("token")))
+            .f2aKey(autoCast(map.remove("f2a_key")))
+            .params(map)
+            .build()).toList();
+
+        return insertOrUpdateBatch(twitterAccounts);
+    }
+}
+package cn.com.vortexa.bot_platform.service.rpc;
+
+import org.springframework.stereotype.Service;
+
+@Service
+public class BotAccountContextServiceRPC{
+
+}
+package cn.com.vortexa.bot_platform.service.rpc;
+
+import org.springframework.stereotype.Service;
+
+@Service
+public class RewordInfoServiceRPC  {
+
+}
+
+spring:
+  datasource:
+    url: "jdbc:sqlite://Users/helei/develop/ideaworkspace/BotFramework/botData/db/plantfrom.db"
+
+dubbo:
+  application:
+    name: bot-platform
+    logger: slf4j
+  registry:
+#    id: zk-registry
+#    address: zookeeper://127.0.0.1:2181
+    id: nacos-registry
+    address: nacos://localhost:8848
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    cache-enabled: true
+    map-underscore-to-camel-case: false
+  global-config:
+    db-config:
+      logic-delete-field: isValid  # 全局逻辑删除的实体字段名(since 3.3.0,配置后可以忽略不配置步骤2)
+      logic-delete-value: 0    # 设置 1 为未删除
+      logic-not-delete-value: 1 # 设置 0 为已删除
+  mapper-locations: classpath:/mapper/*.xml
+
+logging:
+  level:
+    org:
+      apache:
+        dubbo: WARN
+        zookeeper: WARN
+server:
+  port: 10010
 
 
-    private CompletableFuture<String> validateSignedPrice(AccountContext accountContext, String msgHash) {
-        bot.logger.info(accountContext.getSimpleInfo() + " start validate signed price ");
-        String token = accountContext.getParam(TOKEN_KEY);
+vortexa:
+  nameserver:
+    server: # 命名服务 配置
+      nio-thread-count: 1 # netty nio 线程数
+      service-offline-ttl: 120  # 服务下线时间
+      service-instance:
+        host: localhost # 命名服务host
+        port: 18848 # 命名服务port
+        group: test1
+        service-id: nameserver
+        instance-id: nameserver-1
 
-        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
-        headers.put("Authorization", "Bearer " + token);
+package cn.com.vortexa.common.util;
 
-        JSONObject body = new JSONObject();
-        body.put("msg_hash", msgHash);
-        body.put("valid", true);
+import cn.com.vortexa.common.config.SystemConfig;
+import org.yaml.snakeyaml.Yaml;
 
-        return bot.syncRequest(
-                accountContext.getProxy(),
-                VALIDATE_SIGNED_PRICE_API,
-                HttpMethod.POST,
-                headers,
-                null,
-                body,
-                () -> accountContext.getSimpleInfo() + " send validate signed price request"
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+public class YamlConfigLoadUtil {
+
+    private static final ConcurrentHashMap<String, Object> LOADED_CONFIG_MAP = new ConcurrentHashMap<>();
+
+    public static <T> T load(
+            String path,
+            String fileName,
+            String prefix,
+            Class<T> clazz
+    ) {
+        return load(
+                Arrays.asList(path.split("\\.")),
+                fileName,
+                Arrays.asList(prefix.split("\\.")),
+                clazz
         );
     }
 
 
-    private CompletableFuture<String> getSignedPrice(AccountContext accountContext) {
-        bot.logger.info(accountContext.getSimpleInfo() + " start get signed price ");
+    public static <T> T load(
+            List<String> path,
+            String fileName,
+            List<String> prefixList,
+            Class<T> clazz
+    ) {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(path, fileName);
 
-        String token = accountContext.getParam(TOKEN_KEY);
+        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
+            if (config == null) {
+                Yaml yaml = new Yaml();
+                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
+                    Map<String, Object> yamlData = yaml.load(inputStream);
 
-        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
-        headers.put("Authorization", "Bearer " + token);
+                    if (prefixList != null) {
+                        for (String prefix : prefixList) {
+                            yamlData = (Map<String, Object>) yamlData.get(prefix);
+                            Map<String, Object> target = new HashMap<>();
+                            for (Map.Entry<String, Object> entry : yamlData.entrySet()) {
+                                target.put(toCamelCase(entry.getKey()), entry.getValue());
+                            }
+                            yamlData = target;
+                        }
+                    }
 
-        return bot.syncRequest(
-                accountContext.getProxy(),
-                STORK_SIGNED_PRICE_API,
-                HttpMethod.GET,
-                headers,
-                null,
-                null,
-                () -> accountContext.getSimpleInfo() + " send get signed price request"
-        ).thenApplyAsync(responseStr -> {
-            JSONObject signedPrices = JSONObject.parseObject(responseStr);
-            bot.logger.info(accountContext.getSimpleInfo() + " signed price is " + signedPrices);
-
-            JSONArray prices = signedPrices.getJSONArray("data");
-            for (int i = 0; i < prices.size(); i++) {
-                JSONObject price = prices.getJSONObject(i);
-                JSONObject timestampedSignature = price.getJSONObject("timestamped_signature");
-                if (timestampedSignature != null) {
-                    return timestampedSignature.getString("msg_hash");
+                    config = yaml.loadAs(yaml.dump(yamlData), clazz);
+                } catch (IOException e) {
+                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
                 }
             }
-            throw new RuntimeException("signed price is empty");
+
+            return config;
         });
+
+        return (T) compute;
+    }
+
+    public static List<Object> load(List<String> configDirBotPath, String fileName, String prefix) {
+        return load(configDirBotPath, fileName, List.of(prefix.split("\\.")));
+    }
+
+    public static List<Object> load(
+            List<String> path,
+            String fileName,
+            List<String> prefixList
+    ) {
+        String dirResourcePath = FileUtil.getConfigDirResourcePath(path, fileName);
+
+        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
+            if (config == null) {
+                Yaml yaml = new Yaml();
+                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
+                    Map<String, Object> yamlData = yaml.load(inputStream);
+
+                    if (prefixList != null) {
+                        for (String prefix : prefixList) {
+                            yamlData = (Map<String, Object>) yamlData.get(prefix);
+                            Map<String, Object> target = new HashMap<>();
+                            for (Map.Entry<String, Object> entry : yamlData.entrySet()) {
+                                target.put(toCamelCase(entry.getKey()), entry.getValue());
+                            }
+                            yamlData = target;
+                        }
+                    }
+                    return yamlData.get("list");
+                } catch (IOException e) {
+                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
+                }
+            }
+
+            return config;
+        });
+
+        return (List<Object>) compute;
     }
 
 
-    private String confirmSignup(AccountContext exampleAC, String checkCode) {
-        bot.logger.info(exampleAC.getSimpleInfo() + " check code is " + checkCode + " start confirm sign up");
+    public static <T> T load(File path, List<String> prefixList, Class<T> tClass) {
+        Object compute = LOADED_CONFIG_MAP.compute(path.getAbsolutePath(), (k, config) -> {
+            if (config == null) {
+                Yaml yaml = new Yaml();
+                try (InputStream inputStream = new FileInputStream(path)) {
+                    Map<String, Object> yamlData = yaml.load(inputStream);
 
-        Map<String, String> headers = exampleAC.getBrowserEnv().generateHeaders();
-        headers.put("X-Amz-Target", "AWSCognitoIdentityProviderService.ConfirmSignUp");
-        headers.put("Accept", "/");
+                    if (prefixList != null) {
+                        for (String prefix : prefixList) {
+                            yamlData = (Map<String, Object>) yamlData.get(prefix);
+                            Map<String, Object> target = new HashMap<>();
+                            for (Map.Entry<String, Object> entry : yamlData.entrySet()) {
+                                target.put(toCamelCase(entry.getKey()), entry.getValue());
+                            }
+                            yamlData = target;
+                        }
+                    }
 
-        JSONObject body = new JSONObject();
-        body.put("Username", exampleAC.getAccountBaseInfo().getEmail());
-        body.put("ConfirmationCode", checkCode);
-        body.put("ClientId", CLIENT_ID);
+                    return yaml.loadAs(yaml.dump(yamlData), tClass);
+                } catch (IOException e) {
+                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", path), e);
+                }
+            }
+            return config;
+        });
 
-        CompletableFuture<String> future = bot.syncRequest(
-                exampleAC.getProxy(),
-                SIGNUP_APi,
-                HttpMethod.POST,
-                headers,
-                body,
-                null,
-                () -> exampleAC.getSimpleInfo() + " confirm sign up"
-        );
-        try {
-            return future.get();
-        } catch (InterruptedException | ExecutionException e) {
-            throw new RuntimeException("confirm sign up error, %s".formatted(e.getCause() == null ? e.getCause().getMessage() : e.getMessage()));
+        return (T) compute;
+    }
+
+    private static String toCamelCase(String name) {
+        String[] parts = name.split("-");
+        StringBuilder camelCase = new StringBuilder(parts[0]);
+        for (int i = 1; i < parts.length; i++) {
+            camelCase.append(parts[i].substring(0, 1).toUpperCase()).append(parts[i].substring(1));
         }
+        return camelCase.toString();
+    }
+
+    public static void main(String[] args) {
+        System.out.println(YamlConfigLoadUtil.load(SystemConfig.CONFIG_DIR_BOT_PATH, "browser-env.yaml", List.of("bot", "browser")));
+    }
+
+}
+package cn.com.vortexa.db_layer.service;
+
+import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.common.util.ConditionBuildUtil;
+import cn.com.vortexa.db_layer.mapper.IBaseMapper;
+import cn.com.vortexa.db_layer.util.ConditionQueryUtil;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.github.pagehelper.PageInfo;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.io.Serializable;
+import java.lang.reflect.InvocationTargetException;
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
+
+@Slf4j
+public abstract class AbstractBaseService<M extends IBaseMapper<T>, T> extends ServiceImpl<M, T> implements IBaseService<T> {
+
+    private final Consumer<T> fillFunction;
+
+    protected AbstractBaseService(Consumer<T> fillFunction) {
+        this.fillFunction = fillFunction;
+    }
+
+    @Override
+    public T queryById(Serializable id) {
+        return getById(id);
+    }
+
+    /**
+     * 插入或更新
+     *
+     * @param t t
+     * @return Integer
+     */
+    @Override
+    public Integer insertOrUpdate(T t) throws SQLException {
+        fillFunction.accept(t);
+        return getBaseMapper().insertOrUpdate(t);
     }
 
 
     /**
-     * Step 2 从邮箱获取验证码
+     * 批量插入或更新
      *
-     * @param exampleAC exampleAC
-     * @return String
+     * @param tList tList
+     * @return Integer
      */
-    private @NotNull String queryCheckCode(AccountContext exampleAC) {
-        bot.logger.info(exampleAC.getSimpleInfo() + " start query check code");
-
-        String email = exampleAC.getAccountBaseInfo().getEmail();
-        String imapPassword = exampleAC.getParam(IMAP_PASSWORD_KEY);
-
-        AtomicReference<String> checkCode = new AtomicReference<>();
-        mailReader.stoppableReadMessage(email, imapPassword, 3, message -> {
+    @Override
+    public Integer insertOrUpdateBatch(List<T> tList) throws SQLException {
+        int successCount = 0;
+        for (T t : tList) {
             try {
-                String newValue = resolveVerifierCodeFromMessage(message);
-                checkCode.set(newValue);
-                return StrUtil.isNotBlank(newValue);
-            } catch (MessagingException e) {
-                throw new RuntimeException("email check code query error", e);
+                Integer count = insertOrUpdate(t);
+                successCount += count == null ? 0 : count;
+            } catch (Exception e) {
+                throw new SQLException("insert or update error", e);
             }
-        });
-
-        if (StrUtil.isBlank(checkCode.get())) {
-            throw new RuntimeException("check code is empty");
         }
 
-        return checkCode.get();
+        return successCount;
+    }
+
+    /**
+     * 条件分页查询
+     *
+     * @param page      page
+     * @param limit     limit
+     * @param filterMap filterMap
+     * @return PageInfo<T>
+     * @throws SQLException SQLException
+     */
+    @Override
+    public PageResult<T> conditionPageQuery(
+            int page,
+            int limit,
+            Map<String, Object> filterMap
+    ) throws SQLException {
+        return conditionPageQuery(page, limit, "params", filterMap);
     }
 
 
-    private CompletableFuture<String> sendSignUpRequest(AccountContext exampleAC, String inviteCode) {
-        Map<String, String> headers = exampleAC.getBrowserEnv().generateHeaders();
-        headers.put("X-Amz-Target", "AWSCognitoIdentityProviderService.SignUp");
-        headers.put("Accept", "/");
+    /**
+     * 条件分页查询
+     *
+     * @param page      page
+     * @param limit     limit
+     * @param paramsKey paramsKey
+     * @param filterMap filterMap
+     * @return PageInfo<T>
+     * @throws SQLException SQLException
+     */
+    @Override
+    public PageResult<T> conditionPageQuery(
+            int page,
+            int limit,
+            String paramsKey,
+            Map<String, Object> filterMap
+    ) throws SQLException {
+        try {
+            PageInfo<T> pageInfo = ConditionQueryUtil.conditionQuery(
+                    page,
+                    limit,
+                    filterMap,
+                    paramsKey,
+                    condition -> getBaseMapper().multipleConditionQuery(condition),
+                    entityClass
+            );
+            List<T> list = pageInfo.getList();
+            PageResult<T> pageResult = new PageResult<>();
+            pageResult.setPages(pageInfo.getPages());
+            pageResult.setPageNum(pageInfo.getPageNum());
+            pageResult.setPageSize(pageInfo.getPageSize());
+            pageResult.setTotal(pageInfo.getTotal());
+            pageResult.setList(list);
+            return pageResult;
+        } catch (InvocationTargetException | NoSuchMethodException | InstantiationException |
+                 IllegalAccessException e
+        ) {
+            throw new SQLException("condition query error", e);
+        }
+    }
 
-        JSONObject body = generateSignupBody(exampleAC, inviteCode);
+    @Override
+    public List<T> conditionQuery(Map<String, Object> filterMap) throws SQLException {
+        return conditionQuery("params", filterMap);
+    }
 
-        // Step 1 注册请求
-        return bot.syncRequest(
-                exampleAC.getProxy(),
-                SIGNUP_APi,
-                HttpMethod.POST,
-                headers,
-                body,
-                null,
-                () -> exampleAC.getSimpleInfo() + " send sign up request"
+    @Override
+    public List<T> conditionQuery(String paramsKey, Map<String, Object> filterMap) throws SQLException {
+        T condition = null;
+        try {
+            condition = ConditionBuildUtil.getMapContainsCondition(
+                    filterMap,
+                    paramsKey,
+                    entityClass
+            );
+        } catch (NoSuchMethodException | InvocationTargetException | InstantiationException |
+                 IllegalAccessException e) {
+            throw new SQLException(e);
+        }
+
+        return getBaseMapper().multipleConditionQuery(condition);
+    }
+
+    /**
+     * 删除
+     *
+     * @param ids ids
+     * @return Result
+     */
+    @Transactional
+    public Boolean delete(List<Integer> ids) {
+        return removeBatchByIds(ids);
+    }
+
+
+    protected <T> T autoCast(Object obj) {
+        return obj == null ? null : (T) obj;
+    }
+
+    protected Integer toInteger(Object obj) {
+        return obj == null ? null : Integer.valueOf(obj.toString());
+    }
+}
+package cn.com.vortexa.db_layer.service;
+
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.AccountBaseInfo;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IAccountBaseInfoService extends IBaseService<AccountBaseInfo>, ImportService {
+
+    Result saveAccountBaseInfos(List<Map<String, Object>> rawLines);
+
+    Result queryTypedInfo();
+}
+package cn.com.vortexa.db_layer.service;
+
+
+import cn.com.vortexa.common.dto.PageResult;
+
+import java.io.Serializable;
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Map;
+
+public interface IBaseService<T> {
+    Integer insertOrUpdate(T t) throws SQLException;
+
+    Integer insertOrUpdateBatch(List<T> tList) throws SQLException;
+
+    PageResult<T> conditionPageQuery(int page, int limit, String params, Map<String, Object> filterMap) throws SQLException;
+
+    PageResult<T> conditionPageQuery(int page, int limit, Map<String, Object> filterMap) throws SQLException;
+
+    List<T> conditionQuery(Map<String, Object> filterMap) throws SQLException;
+
+    List<T> conditionQuery(String params, Map<String, Object> filterMap) throws SQLException;
+
+    T queryById(Serializable id);
+
+    Boolean delete(List<Integer> ids);
+}
+package cn.com.vortexa.db_layer.service;
+
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.BotInfo;
+
+import java.util.List;
+
+/**
+ * <p>
+ * 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-07
+ */
+public interface IBotInfoService extends IBaseService<BotInfo> {
+
+    Result bindBotAccountBaseInfo(Integer botId, String botKey, List<Integer> bindAccountBaseInfoList);
+
+}
+package cn.com.vortexa.db_layer.service;
+
+import cn.com.vortexa.common.entity.BotInstance;
+
+/**
+ * <p>
+ * 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-18
+ */
+public interface IBotInstanceService extends IBaseService<BotInstance> {
+
+    Boolean existsBotInstance(BotInstance query);
+}
+package cn.com.vortexa.db_layer.service;
+
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.BrowserEnv;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IBrowserEnvService extends IBaseService<BrowserEnv>, ImportService {
+
+    Result saveBrowserEnvs(List<Map<String, Object>> rawLines);
+
+    List<BrowserEnv> getUselessBrowserEnv(int count);
+}
+package cn.com.vortexa.db_layer.service;
+
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.DiscordAccount;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IDiscordAccountService extends IBaseService<DiscordAccount>, ImportService {
+
+    Result saveDiscordAccounts(List<Map<String, Object>> rawLines);
+
+}
+package cn.com.vortexa.db_layer.service;
+
+import cn.com.vortexa.common.entity.ProjectInfo;
+
+/**
+ * <p>
+ * 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-07
+ */
+public interface IProjectInfoService extends IBaseService<ProjectInfo> {
+
+}
+package cn.com.vortexa.db_layer.service;
+
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.ProxyInfo;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface IProxyInfoService extends IBaseService<ProxyInfo>, ImportService {
+
+    Result saveProxyInfos(List<Map<String, Object>> rawLines);
+
+}
+package cn.com.vortexa.db_layer.service;
+
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.TelegramAccount;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ * 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-06
+ */
+public interface ITelegramAccountService extends IBaseService<TelegramAccount>, ImportService {
+
+    Result saveTelegrams(List<Map<String, Object>> rawLines);
+}
+package cn.com.vortexa.db_layer.service;
+
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.TwitterAccount;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * <p>
+ *  服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-05
+ */
+public interface ITwitterAccountService extends IBaseService<TwitterAccount>, ImportService {
+
+    Result saveTwitters(List<Map<String, Object>> rawLines);
+
+}
+package cn.com.vortexa.nameserver.constant;
+
+public class RemotingCommandFlagConstants {
+
+    public static final String REQUEST_ERROR = "request_error";
+
+    /**
+     * 超时异常
+     */
+    public static final int TIME_OUT_EXCEPTION = 501;
+
+    /**
+     * 参数解析异常
+     */
+    public static final int PARAMS_ERROR = 502;
+
+    /**
+     * ping
+     */
+    public static final int PING = 100;
+
+    /**
+     * pong
+     */
+    public static final int PONG = -100;
+
+    /**
+     *  客户端服务注册的消息
+     */
+    public static final int CLIENT_REGISTRY_SERVICE = 200;
+
+    /**
+     *  客户端服务注册的响应
+     */
+    public static final int CLIENT_REGISTRY_SERVICE_RESPONSE = -200;
+
+    /**
+     * 客户端服务发现的消息
+     */
+    public static final int CLIENT_DISCOVER_SERVICE = 201;
+
+    /**
+     * 客户端服务发现的响应
+     */
+    public static final int CLIENT_DISCOVER_SERVICE_RESPONSE = -201;
+
+
+    public static final int CUSTOM_COMMAND = 300;   // 自定义命令
+    public static final int CUSTOM_COMMAND_RESPONSE = -300;  // 自定义命令响应
+
+}
+package cn.com.vortexa.nameserver.dto;
+
+import lombok.Data;
+
+import java.lang.reflect.Type;
+import java.util.List;
+
+/**
+ * @author h30069248
+ * @since 2025/3/21 11:25
+ */
+@Data
+public class RPCMethod {
+
+    private String interfaceClassReference;
+
+    private String methodName;
+
+    private List<String> typeName;
+}
+package cn.com.vortexa.nameserver.processor;
+
+import cn.com.vortexa.nameserver.constant.RemotingCommandCodeConstants;
+import cn.com.vortexa.nameserver.dto.RemotingCommand;
+import cn.com.vortexa.nameserver.dto.RequestHandleResult;
+import cn.com.vortexa.nameserver.exception.CustomCommandException;
+import cn.com.vortexa.nameserver.handler.CustomRequestHandler;
+import cn.com.vortexa.nameserver.protocol.Serializer;
+import cn.hutool.core.util.StrUtil;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+/**
+ * @author helei
+ * @since 2025/3/20 11:02
+ */
+@Slf4j
+public class CustomCommandProcessor {
+
+    private final ConcurrentMap<String, CustomRequestHandler> customCMDHandlerMap = new ConcurrentHashMap<>();
+
+    /**
+     * 添加自定义命令处理器
+     *
+     * @param commandKey commandKey
+     * @param customRequestHandler customRequestHandler
+     * @throws CustomCommandException CustomCommandException
+     */
+    public void addCustomCommandHandler(String commandKey, CustomRequestHandler customRequestHandler)
+            throws CustomCommandException {
+        if (!checkCommandKey(commandKey)) {
+            throw new CustomCommandException("illegal command key " + commandKey);
+        }
+
+        if (customCMDHandlerMap.putIfAbsent(commandKey, customRequestHandler) != null) {
+            throw new CustomCommandException("command [%s] exist".formatted(commandKey));
+        } else {
+            log.info("custom command [{}] added", commandKey);
+        }
+    }
+
+    /**
+     * 运行自定义命令处理器
+     *
+     * @param request request
+     * @return RemotingCommand
+     */
+    public RemotingCommand tryInvokeCustomCommandHandler(RemotingCommand request) throws CustomCommandException {
+        CustomRequestHandler handler = customCMDHandlerMap.get(request.getFlag());
+
+        if (handler == null) {
+            throw new CustomCommandException("custom request[%s] didn't exist".formatted(request.getFlag()));
+        }
+
+        RemotingCommand response = new RemotingCommand();
+        response.setTransactionId(request.getTransactionId());
+        response.setFlag(-1 * request.getFlag());
+
+        // 执行注册的回调方法
+        RequestHandleResult result = handler.handlerRequest(request);
+
+        if (result == null || !result.getSuccess()) {
+            response.setCode(RemotingCommandCodeConstants.FAIL);
+        } else {
+            response.setCode(RemotingCommandCodeConstants.SUCCESS);
+            response.setBody(
+                    Serializer.Algorithm.Protostuff.serialize(result.getData())
+            );
+        }
+
+        return response;
+    }
+
+    /**
+     * 检查命令flag
+     *
+     * @param commandKey commandKey
+     * @return boolean
+     */
+    private static boolean checkCommandKey(String commandKey) {
+        return StrUtil.isBlank(commandKey);
+    }
+}
+package cn.com.vortexa.nameserver.config;
+
+
+import cn.com.vortexa.common.util.YamlConfigLoadUtil;
+import cn.com.vortexa.nameserver.dto.ServiceInstance;
+import lombok.Data;
+
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.net.URL;
+import java.util.List;
+
+/**
+ * @author helei
+ * @since 2025-03-15
+ */
+@Data
+public class NameserverClientConfig {
+
+    private static final String RESOURCE_PATH = "nameserver-client-config.yaml";
+
+    private static final String PREFIX_PATH = "cn.com.vortexa.nameserver.client";
+
+    private volatile static NameserverClientConfig INSTANCE;
+
+    public static NameserverClientConfig defaultConfig() throws FileNotFoundException {
+        return loadConfig("nameserver-client-config.yaml", PREFIX_PATH);
+    }
+
+    public static NameserverClientConfig loadConfig(String fileName, String prefix) throws FileNotFoundException {
+        if (INSTANCE == null) {
+            synchronized (NameserverClientConfig.class) {
+                if (INSTANCE == null) {
+                    URL resource = NameserverClientConfig.class.getClassLoader().getResource(fileName);
+                    if (resource != null) {
+                        String file = resource.getFile();
+                        INSTANCE = YamlConfigLoadUtil.load(
+                            new File(file),
+                            List.of(prefix.split("\\.")),
+                            NameserverClientConfig.class
+                        );
+                    } else {
+                        throw new FileNotFoundException("config file not found");
+                    }
+                }
+            }
+        }
+        return INSTANCE;
+    }
+
+
+    /**
+     * 注册中心地址
+     */
+    private String registryCenterUrl;
+
+    /**
+     * netty nio 线程数
+     */
+    private Integer nioThreadCount = 1;
+
+    /**
+     * 服务地址
+     */
+    private ServiceInstance serviceInstance;
+
+    /**
+     * 下线时间
+     */
+    private Integer serviceOfflineTtl;
+
+    private static String toCamelCase(String name) {
+        String[] parts = name.split("-");
+        StringBuilder camelCase = new StringBuilder(parts[0]);
+        for (int i = 1; i < parts.length; i++) {
+            camelCase.append(parts[i].substring(0, 1).toUpperCase()).append(parts[i].substring(1));
+        }
+        return camelCase.toString();
+    }
+}
+package cn.com.vortexa.nameserver.processor;
+
+import cn.com.vortexa.nameserver.NameserverClient;
+import cn.com.vortexa.nameserver.config.NameserverClientConfig;
+import cn.com.vortexa.nameserver.constant.RemotingCommandFlagConstants;
+import cn.com.vortexa.nameserver.dto.RemotingCommand;
+import cn.com.vortexa.nameserver.exception.CustomCommandException;
+import cn.com.vortexa.nameserver.util.DistributeIdMaker;
+import cn.com.vortexa.websocket.netty.handler.AbstractWebSocketClientHandler;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandlerContext;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.CompletableFuture;
+
+/**
+ * @author helei
+ * @since 2025-03-13
+ */
+@Slf4j
+public class NameClientProcessorAdaptor extends AbstractWebSocketClientHandler<RemotingCommand> {
+
+    @Setter
+    private NameserverClient nameserverClient;
+
+    @Getter
+    private final NameserverClientConfig clientConfig;
+
+    public NameClientProcessorAdaptor(NameserverClientConfig clientConfig) {
+        this.clientConfig = clientConfig;
+    }
+
+    @Override
+    protected void handlerMessage(ChannelHandlerContext ctx, RemotingCommand remotingCommand) {
+        Integer opt = remotingCommand.getFlag();
+        String txId = remotingCommand.getTransactionId();
+
+        Channel channel = ctx.channel();
+        String key = channel.attr(NettyConstants.CLIENT_NAME).get();
+        log.debug("receive client[{}] command [{}]", key, remotingCommand);
+
+        CompletableFuture.supplyAsync(() -> switch (opt) {
+                case RemotingCommandFlagConstants.PING -> this.handlerPing(remotingCommand);
+                case RemotingCommandFlagConstants.PONG -> this.handlerPong(remotingCommand);
+                case RemotingCommandFlagConstants.CUSTOM_COMMAND -> this.handlerCustomCommand(remotingCommand);
+                case RemotingCommandFlagConstants.CUSTOM_COMMAND_RESPONSE ->
+                    this.handlerCustomCommandResponse(remotingCommand);
+                default -> {
+                    try {
+                        yield nameserverClient.tryResolveCustomRequest(remotingCommand);
+                    } catch (Exception e) {
+                        throw new RuntimeException("resolve custom request[%s] error ".formatted(
+                            remotingCommand
+                        ));
+                    }
+                }
+            }, nameserverClient.getCallbackInvoker())
+            .whenCompleteAsync((response, throwable) -> {
+                if (throwable != null) {
+                    log.error("remote command[{}} resolve error", remotingCommand, throwable);
+                    return;
+                }
+                if (response != null) {
+                    response.setTransactionId(txId);
+                    nameserverClient.sendRequest(response);
+                }
+            });
+    }
+
+    @Override
+    protected Object getMessageId(RemotingCommand message) {
+        return message.getTransactionId();
+    }
+
+    @Override
+    protected void handleAllIdle(ChannelHandlerContext ctx) {
+        super.handleAllIdle(ctx);
+        RemotingCommand ping = RemotingCommand.generatePingCommand(nameserverClient.getName());
+        ping.setTransactionId(
+            DistributeIdMaker.DEFAULT.nextId(nameserverClient.getName())
         );
+        log.info("send ping to remote");
+        nameserverClient.sendRequest(ping).whenComplete((response, throwable) -> {
+            if (throwable != null) {
+                log.error("send ping to remote server[{}] error", clientConfig.getRegistryCenterUrl());
+                return;
+            }
+            log.debug("receive remote server pong [{}]", response);
+        });
     }
 
-    private String resolveVerifierCodeFromMessage(Message message) throws MessagingException {
-        boolean b = Arrays.stream(message.getFrom())
-                .anyMatch(address -> MAIL_FROM.equals(address.toString()));
-        if (!b) return null;
+    /**
+     * 处理Ping
+     *
+     * @param ping ping
+     * @return RemotingCommand
+     */
+    private RemotingCommand handlerPing(RemotingCommand ping) {
+        log.debug("receive pint[{}] from server", ping);
+        RemotingCommand pong = RemotingCommand.generatePongCommand(nameserverClient.getName());
+        pong.setTransactionId(ping.getTransactionId());
+        return pong;
+    }
 
-        String context = MailReader.getTextFromMessage(message);
-        Matcher matcher = V_CODE_PATTERN.matcher(context);
-
-        if (matcher.find()) {
-            return matcher.group();
-        }
+    /**
+     * 处理Pong
+     *
+     * @param pong pong
+     * @return RemotingCommand
+     */
+    private RemotingCommand handlerPong(RemotingCommand pong) {
+        log.debug("receive pong[{}] from server", pong);
         return null;
     }
 
-    private static @NotNull JSONObject generateSignupBody(AccountContext exampleAC, String inviteCode) {
-        JSONObject body = new JSONObject();
 
-        String email = exampleAC.getAccountBaseInfo().getEmail();
-        body.put("Username", email);
-        body.put("Password", exampleAC.getParam(PASSWORD_KEY));
-        body.put("ClientId", CLIENT_ID);
-
-        JSONArray userAtributes = new JSONArray();
-        JSONObject ua1 = new JSONObject();
-        ua1.put("Name", "email");
-        ua1.put("Value", email);
-        JSONObject ua2 = new JSONObject();
-        ua2.put("Name", "custom:referral_code");
-        ua2.put("Value", inviteCode);
-        userAtributes.add(ua1);
-        userAtributes.add(ua2);
-        body.put("UserAttributes", userAtributes);
-        return body;
+    private RemotingCommand handlerCustomCommand(RemotingCommand remotingCommand) {
+        return nameserverClient.tryResolveCustomRequest(remotingCommand);
     }
 
+    private RemotingCommand handlerCustomCommandResponse(RemotingCommand remotingCommand) {
+        return null;
+    }
+}
+package cn.com.vortexa.nameserver;
+
+
+import cn.com.vortexa.nameserver.config.NameserverClientConfig;
+import cn.com.vortexa.nameserver.constant.*;
+import cn.com.vortexa.nameserver.dto.RemoteNameserverStatus;
+import cn.com.vortexa.nameserver.dto.RemotingCommand;
+import cn.com.vortexa.nameserver.dto.ServiceInstance;
+import cn.com.vortexa.nameserver.exception.CustomCommandException;
+import cn.com.vortexa.nameserver.handler.CustomRequestHandler;
+import cn.com.vortexa.nameserver.processor.CustomCommandProcessor;
+import cn.com.vortexa.nameserver.processor.NameClientProcessorAdaptor;
+import cn.com.vortexa.nameserver.protocol.Serializer;
+import cn.com.vortexa.nameserver.util.DistributeIdMaker;
+import cn.com.vortexa.nameserver.util.RemotingCommandDecoder;
+import cn.com.vortexa.nameserver.util.RemotingCommandEncoder;
+import cn.com.vortexa.websocket.netty.base.AbstractWebsocketClient;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import cn.hutool.core.util.StrUtil;
+import io.netty.channel.*;
+import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
+import io.netty.handler.codec.LengthFieldPrepender;
+import io.netty.handler.timeout.IdleStateHandler;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.HashMap;
+import java.util.Optional;
+import java.util.function.Consumer;
+
+/**
+ * @author helei
+ * @since 2025-03-13
+ */
+@Slf4j
+public class NameserverClient extends AbstractWebsocketClient<RemotingCommand> {
+
+    private final NameserverClientConfig clientConfig;  // 配置
+    private final String clientName;    // 客户端name
+    private final RemoteNameserverStatus remoteStatus; // 远程服务命名中心状态
+    private final CustomCommandProcessor customCommandProcessor;
+
+    @Setter
+    private Consumer<RemotingCommand> afterRegistryHandler = null;  // 注册成功后回调
+
+
+    public NameserverClient(NameserverClientConfig clientConfig) {
+        this(clientConfig, new NameClientProcessorAdaptor(clientConfig));
+    }
+
+    @Override
+    protected void afterBoostrapConnected(Channel channel) {
+        // 每次连接成功，都发送注册消息
+        channel.attr(NettyConstants.CLIENT_NAME).set(getName());
+        sendRegistryCommand();
+    }
+
+    public NameserverClient(NameserverClientConfig clientConfig, NameClientProcessorAdaptor nameClientProcessorAdaptor) {
+        super(clientConfig.getRegistryCenterUrl(), clientConfig.getServiceInstance().toString(), nameClientProcessorAdaptor);
+        super.setHandshake(false);
+        this.clientConfig = clientConfig;
+        this.clientName = clientConfig.getServiceInstance().toString();
+        this.remoteStatus = new RemoteNameserverStatus();
+        this.customCommandProcessor = new CustomCommandProcessor();
+
+        ((NameClientProcessorAdaptor) getHandler()).setNameserverClient(this);
+    }
+
+    @Override
+    public void addPipeline(ChannelPipeline p) {
+        p.addLast(new IdleStateHandler(0,
+                0, clientConfig.getServiceOfflineTtl()));
+
+        p.addLast(new LengthFieldBasedFrameDecoder(NameserverSystemConstants.MAX_FRAME_LENGTH,
+                0, 4, 0, 4));
+        p.addLast(new LengthFieldPrepender(4));
+
+        p.addLast(new RemotingCommandDecoder());
+        p.addLast(new RemotingCommandEncoder());
+        p.addLast(getHandler());
+    }
+
+
+    @Override
+    protected void doSendMessage(RemotingCommand message, boolean b) {
+        log.debug("send message to nameserver: {}", message);
+
+        ServiceInstance serviceInstance = clientConfig.getServiceInstance();
+
+        if (b && StrUtil.isBlank(message.getTransactionId())) {
+            message.setTransactionId(clientName);
+        }
+
+        message.setGroup(serviceInstance.getGroup());
+        message.setServiceId(serviceInstance.getServiceId());
+        message.setClientId(serviceInstance.getInstanceId());
+
+        Optional.of(getChannel()).ifPresent(channel -> channel.writeAndFlush(message));
+    }
+
+    /**
+     * 发送服务注册命令
+     */
+    public void sendRegistryCommand() {
+        RemotingCommand remotingCommand = new RemotingCommand();
+        remotingCommand.setFlag(RemotingCommandFlagConstants.CLIENT_REGISTRY_SERVICE);
+        remotingCommand.setTransactionId(
+                DistributeIdMaker.DEFAULT.nextId(clientConfig.getServiceInstance().getServiceId())
+        );
+
+        remotingCommand.setBodyFromObject(new HashMap<>());
+
+        sendRequest(remotingCommand).whenComplete((response, throwable) -> {
+            if (throwable != null) {
+                log.error("{} -> [{}] channel active error",
+                        clientConfig.getServiceInstance(), clientConfig.getRegistryCenterUrl(), throwable);
+            }
+
+            // 注册成功
+            if (response.getCode() == RemotingCommandCodeConstants.SUCCESS) {
+                log.info("{} client registry success", clientConfig.getServiceInstance());
+                if (afterRegistryHandler != null) {
+                    afterRegistryHandler.accept(response);
+                }
+
+                ServiceInstance nameserviceInstance = Serializer.Algorithm.Protostuff
+                        .deserialize(response.getBody(), ServiceInstance.class);
+
+                remoteStatus.setNameserverInstance(nameserviceInstance);
+            } else {
+                // 注册失败
+                log.error("{} client registry failed, response: {}", clientConfig.getServiceInstance(), response);
+                close();
+            }
+
+            remoteStatus.setLastUpdateTimestamp(System.currentTimeMillis());
+            remoteStatus.setNameserverState(NameserverState.valueOf(
+                    response.getExtFieldsValue(ExtFieldsConstants.NAMESERVER_STATUS)
+            ));
+        });
+    }
+
+    /**
+     * 添加自定义命令处理器
+     *
+     * @param commandFlag          commandFlag 命令标识
+     * @param customRequestHandler customRequestHandler    处理器
+     */
+    public void addCustomCommandHandler(Integer commandFlag, CustomRequestHandler customRequestHandler)
+            throws CustomCommandException {
+        customCommandProcessor.addCustomCommandHandler(commandFlag, customRequestHandler);
+    }
+
+    /**
+     * 处理自定义请求
+     *
+     * @param remotingCommand request
+     * @return response
+     */
+    public RemotingCommand tryResolveCustomRequest(RemotingCommand remotingCommand) {
+        RemotingCommand response = null;
+        try {
+            response = customCommandProcessor.tryInvokeCustomCommandHandler(remotingCommand);
+        } catch (Exception e) {
+            log.error("custom request[{}] execute error, ", remotingCommand, e);
+            response = new RemotingCommand();
+            response.setTransactionId(remotingCommand.getTransactionId());
+            response.setCode(RemotingCommandCodeConstants.FAIL);
+            response.setBody(
+                Serializer.Algorithm.Protostuff.serialize(e)
+            );
+        }
+        return response;
+    }
+}
+cn:
+  com:
+    vortexa:
+      nameserver:
+        client:
+          registryCenterUrl: ws://localhost:18848
+          nio-thread-count: 1
+          service-offline-ttl: 60
+          service-instance:
+            host: localhost
+            port: 20001
+            group: test1
+            serviceId: client
+            instanceId: client-1
+package cn.com.vortexa.nameserver.config;
+
+
+import cn.com.vortexa.common.util.YamlConfigLoadUtil;
+import cn.com.vortexa.nameserver.dto.ServiceInstance;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.net.URL;
+import java.util.List;
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class NameserverServerConfig {
+
+    private static final String RESOURCE_PATH = "nameserver-server-config.yaml";
+
+    private static final String PREFIX_PATH = "cn.com.vortexa.nameserver";
+
+    private volatile static NameserverServerConfig INSTANCE;
+
+    public static NameserverServerConfig defaultConfig() throws FileNotFoundException {
+        return loadConfig("nameserver-server-config.yaml", PREFIX_PATH);
+    }
+
+    public static NameserverServerConfig loadConfig(String fileName, String prefix) throws FileNotFoundException {
+        if (INSTANCE == null) {
+            synchronized (NameserverServerConfig.class) {
+                if (INSTANCE == null) {
+                    URL resource = NameserverServerConfig.class.getClassLoader().getResource(fileName);
+                    if (resource != null) {
+                        String file = resource.getFile();
+                        INSTANCE = YamlConfigLoadUtil.load(
+                            new File(file),
+                            List.of(prefix.split("\\.")),
+                            NameserverServerConfig.class
+                        );
+                    } else {
+                        throw new FileNotFoundException("config file not found");
+                    }
+                }
+            }
+        }
+        return INSTANCE;
+    }
+
+
+    /**
+     * netty nio 线程数
+     */
+    private Integer nioThreadCount = 1;
+
+    /**
+     * 服务地址
+     */
+    private ServiceInstance serviceInstance;
+
+    /**
+     * 下线时间
+     */
+    private Integer serviceOfflineTtl;
+
+
+}
+package cn.com.vortexa.nameserver.server;
+
+import cn.com.vortexa.common.util.NamedThreadFactory;
+import cn.com.vortexa.nameserver.config.NameserverServerConfig;
+import cn.com.vortexa.nameserver.constant.NameserverState;
+import cn.com.vortexa.nameserver.constant.NameserverSystemConstants;
+import cn.com.vortexa.nameserver.dto.ConnectEntry;
+import cn.com.vortexa.nameserver.dto.RemotingCommand;
+import cn.com.vortexa.nameserver.exception.CustomCommandException;
+import cn.com.vortexa.nameserver.exception.NameserverException;
+import cn.com.vortexa.nameserver.handler.CustomRequestHandler;
+import cn.com.vortexa.nameserver.processor.NameserverProcessorAdaptor;
+import cn.com.vortexa.nameserver.service.IConnectionService;
+import cn.com.vortexa.nameserver.service.IRegistryService;
+import cn.com.vortexa.nameserver.processor.CustomCommandProcessor;
+import cn.com.vortexa.nameserver.util.NameserverUtil;
+import cn.com.vortexa.nameserver.util.RemotingCommandDecoder;
+import cn.com.vortexa.nameserver.util.RemotingCommandEncoder;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.*;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
+import io.netty.handler.codec.LengthFieldPrepender;
+import io.netty.handler.timeout.IdleStateHandler;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import static cn.com.vortexa.nameserver.constant.NameserverState.*;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
+
+@Slf4j
+@Getter
+public class NameserverService {
+    private final NameserverServerConfig nameserverServerConfig;    // nameServerConfig
+    private final CustomCommandProcessor customCommandProcessor;   // 自定义命令处理服务
+    private final ExecutorService executorService;
+    private final long startTime;   //启动时间
+
+    private volatile NameserverState state; // name server state
+    private ServerBootstrap serverBootstrap;    //serverBootstrap
+    private ChannelFuture nameserverChannelFuture;  //nameserverChannelFuture
+
+    private NameserverProcessorAdaptor processorAdaptor;  // 消息处理器
+    private IRegistryService registryService;   // 注册服务
+    private IConnectionService connectionService;   // 连接服务
+
+    public NameserverService(NameserverServerConfig nameserverServerConfig) throws NameserverException {
+        this.nameserverServerConfig = nameserverServerConfig;
+        updateNameServerState(JUST_START);
+        this.startTime = System.currentTimeMillis();
+        this.executorService = Executors.newThreadPerTaskExecutor(
+                new NamedThreadFactory(nameserverServerConfig.getServiceInstance().toString())
+        );
+
+        this.customCommandProcessor = new CustomCommandProcessor();
+    }
+
+    /**
+     * 初始化
+     *
+     * @param registryService registryService
+     */
+    public void init(
+            IRegistryService registryService,
+            IConnectionService connectionService
+    ) throws NameserverException {
+        this.registryService = registryService;
+        this.connectionService = connectionService;
+        this.processorAdaptor = new NameserverProcessorAdaptor(
+                this,
+                registryService
+        );
+
+        serverBootstrap = new ServerBootstrap()
+                .group(new NioEventLoopGroup(nameserverServerConfig.getNioThreadCount()), new NioEventLoopGroup())
+                .channel(NioServerSocketChannel.class)
+                .option(ChannelOption.SO_BACKLOG, 1024)
+                .option(ChannelOption.SO_REUSEADDR, true)
+                .childOption(ChannelOption.SO_KEEPALIVE, false)
+                .childOption(ChannelOption.TCP_NODELAY, true)
+                .childOption(ChannelOption.SO_SNDBUF, 65535)
+                .childOption(ChannelOption.SO_RCVBUF, 65535)
+                .childHandler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override
+                    protected void initChannel(NioSocketChannel ch) throws Exception {
+                        ch.pipeline().addLast(new IdleStateHandler(
+                                0, 0, nameserverServerConfig.getServiceOfflineTtl()));
+
+                        ch.pipeline().addLast(new LengthFieldBasedFrameDecoder(
+                                NameserverSystemConstants.MAX_FRAME_LENGTH, 0,
+                                4, 0, 4));
+
+                        ch.pipeline().addLast(new LengthFieldPrepender(4));
+
+                        ch.pipeline().addLast(new RemotingCommandDecoder());
+                        ch.pipeline().addLast(new RemotingCommandEncoder());
+                        ch.pipeline().addLast(processorAdaptor);
+                    }
+                });
+
+        updateNameServerState(INIT_FINISH);
+    }
+
+    /**
+     * 启动
+     *
+     * @throws NameserverException NameserverStartException
+     */
+    public ChannelFuture start() throws NameserverException {
+        log.info("start nameserver [{}], configuration:\n {}",
+                nameserverServerConfig.getServiceInstance(), nameserverServerConfig);
+
+        try {
+            nameserverChannelFuture = serverBootstrap.bind(
+                    nameserverServerConfig.getServiceInstance().getHost(),
+                    nameserverServerConfig.getServiceInstance().getPort()
+            );
+
+            nameserverChannelFuture.addListener(new ChannelFutureListener() {
+                @Override
+                public void operationComplete(ChannelFuture channelFuture) throws Exception {
+                    updateNameServerState(RUNNING);
+                }
+            });
+
+            return nameserverChannelFuture;
+        } catch (Exception e) {
+            updateNameServerState(SHUT_DOWN);
+            throw new NameserverException("start error", e);
+        }
+    }
+
+    /**
+     * 添加自定义命令处理器
+     *
+     * @param commandKey          commandKey 命令标识
+     * @param customRequestHandler customRequestHandler    处理器
+     */
+    public void addCustomCommandHandler(String commandKey, CustomRequestHandler customRequestHandler)
+            throws CustomCommandException {
+        customCommandProcessor.addCustomCommandHandler(commandKey, customRequestHandler);
+    }
+
+    /**
+     * 调用自定义命令handler
+     *
+     * @param channel channel
+     * @param request request
+     * @return response
+     */
+    public RemotingCommand tryInvokeCustomCommand(Channel channel, RemotingCommand request)
+            throws CustomCommandException {
+        // Step 1 校验是否注册服务
+        String key = channel.attr(NettyConstants.CLIENT_NAME).get();
+
+        if (!registryService.existServiceInstance(key)) {
+            log.debug("channel[{}] didn't registry, drop request [{}]", key, request);
+            closeChannel(channel);
+            return null;
+        }
+
+        // Step 2 运行自定义命令
+        RemotingCommand response = customCommandProcessor.tryInvokeCustomCommandHandler(request);
+        if (response.getTransactionId() == null) {
+            response.setTransactionId(request.getTransactionId());
+        }
+
+        return response;
+    }
+
+    /**
+     * 给服务实例发送命令
+     *
+     * @param group           group
+     * @param serviceId       serviceId
+     * @param instanceId      instanceId
+     * @param remotingCommand remotingCommand
+     * @return CompletableFuture<RemotingCommand>
+     */
+    public CompletableFuture<RemotingCommand> sendCommandToServiceInstance(
+            String group,
+            String serviceId,
+            String instanceId,
+            RemotingCommand remotingCommand
+    ) {
+        // Step 1 获取连接
+        String key = NameserverUtil.generateServiceInstanceKey(group, serviceId, instanceId);
+        ConnectEntry connectEntry = connectionService.getServiceInstanceChannel(key);
+
+        if (connectEntry == null || !connectEntry.isUsable()) {
+            log.error("[{}] channel is unusable", key);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                CountDownLatch latch = new CountDownLatch(1);
+                AtomicReference<RemotingCommand> result = new AtomicReference<>();
+
+                // Step 2 注册请求
+                boolean registry = processorAdaptor.registryRequest(remotingCommand, response -> {
+                    result.set(response);
+                    latch.countDown();
+                });
+
+                if (registry) {
+                    connectEntry.getChannel().writeAndFlush(remotingCommand);
+                }
+
+                latch.await();
+                return result.get();
+            } catch (InterruptedException e) {
+                throw new RuntimeException("send command %s error".formatted(remotingCommand), e);
+            }
+        }, executorService);
+    }
+
+    /**
+     * 关闭连接某客户端的channel连接
+     *
+     * @param channel channel
+     */
+    public void closeChannel(Channel channel) {
+        if (channel == null) {
+            return;
+        }
+
+        String key = channel.attr(NettyConstants.CLIENT_NAME).get();
+
+        if (registryService.existServiceInstance(key)) {
+            connectionService.closeServiceChannel(channel, key);
+        } else if (channel.isActive()) {
+            channel.close();
+        }
+    }
+
+    /**
+     * 更新状态
+     *
+     * @param newState newState
+     * @throws NameserverException NameserverException
+     */
+    private void updateNameServerState(NameserverState newState) throws NameserverException {
+        synchronized (this) {
+            boolean isUpdate = switch (newState) {
+                case JUST_START: {
+                    yield state == null || state == JUST_START;
+                }
+                case INIT_FINISH:
+                    yield state == JUST_START || state == INIT_FINISH;
+                case RUNNING:
+                    yield state == INIT_FINISH;
+                case SHUT_DOWN:
+                    yield state != SHUT_DOWN;
+            };
+
+            if (isUpdate) {
+                log.info("nameserver[{}] status updated [{}]->[{}]", nameserverServerConfig.getServiceInstance(), state,
+                        newState);
+                state = newState;
+            } else {
+                throw new NameserverException("state cannot from [%s] to [%s]".formatted(state, newState));
+            }
+        }
+    }
+}
+package cn.com.vortexa.nameserver.server;
+
+import cn.com.vortexa.nameserver.config.NameserverServerConfig;
+import cn.com.vortexa.nameserver.dto.RemotingCommand;
+import cn.com.vortexa.nameserver.dto.RequestHandleResult;
+import cn.com.vortexa.nameserver.dto.ServiceInstance;
+import cn.com.vortexa.nameserver.exception.CustomCommandException;
+import cn.com.vortexa.nameserver.exception.NameserverException;
+import cn.com.vortexa.nameserver.handler.CustomRequestHandler;
+import cn.com.vortexa.nameserver.protocol.Serializer;
+import cn.com.vortexa.nameserver.service.impl.FileRegistryService;
+import cn.com.vortexa.nameserver.service.impl.MemoryConnectionService;
+
+import cn.com.vortexa.nameserver.util.DistributeIdMaker;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.FileNotFoundException;
+import java.util.Random;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+
+class NameserverServiceTest {
+
+    private static final Logger log = LoggerFactory.getLogger(NameserverServiceTest.class);
+    static NameserverServerConfig nameserverServerConfig;
+    static NameserverService nameserverService;
+    static Random random = new Random();
+    static ServiceInstance clientInstance = ServiceInstance
+            .builder()
+            .group("test1")
+            .serviceId("client")
+            .instanceId("client-1")
+            .build();
+    static int command_client = 3001;
+    static int command_service = 3002;
+
+    @BeforeAll
+    public static void setUp() throws NameserverException, FileNotFoundException {
+        nameserverServerConfig = new NameserverServerConfig();
+
+        ServiceInstance address = ServiceInstance.builder()
+                .group("default")
+                .serviceId("sahara")
+                .instanceId("sahara_test")
+                .host("127.0.0.1")
+                .port(8080)
+                .build();
+
+        nameserverServerConfig.setServiceInstance(address);
+        nameserverService = new NameserverService(NameserverServerConfig.defaultConfig());
+        nameserverService.init(new FileRegistryService(), new MemoryConnectionService());
+    }
+
+    @Test
+    public void test() throws NameserverException, InterruptedException, CustomCommandException, ExecutionException {
+        nameserverService.addCustomCommandHandler(command_client, new CustomRequestHandler() {
+            @Override
+            public RequestHandleResult handlerRequest(RemotingCommand request) {
+                log.warn("收到客户端自定义命令[{}]", request);
+
+                return RequestHandleResult.success("test-" + random.nextInt());
+            }
+        });
+
+        nameserverService.start().get();
+
+        while (true) {
+            RemotingCommand remotingCommand = new RemotingCommand();
+            remotingCommand.setTransactionId(
+                    DistributeIdMaker.DEFAULT.nextId(nameserverServerConfig.getServiceInstance().toString())
+            );
+            remotingCommand.setFlag(command_service);
+            TimeUnit.SECONDS.sleep(5);
+
+            log.info("发送服务端自定义命令.{}", remotingCommand);
+            nameserverService.sendCommandToServiceInstance(
+                    clientInstance.getGroup(),
+                    clientInstance.getServiceId(),
+                    clientInstance.getInstanceId(),
+                    remotingCommand
+            ).thenAccept(response->{
+                String deserialize = Serializer.Algorithm.Protostuff.deserialize(response.getBody(), String.class);
+                log.info("收到服务端自定义命令响应. {}\n{}", response, deserialize);
+            });
+        }
+    }
 }
