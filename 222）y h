@@ -1,2041 +1,1040 @@
-package cn.com.helei.DepinBot.core.bot;
+package cn.com.vortexa.control.dto;
 
-import cn.com.helei.DepinBot.core.BaseDepinBotConfig;
-import cn.com.helei.DepinBot.core.BaseDepinWSClient;
-import cn.com.helei.DepinBot.core.constants.DepinBotStatus;
-import cn.com.helei.DepinBot.core.dto.AccountContext;
-import cn.com.helei.DepinBot.core.env.BrowserEnvPool;
-import cn.com.helei.DepinBot.core.exception.DepinBotInitException;
-import cn.com.helei.DepinBot.core.exception.DepinBotStartException;
-import cn.com.helei.DepinBot.core.exception.DepinBotStatusException;
-import cn.com.helei.DepinBot.core.network.NetworkProxyPool;
-import cn.com.helei.DepinBot.core.util.NamedThreadFactory;
+
+import cn.com.vortexa.common.dto.control.RegisteredService;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.util.List;
+
+/**
+ * @author helei
+ * @since 2025-03-12
+ */
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+public class ServiceInstanceVO {
+    private List<RegisteredService> instances;
+}
+package cn.com.vortexa.control;
+
+import cn.com.vortexa.control.config.ScriptAgentConfig;
+import cn.com.vortexa.control.constant.*;
+import cn.com.vortexa.control.dto.RemoteControlServerStatus;
+import cn.com.vortexa.control.dto.RemotingCommand;
+import cn.com.vortexa.common.dto.control.ServiceInstance;
+import cn.com.vortexa.control.exception.CustomCommandException;
+import cn.com.vortexa.control.handler.CustomRequestHandler;
+import cn.com.vortexa.control.processor.CustomCommandProcessor;
+import cn.com.vortexa.control.processor.ScriptAgentProcessorAdaptor;
+import cn.com.vortexa.control.protocol.Serializer;
+import cn.com.vortexa.control.service.ScriptAgentMetricsUploadService;
+import cn.com.vortexa.control.util.DistributeIdMaker;
+import cn.com.vortexa.control.util.RemotingCommandDecoder;
+import cn.com.vortexa.control.util.RemotingCommandEncoder;
+import cn.com.vortexa.websocket.netty.base.AbstractWebsocketClient;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import cn.hutool.core.util.StrUtil;
+import io.netty.channel.*;
+import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
+import io.netty.handler.codec.LengthFieldPrepender;
+import io.netty.handler.timeout.IdleStateHandler;
 import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
-import java.io.IOException;
-import java.util.concurrent.*;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
+/**
+ * @author helei
+ * @since 2025-03-13
+ */
 @Slf4j
 @Getter
-public abstract class AbstractDepinBot<Req, Resp> {
-    /**
-     * 执行异步任务的线程池
-     */
-    private final ExecutorService executorService;
+public class ScriptAgent extends AbstractWebsocketClient<RemotingCommand> {
 
-    /**
-     * 执行定时任务的线程池
-     */
-    private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
+    private final ScriptAgentConfig clientConfig;  // 配置
+    private final ServiceInstance serviceInstance;
+    private final RemoteControlServerStatus remoteStatus; // 远程服务命名中心状态
+    private final CustomCommandProcessor customCommandProcessor;    // 自定义命令处理器
+    private final ScriptAgentMetricsUploadService metricsUploadService; // 指标上传服务
 
-    /**
-     * 代理池
-     */
-    private final NetworkProxyPool proxyPool;
+    @Setter
+    private Supplier<Object> registryBodySetter = null; // 注册时的body
+    @Setter
+    private Consumer<RemotingCommand> afterRegistryHandler = null;  // 注册成功后回调
 
-    /**
-     * 浏览器环境池
-     */
-    private final BrowserEnvPool browserEnvPool;
-
-    /**
-     * 配置
-     */
-    private final BaseDepinBotConfig baseDepinBotConfig;
-
-    /**
-     * 状态
-     */
-    private DepinBotStatus status = DepinBotStatus.NEW;
-
-    public AbstractDepinBot(BaseDepinBotConfig baseDepinBotConfig) {
-        this.baseDepinBotConfig = baseDepinBotConfig;
-        this.executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory(baseDepinBotConfig.getName() + "-executor"));
-
-        this.proxyPool = NetworkProxyPool.loadYamlNetworkPool(baseDepinBotConfig.getNetworkPoolConfig());
-        this.browserEnvPool = BrowserEnvPool.loadYamlBrowserEnvPool(baseDepinBotConfig.getBrowserEnvPoolConfig());
+    public ScriptAgent(ScriptAgentConfig clientConfig) {
+        this(clientConfig, new ScriptAgentProcessorAdaptor(clientConfig));
     }
 
-    public void init() {
-        updateState(DepinBotStatus.INIT);
-        try {
-            doInit();
+    public ScriptAgent(ScriptAgentConfig clientConfig, ScriptAgentProcessorAdaptor scriptAgentProcessorAdaptor) {
+        super(clientConfig.getRegistryCenterUrl(), clientConfig.getServiceInstance().toString(),
+            scriptAgentProcessorAdaptor);
+        super.setHandshake(false);
+        this.clientConfig = clientConfig;
+        this.serviceInstance = clientConfig.getServiceInstance();
+        super.setName(this.serviceInstance.toString());
+        this.remoteStatus = new RemoteControlServerStatus();
+        this.customCommandProcessor = new CustomCommandProcessor();
 
-            //更新状态
-            updateState(DepinBotStatus.INIT_FINISH);
-        } catch (Exception e) {
-            log.error("初始化DepinBot[{}}发生错误", getBaseDepinBotConfig().getName(), e);
-            updateState(DepinBotStatus.INIT_ERROR);
-        }
-    }
-
-    /**
-     * 初始化方法
-     */
-    protected abstract void doInit() throws DepinBotInitException;
-
-
-    protected abstract void doExecute() throws IOException;
-
-    /**
-     * 使用accountContext构建AbstractDepinWSClient
-     *
-     * @param accountContext accountContext
-     * @return AbstractDepinWSClient
-     */
-    public abstract BaseDepinWSClient<Req, Resp> buildAccountWSClient(AccountContext accountContext);
-
-
-    /**
-     * 当账户链接时调用
-     *
-     * @param depinWSClient depinWSClient
-     * @param success       是否成功
-     */
-    public abstract void whenAccountConnected(BaseDepinWSClient<Req, Resp> depinWSClient, Boolean success);
-
-    /**
-     * 当ws连接收到响应
-     *
-     * @param depinWSClient depinWSClient
-     * @param id            id
-     * @param response      response
-     */
-    public abstract void whenAccountReceiveResponse(BaseDepinWSClient<Req, Resp> depinWSClient, String id, Resp response);
-
-    /**
-     * 当ws连接收到消息
-     *
-     * @param depinWSClient depinWSClient
-     * @param message       message
-     */
-    public abstract void whenAccountReceiveMessage(BaseDepinWSClient<Req, Resp> depinWSClient, Resp message);
-
-    /**
-     * 获取心跳消息
-     *
-     * @param depinWSClient depinWSClient
-     * @return 消息体
-     */
-    public abstract Req getHeartbeatMessage(BaseDepinWSClient<Req, Resp> depinWSClient);
-
-
-    /**
-     * 启动bot
-     *
-     * @throws DepinBotStartException DepinBotStartException
-     */
-    public void start() throws DepinBotStartException {
-        updateState(DepinBotStatus.STARTING);
-        log.info("正在启动Depin Bot");
-        try {
-            CountDownLatch startLatch = new CountDownLatch(1);
-            //启动命令行交互的线程
-            asyncExecute(startLatch);
-
-            log.info("Depin Bot启动完毕");
-
-            updateState(DepinBotStatus.RUNNING);
-            startLatch.await();
-
-        } catch (Exception e) {
-            updateState(DepinBotStatus.SHUTDOWN);
-            throw new DepinBotStartException("启动CommandLineDepinBot发生错误", e);
-        }
-    }
-
-
-    /**
-     * 添加定时任务
-     *
-     * @param runnable runnable
-     * @param delay    delay
-     * @param timeUnit timeUnit
-     */
-    public void addTimer(Runnable runnable, long delay, TimeUnit timeUnit) {
-        scheduler.scheduleAtFixedRate(runnable, 0, delay, timeUnit);
-    }
-
-    /**
-     * 异步启动
-     */
-    private void asyncExecute(CountDownLatch startLatch) {
-        Thread commandInputThread = new Thread(() -> {
-            try {
-                doExecute();
-            } catch (IOException e) {
-                log.error("启动bot发生错误", e);
-            } finally {
-                startLatch.countDown();
-            }
-        }, "depin-bot-main");
-        commandInputThread.setDaemon(true);
-        commandInputThread.start();
-    }
-
-
-
-    /**
-     * 更新DepinBotStatus
-     *
-     * @param newStatus 新状态
-     */
-    private synchronized void updateState(DepinBotStatus newStatus) throws DepinBotStatusException {
-        boolean b = true;
-        if (newStatus.equals(DepinBotStatus.SHUTDOWN)) {
-            status = DepinBotStatus.SHUTDOWN;
-            b = false;
-        } else {
-            b = switch (status) {
-                //当前为NEW，新状态才能为NEW,SHUTDOWN
-                case NEW -> DepinBotStatus.INIT.equals(newStatus);
-                //当前为INIT，新状态只能为INIT_FINISH、INIT_ERROR,SHUTDOWN
-                case INIT -> newStatus.equals(DepinBotStatus.INIT_FINISH)
-                        || newStatus.equals(DepinBotStatus.INIT_ERROR);
-                //当前为INIT_ERROR,新状态只能为ACCOUNT_LOADING, SHUTDOWN
-                case INIT_ERROR -> newStatus.equals(DepinBotStatus.INIT);
-                //当前状态为INIT_FINISH，新状态只能为ACCOUNT_LIST_CONNECT, SHUTDOWN
-                case INIT_FINISH -> newStatus.equals(DepinBotStatus.STARTING);
-                //当前状态为STARING，新状态只能为RUNNING,SHUTDOWN
-                case STARTING -> newStatus.equals(DepinBotStatus.RUNNING);
-                //RUNNING，新状态只能为 SHUTDOWN
-                case RUNNING -> false;
-                case SHUTDOWN -> false;
-            };
-        }
-
-
-        if (b) {
-            log.info("CommandLineDepinBot Status change [{}] => [{}]", status, newStatus);
-            this.status = newStatus;
-        } else {
-            throw new DepinBotStatusException(String.format("Depin Bot Status不能从[%s]->[%s]", status, newStatus));
-        }
-    }
-}
-
-package cn.com.helei.DepinBot.core.bot;
-
-import cn.com.helei.DepinBot.core.BaseDepinBotConfig;
-import cn.com.helei.DepinBot.core.BaseDepinWSClient;
-import cn.com.helei.DepinBot.core.dto.AccountContext;
-import cn.com.helei.DepinBot.core.dto.AccountPrintDto;
-import cn.com.helei.DepinBot.core.dto.RewordInfo;
-import cn.com.helei.DepinBot.core.env.BrowserEnv;
-import cn.com.helei.DepinBot.core.exception.DepinBotInitException;
-import cn.com.helei.DepinBot.core.exception.DepinBotStatusException;
-import cn.com.helei.DepinBot.core.netty.constants.WebsocketClientStatus;
-import cn.com.helei.DepinBot.core.network.NetworkProxy;
-import cn.com.helei.DepinBot.core.util.NamedThreadFactory;
-import cn.com.helei.DepinBot.core.util.table.CommandLineTablePrintHelper;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-
-@Slf4j
-public abstract class AccountAutoManageDepinBot<Req, Resp> extends AbstractDepinBot<Req, Resp> {
-    /**
-     * 异步操作线程池
-     */
-    private final ExecutorService executorService;
-
-    /**
-     * 是否开始过链接所有账号
-     */
-    private final AtomicBoolean isStartAccountConnected = new AtomicBoolean(false);
-
-    /**
-     * 账户客户端
-     */
-    private final ConcurrentMap<AccountContext, BaseDepinWSClient<Req, Resp>> accountWSClientMap = new ConcurrentHashMap<>();
-
-    /**
-     * 账号列表
-     */
-    @Getter
-    private final List<AccountContext> accounts = new ArrayList<>();
-
-
-    public AccountAutoManageDepinBot(BaseDepinBotConfig baseDepinBotConfig) {
-        super(baseDepinBotConfig);
-
-
-        this.executorService = Executors
-                .newThreadPerTaskExecutor(new NamedThreadFactory(baseDepinBotConfig.getName() + "-account"));
+        this.metricsUploadService = new ScriptAgentMetricsUploadService(this, this.getCallbackInvoker());
+        ((ScriptAgentProcessorAdaptor) getHandler()).setScriptAgent(this);
     }
 
     @Override
-    protected void doInit() throws DepinBotInitException {
-        initAccounts();
+    protected void afterBoostrapConnected(Channel channel) {
+        // 每次连接成功，都发送注册消息
+        channel.attr(NettyConstants.CLIENT_NAME).set(getName());
+        sendRegistryCommand();
     }
 
+    @Override
+    public void addPipeline(ChannelPipeline p) {
+        p.addLast(new IdleStateHandler(0,
+            0, clientConfig.getServiceOfflineTtl()));
+
+        p.addLast(new LengthFieldBasedFrameDecoder(NameserverSystemConstants.MAX_FRAME_LENGTH,
+            0, 4, 0, 4));
+        p.addLast(new LengthFieldPrepender(4));
+
+        p.addLast(new RemotingCommandDecoder());
+        p.addLast(new RemotingCommandEncoder());
+        p.addLast(getHandler());
+    }
+
+    @Override
+    protected void doSendMessage(RemotingCommand message, boolean b) {
+        log.debug("send message to nameserver: {}", message);
+
+        ServiceInstance serviceInstance = clientConfig.getServiceInstance();
+
+        if (b && StrUtil.isBlank(message.getTransactionId())) {
+            message.setTransactionId(nextTxId());
+        }
+
+        message.setGroup(serviceInstance.getGroup());
+        message.setServiceId(serviceInstance.getServiceId());
+        message.setClientId(serviceInstance.getInstanceId());
+
+        Channel channel;
+        if ((channel = getChannel()) != null) {
+            channel.writeAndFlush(message);
+        } else {
+            throw new RuntimeException("channel is null");
+        }
+    }
 
     /**
-     * 初始化账号方法
+     * 发送服务注册命令
      */
-    public void initAccounts() throws DepinBotInitException {
+    public void sendRegistryCommand() {
+        RemotingCommand remotingCommand = buildRequestCommand(RemotingCommandFlagConstants.CLIENT_REGISTRY_SERVICE);
+        Object body = null;
+        if (registryBodySetter != null) {
+            body = registryBodySetter.get();
+        }
+        remotingCommand.setBodyFromObject(body);
+
+        sendRequest(remotingCommand).whenComplete((response, throwable) -> {
+            if (throwable != null) {
+                log.error("{} -> [{}] channel active error",
+                    clientConfig.getServiceInstance(), clientConfig.getRegistryCenterUrl(), throwable);
+            }
+
+            // 注册成功
+            if (response.getCode() == RemotingCommandCodeConstants.SUCCESS) {
+                log.info("{} client registry success", clientConfig.getServiceInstance());
+                if (afterRegistryHandler != null) {
+                    afterRegistryHandler.accept(response);
+                }
+
+                ServiceInstance nameserviceInstance = Serializer.Algorithm.Protostuff
+                    .deserialize(response.getBody(), ServiceInstance.class);
+
+                remoteStatus.setNameserverInstance(nameserviceInstance);
+            } else {
+                // 注册失败
+                log.error("{} client registry failed, response: {}", clientConfig.getServiceInstance(), response);
+                close();
+            }
+
+            remoteStatus.setLastUpdateTimestamp(System.currentTimeMillis());
+            remoteStatus.setNameserverState(NameserverState.valueOf(
+                response.getExtFieldsValue(ExtFieldsConstants.NAMESERVER_STATUS)
+            ));
+        });
+    }
+
+    /**
+     * 添加自定义命令处理器
+     *
+     * @param commandFlag commandFlag 命令标识
+     * @param customRequestHandler customRequestHandler    处理器
+     */
+    public void addCustomCommandHandler(String commandFlag, CustomRequestHandler customRequestHandler)
+        throws CustomCommandException {
+        customCommandProcessor.addCustomCommandHandler(commandFlag, customRequestHandler);
+    }
+
+    /**
+     * 处理自定义请求
+     *
+     * @param remotingCommand request
+     * @return response
+     */
+    public RemotingCommand tryResolveCustomRequest(RemotingCommand remotingCommand) {
+        RemotingCommand response = null;
         try {
-            //Step 1 初始化账号
-            List<AccountContext> notUsableAccounts = new ArrayList<>();
-            getBaseDepinBotConfig()
-                    .getAccountList()
-                    .forEach(depinClientAccount -> {
-                        AccountContext.AccountContextBuilder builder = AccountContext.builder().clientAccount(depinClientAccount);
+            response = customCommandProcessor.tryInvokeCustomCommandHandler(getChannel(), remotingCommand);
+        } catch (Exception e) {
+            log.error("custom request[{}] execute error, ", remotingCommand, e);
+            response = new RemotingCommand();
+            response.setTransactionId(remotingCommand.getTransactionId());
+            response.setCode(RemotingCommandCodeConstants.FAIL);
+            response.setBody(
+                Serializer.Algorithm.Protostuff.serialize(e)
+            );
+        }
+        return response;
+    }
 
-                        //账号没有配置代理，则将其设置为不可用
-                        if (depinClientAccount.getProxyId() == null) {
-                            builder.usable(false);
-                        } else {
-                            builder.browserEnv(getBrowserEnvPool().getBrowserEnv(depinClientAccount.getBrowserEnvId()))
-                                    .usable(true)
-                                    .proxy(getProxyPool().getProxy(depinClientAccount.getProxyId())).build();
-                        }
+    /**
+     * 构建命令
+     *
+     * @param commandFlag commandFlag
+     * @return RemotingCommand
+     */
+    public RemotingCommand buildRequestCommand(int commandFlag) {
+        RemotingCommand command = new RemotingCommand();
+        command.setGroup(serviceInstance.getGroup());
+        command.setServiceId(serviceInstance.getServiceId());
+        command.setClientId(serviceInstance.getInstanceId());
+        command.setTransactionId(nextTxId());
 
-                        AccountContext build = builder.build();
-                        if (!build.isUsable()) notUsableAccounts.add(build);
+        command.setFlag(commandFlag);
+        return command;
+    }
 
-                        accounts.add(build);
-                    });
+    /**
+     * 获取下一个事务id
+     *
+     * @return String
+     */
+    public String nextTxId() {
+        return DistributeIdMaker.DEFAULT.nextId(getName());
+    }
+}
+package cn.com.vortexa.control.processor;
 
-            //Step 2 账号没代理的尝试给他设置代理
-            if (!notUsableAccounts.isEmpty()) {
-                log.warn("以下账号没有配置代理，将随机选择一个代理进行使用");
-                List<NetworkProxy> lessUsedProxy = getProxyPool().getLessUsedProxy(notUsableAccounts.size());
-                for (int i = 0; i < notUsableAccounts.size(); i++) {
-                    notUsableAccounts.get(i).setProxy(lessUsedProxy.get(i));
-                    notUsableAccounts.get(i).setUsable(true);
-                    log.warn("账号:{},将使用代理:{}", notUsableAccounts.get(i).getClientAccount().getPrintName(), lessUsedProxy.get(i));
+import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
+import cn.com.vortexa.control.constant.RemotingCommandFlagConstants;
+import cn.com.vortexa.common.dto.control.RegisteredService;
+import cn.com.vortexa.control.dto.RemotingCommand;
+import cn.com.vortexa.control.dto.ServiceInstanceVO;
+import cn.com.vortexa.control.service.IRegistryService;
+import cn.com.vortexa.websocket.netty.util.ProtostuffUtils;
+import io.netty.channel.Channel;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+
+/**
+ * @author helei
+ * @since 2025-03-12
+ */
+@Slf4j
+public class ServiceDiscoverProcessor {
+
+    private final IRegistryService registryService;
+
+    public ServiceDiscoverProcessor(IRegistryService registryService) {
+        this.registryService = registryService;
+    }
+
+    /**
+     * 处理服务发现请求
+     *
+     * @param channel         channel
+     * @param remotingCommand remotingCommand
+     * @return RemotingCommand
+     */
+    public RemotingCommand handlerDiscoverService(Channel channel, RemotingCommand remotingCommand) {
+        String group = remotingCommand.getGroup();
+        String serviceId = remotingCommand.getServiceId();
+        String clientId = remotingCommand.getClientId();
+
+
+        List<RegisteredService> services = discoverServiceList(group, clientId, serviceId);
+
+        RemotingCommand response = new RemotingCommand();
+        response.setFlag(RemotingCommandFlagConstants.CLIENT_DISCOVER_SERVICE_RESPONSE);
+        response.setCode(RemotingCommandCodeConstants.SUCCESS);
+        response.setBody(ProtostuffUtils.serialize(new ServiceInstanceVO(services)));
+        return response;
+    }
+
+    /**
+     * 查询服务列表
+     *
+     * @param group     group
+     * @param serviceId serviceId
+     * @param clientId  clientId
+     * @return List<RegisteredService>
+     */
+    public List<RegisteredService> discoverServiceList(
+            String group,
+            String serviceId,
+            String clientId
+    ) {
+        List<RegisteredService> serviceInstances = registryService.queryServiceInstance(group, serviceId, clientId);
+        log.debug("[{}]-[{}]-[{}] discover service total [{}]", group, serviceId, clientId, serviceInstances.size());
+        // TODO 根据策略宣泄
+
+        return serviceInstances;
+    }
+}
+package cn.com.vortexa.control.processor;
+
+import cn.com.vortexa.control.constant.ExtFieldsConstants;
+import cn.com.vortexa.control.constant.RegistryState;
+import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
+import cn.com.vortexa.control.constant.RemotingCommandFlagConstants;
+import cn.com.vortexa.control.dto.RemotingCommand;
+import cn.com.vortexa.common.dto.control.ServiceInstance;
+import cn.com.vortexa.control.service.IRegistryService;
+import io.netty.channel.Channel;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * @author helei
+ * @since 2025-03-12
+ */
+@Slf4j
+public class ServiceRegistryProcessor {
+
+    private final IRegistryService registryService;
+
+    public ServiceRegistryProcessor(IRegistryService registryService) {
+        this.registryService = registryService;
+    }
+
+    /**
+     * 注册客户端服务
+     *
+     * @param channel channel
+     * @param remotingCommand remotingCommand
+     * @return CompletableFuture<RegistryState>
+     */
+    public RemotingCommand handlerClientServiceRegistry(
+            Channel channel,
+            RemotingCommand remotingCommand
+    ) {
+        // Step 1 解析获取参数
+        String group = remotingCommand.getGroup();
+        String serviceId = remotingCommand.getServiceId();
+        String clientId = remotingCommand.getClientId();
+
+        String[] serviceAddress = channel.remoteAddress().toString().split(":");
+
+        ServiceInstance serviceInstance = ServiceInstance.builder()
+                .group(group)
+                .serviceId(serviceId)
+                .instanceId(clientId)
+                .host(serviceAddress[0])
+                .port(Integer.parseInt(serviceAddress[1]))
+                .build();
+
+        Map<Object, Object> serviceProps = null;
+        if (remotingCommand.getBody() != null && remotingCommand.getBody().length > 0) {
+            try {
+                serviceProps = remotingCommand.getObjBodY(HashMap.class);
+            } catch (Exception e) {
+                log.warn("get service props from remoting command error, {}", e.getMessage());
+            }
+        }
+
+        // Step 2 注册服务实例
+        RemotingCommand response = new RemotingCommand();
+        response.setFlag(RemotingCommandFlagConstants.CLIENT_REGISTRY_SERVICE_RESPONSE);
+        response.setTransactionId(remotingCommand.getTransactionId());
+        RegistryState registryState;
+
+        try {
+            registryState = registryService.registryService(serviceInstance, serviceProps);
+
+            if (registryState == RegistryState.OK) {
+                response.setCode(RemotingCommandCodeConstants.SUCCESS);
+            } else {
+                response.setCode(RemotingCommandCodeConstants.FAIL);
+            }
+
+            log.info("client[{}] registry state [{}]", serviceInstance, registryState);
+        } catch (Exception e) {
+            log.error("[{}]-[{}] registry error", group, serviceId, e);
+            registryState = RegistryState.UNKNOWN_ERROR;
+            response.setCode(RemotingCommandCodeConstants.FAIL);
+        }
+
+        // Step 3 添加注册状态
+        response.addExtField(ExtFieldsConstants.NAMESERVER_REGISTRY_STATUS, registryState.name());
+        return response;
+    }
+}
+package cn.com.vortexa.control.service.impl;
+
+import cn.com.vortexa.control.constant.RegistryState;
+import cn.com.vortexa.common.dto.control.RegisteredService;
+import cn.com.vortexa.common.dto.control.ServiceInstance;
+import cn.com.vortexa.control.service.IRegistryService;
+import cn.com.vortexa.control.util.NameserverUtil;
+import cn.hutool.core.util.BooleanUtil;
+import cn.hutool.core.util.StrUtil;
+
+import com.alibaba.fastjson.JSONObject;
+
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * @author helei
+ * @since 2025-03-17
+ */
+@Slf4j
+public class FileRegistryService implements IRegistryService {
+
+    private static final String FILE_NAME = "nameserver-registry.dat";
+    private final ConcurrentHashMap<String, RegisteredService> registryServiceMap = new ConcurrentHashMap<>();
+    private final AtomicBoolean updated = new AtomicBoolean(false);
+    @Setter
+    private int saveIntervalSecond = 60;
+    private boolean running = true;
+
+    public FileRegistryService(ExecutorService executorService) {
+        executorService.execute(()->{
+            while (running) {
+                try {
+                    saveRegistryInfo();
+
+                    TimeUnit.SECONDS.sleep(saveIntervalSecond);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                } catch (InterruptedException e) {
+                    log.warn("registry file auto store task interrupted", e);
+                    running = false;
                 }
             }
-        } catch (Exception e) {
-            throw new DepinBotInitException("初始化账户发生错误", e);
-        }
+        });
     }
 
-    /**
-     * 开始所有账户的连接
-     *
-     * @return String 打印的消息
-     */
-    public String startAccountDepinClient() {
-        if (isStartAccountConnected.compareAndSet(false, true)) {
-            allAccountConnectExecute()
-                    .exceptionally(throwable -> {
-                        log.error("开始所有账户连接时发生异常", throwable);
-                        return null;
-                    });
-            return "已开始账号链接任务";
+    @Override
+    public RegistryState registryService(ServiceInstance serviceInstance, Map<Object, Object> props) {
+        String group = serviceInstance.getGroup();
+        String serviceId = serviceInstance.getServiceId();
+        String clientId = serviceInstance.getInstanceId();
+
+        if (StrUtil.isBlank(group) && StrUtil.isBlank(serviceId) && StrUtil.isBlank(clientId)) {
+            return RegistryState.PARAM_ERROR;
         }
 
-        return "已提交过建立连接任务";
-    }
+        try {
+            String key = NameserverUtil.generateServiceInstanceKey(group, serviceId, clientId);
 
-    /**
-     * 所有账户建立连接
-     *
-     * @return CompletableFuture<Void>
-     */
-    public CompletableFuture<Void> allAccountConnectExecute() {
-        return CompletableFuture.runAsync(() -> {
-            //Step 1 遍历账户
-            List<CompletableFuture<Void>> connectFutures = accounts.stream()
-                    .map(accountContext -> {
-                        // Step 2 根据账户获取ws client
-                        BaseDepinWSClient<Req, Resp> depinWSClient = accountWSClientMap.compute(accountContext, (k, v) -> {
-                            // 没有创建过，或被关闭，创建新的
-                            if (v == null || v.getClientStatus().equals(WebsocketClientStatus.SHUTDOWN)) {
-                                v = buildAccountWSClient(accountContext);
-                            }
+            // 存内存
+            registryServiceMap.put(key, new RegisteredService(serviceInstance, props));
+            updated.set(true);
 
-                            return v;
-                        });
-
-
-                        String accountName = accountContext.getClientAccount().getName();
-
-                        //Step 3 建立连接
-                        WebsocketClientStatus clientStatus = depinWSClient.getClientStatus();
-                        return switch (clientStatus) {
-                            case NEW, STOP:  // 新创建，停止状态，需要建立连接
-                                yield depinWSClient
-                                        .connect()
-                                        .thenAcceptAsync(success -> {
-                                            try {
-                                                whenAccountConnected(depinWSClient, success);
-                                            } catch (Exception e) {
-                                                log.error("账户[{}]-连接完成后执行回调发生错误", accountName, e);
-                                            }
-                                        }, executorService)
-                                        .exceptionallyAsync(throwable -> {
-                                            log.error("账户[{}]连接失败, ", accountName,
-                                                    throwable);
-                                            return null;
-                                        }, executorService);
-                            case STARTING, RUNNING: // 正在建立连接，直接返回
-                                CompletableFuture.completedFuture(null);
-                            case SHUTDOWN: // 被禁止使用，抛出异常
-                                throw new DepinBotStatusException("cannot start ws client when it shutdown, "  + accountName);
-                        };
-                    })
-                    .toList();
-
-            //Step 4 等所有账户连接建立完成
+            // 存磁盘
+            Boolean b = null;
             try {
-                CompletableFuture
-                        .allOf(connectFutures.toArray(new CompletableFuture[0]))
-                        .get();
-            } catch (InterruptedException | ExecutionException e) {
-                log.error("账户建立连接发生异常", e);
+                b = saveRegistryInfo();
+                return BooleanUtil.isTrue(b) ? RegistryState.OK : RegistryState.STORE_ERROR;
+            } catch (Exception e) {
+                log.error("store registry error", e);
+                return RegistryState.STORE_ERROR;
+            }
+        } catch (Exception e) {
+            log.error("registry config error", e);
+            return RegistryState.UNKNOWN_ERROR;
+        }
+    }
+
+    @Override
+    public Boolean saveRegistryInfo() throws IOException {
+        if (updated.compareAndSet(true, false)) {
+            log.info("start save registry info - [{}]", registryServiceMap.keySet());
+
+            Path path = Paths.get(NameserverUtil.getStoreFileResourcePath(FILE_NAME));
+            if (!Files.exists(path.getParent())) {
+                Files.createDirectories(path.getParent());
+            }
+
+            try (BufferedWriter bw = new BufferedWriter(new FileWriter(path.toFile()))) {
+                bw.write(JSONObject.toJSONString(registryServiceMap));
+                bw.flush();
+                return true;
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        } else {
+            log.debug("no update cancel save registry info to file");
+            return true;
+        }
+    }
+
+    @Override
+    public List<RegisteredService> queryServiceInstance(String keyPattern) {
+        Pattern compile = Pattern.compile(keyPattern);
+
+        return registryServiceMap.keySet().stream().filter(key -> {
+            Matcher matcher = compile.matcher(key);
+            return matcher.find();
+        }).map(registryServiceMap::get).toList();
+    }
+
+    @Override
+    public List<RegisteredService> queryServiceInstance(
+            String groupId,
+            String serviceId,
+            String clientId
+    ) {
+        String keyPattern = NameserverUtil.generateServiceInstanceKey(
+                StrUtil.isBlank(groupId) ? "*" : groupId,
+                StrUtil.isBlank(serviceId) ? "*" : serviceId,
+                StrUtil.isBlank(clientId) ? "*" : clientId
+        );
+
+        return queryServiceInstance(keyPattern);
+    }
+
+    @Override
+    public boolean existServiceInstance(String key) {
+        return registryServiceMap.containsKey(key);
+    }
+}
+package cn.com.vortexa.control.service.impl;
+
+import cn.com.vortexa.control.dto.ConnectEntry;
+import cn.com.vortexa.control.service.IConnectionService;
+import cn.com.vortexa.control.util.NameserverUtil;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import io.netty.channel.Channel;
+import lombok.extern.slf4j.Slf4j;
+
+import org.apache.commons.lang3.BooleanUtils;
+
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+/**
+ * @author helei
+ * @since 2025/3/18 15:03
+ */
+@Slf4j
+public class MemoryConnectionService implements IConnectionService {
+
+    private final ConcurrentMap<String, ConnectEntry> connectionMap = new ConcurrentHashMap<>();
+
+    @Override
+    public void addServiceChannel(String key, Channel channel) {
+        connectionMap.compute(key, (k,v)->{
+            if (v == null) {
+                channel.attr(NettyConstants.CLIENT_NAME).set(key);
+                v = ConnectEntry.builder()
+                        .channel(channel)
+                        .build();
+            }
+
+            v.setUsable(true);
+            v.setLastActiveTimestamp(System.currentTimeMillis());
+            return v;
+        });
+    }
+
+    @Override
+    public void addServiceChannel(String group, String serviceId, String instanceId, Channel channel) {
+        String key = NameserverUtil.generateServiceInstanceKey(
+                group,
+                serviceId,
+                instanceId
+        );
+        addServiceChannel(key, channel);
+    }
+
+    @Override
+    public void closeServiceChannel(Channel channel, String key) {
+        ConnectEntry remove = connectionMap.remove(key);
+        if (remove != null) {
+            remove.close();
+        }
+        if (channel != null && channel.isActive()) {
+            channel.close();
+        }
+        log.debug("close service instance [{}] channel", key);
+    }
+
+    @Override
+    public ConnectEntry getServiceInstanceChannel(String key) {
+        return connectionMap.get(key);
+    }
+
+    @Override
+    public void freshServiceInstanceConnection(String key, Channel channel) {
+        addServiceChannel(key, channel);
+    }
+
+    @Override
+    public List<String> queryOnlineInstanceKey() {
+        return connectionMap.entrySet().stream()
+            .filter(entry -> BooleanUtils.isTrue(entry.getValue().isUsable()))
+            .map(Map.Entry::getKey)
+            .toList();
+    }
+}
+package cn.com.vortexa.control.service;
+
+import cn.com.vortexa.control.dto.ConnectEntry;
+import io.netty.channel.Channel;
+
+import java.util.List;
+
+/**
+ * @author helei
+ * @since 2025/3/18 15:02
+ */
+public interface IConnectionService {
+
+    /**
+     * 添加服务连接
+     *
+     * @param key     key
+     * @param channel channel
+     */
+    void addServiceChannel(String key, Channel channel);
+
+    /**
+     * 添加服务连接
+     *
+     * @param group      group
+     * @param serviceId  serviceId
+     * @param instanceId instanceId
+     * @param channel    channel
+     */
+    void addServiceChannel(String group, String serviceId, String instanceId, Channel channel);
+
+    /**
+     * 关闭服务连接
+     *
+     * @param channel channel
+     * @param key     key
+     */
+    void closeServiceChannel(Channel channel, String key);
+
+    /**
+     * 获取连接
+     *
+     * @param key key
+     * @return ConnectEntry
+     */
+    ConnectEntry getServiceInstanceChannel(String key);
+
+    /**
+     * 刷新服务实例连接
+     *
+     * @param key     key
+     * @param channel channel
+     */
+    void freshServiceInstanceConnection(String key, Channel channel);
+
+    List<String> queryOnlineInstanceKey();
+}
+package cn.com.vortexa.control.service;
+
+import cn.com.vortexa.control.constant.RegistryState;
+import cn.com.vortexa.common.dto.control.RegisteredService;
+import cn.com.vortexa.common.dto.control.ServiceInstance;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * @author helei
+ * @since 2025-03-17
+ */
+public interface IRegistryService {
+
+    /**
+     * 注册服务
+     *
+     * @param serviceInstance serviceInstance
+     * @return 注册状态
+     */
+    RegistryState registryService(ServiceInstance serviceInstance, Map<Object, Object> props);
+
+    /**
+     * 保存注册信息
+     *
+     * @return Boolean
+     */
+    Boolean saveRegistryInfo() throws IOException;
+
+    /**
+     * 查找服务实例
+     *
+     * @param keyPattern keyPattern
+     * @return List<ServiceInstance>
+     */
+    List<RegisteredService> queryServiceInstance(
+        String keyPattern
+    );
+
+    /**
+     * 查找服务实例
+     *
+     * @param groupId groupId
+     * @param serviceId serviceId
+     * @param clientId clientId
+     * @return List<ServiceInstance>
+     */
+    List<RegisteredService> queryServiceInstance(
+            String groupId,
+            String serviceId,
+            String clientId
+    );
+
+    /**
+     * 是否存在已注册的实例
+     *
+     * @param key key
+     * @return  boolean
+     */
+    boolean existServiceInstance(String key);
+}
+package cn.com.vortexa.control;
+
+import cn.com.vortexa.common.util.NamedThreadFactory;
+import cn.com.vortexa.control.config.ControlServerConfig;
+import cn.com.vortexa.control.constant.NameserverState;
+import cn.com.vortexa.control.constant.NameserverSystemConstants;
+import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
+import cn.com.vortexa.control.constant.RemotingCommandFlagConstants;
+import cn.com.vortexa.control.dto.ConnectEntry;
+import cn.com.vortexa.control.dto.RemotingCommand;
+import cn.com.vortexa.control.dto.RPCResultWrapper;
+import cn.com.vortexa.control.exception.CustomCommandException;
+import cn.com.vortexa.control.exception.ControlServerException;
+import cn.com.vortexa.control.handler.CustomRequestHandler;
+import cn.com.vortexa.control.processor.ControlServerProcessorAdaptor;
+import cn.com.vortexa.control.protocol.Serializer;
+import cn.com.vortexa.control.service.IConnectionService;
+import cn.com.vortexa.control.service.IMetricsService;
+import cn.com.vortexa.control.service.IRegistryService;
+import cn.com.vortexa.control.processor.CustomCommandProcessor;
+import cn.com.vortexa.control.service.impl.InfluxDBMetricsService;
+import cn.com.vortexa.control.util.DistributeIdMaker;
+import cn.com.vortexa.control.util.NameserverUtil;
+import cn.com.vortexa.control.util.RemotingCommandDecoder;
+import cn.com.vortexa.control.util.RemotingCommandEncoder;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import io.netty.bootstrap.ServerBootstrap;
+import io.netty.channel.*;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
+import io.netty.handler.codec.LengthFieldPrepender;
+import io.netty.handler.timeout.IdleStateHandler;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import static cn.com.vortexa.control.constant.NameserverState.*;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
+
+@Slf4j
+@Getter
+public class BotControlServer {
+    private final ControlServerConfig controlServerConfig;    // nameServerConfig
+    private final CustomCommandProcessor customCommandProcessor;   // 自定义命令处理服务
+    private final ExecutorService executorService;
+    private final long startTime;   //启动时间
+
+    private volatile NameserverState state; // name server state
+    private ServerBootstrap serverBootstrap;    //serverBootstrap
+    private ChannelFuture nameserverChannelFuture;  //nameserverChannelFuture
+
+    private ControlServerProcessorAdaptor processorAdaptor;  // 消息处理器
+    private IRegistryService registryService;   // 注册服务
+    private IConnectionService connectionService;   // 连接服务
+    private IMetricsService metricsService; // 指标服务
+
+    public BotControlServer(ControlServerConfig controlServerConfig) throws ControlServerException {
+        this(controlServerConfig, Executors.newThreadPerTaskExecutor(
+                new NamedThreadFactory(controlServerConfig.getServiceInstance().toString())
+        ));
+    }
+
+    public BotControlServer(
+            ControlServerConfig controlServerConfig,
+            ExecutorService executorService
+    ) throws ControlServerException {
+        this.controlServerConfig = controlServerConfig;
+        updateNameServerState(JUST_START);
+        this.startTime = System.currentTimeMillis();
+        this.executorService = executorService;
+
+        this.customCommandProcessor = new CustomCommandProcessor();
+    }
+
+    /**
+     * 初始化
+     *
+     * @param registryService registryService
+     */
+    public void init(
+            IRegistryService registryService,
+            IConnectionService connectionService
+    ) throws ControlServerException {
+        this.registryService = registryService;
+        this.connectionService = connectionService;
+        this.processorAdaptor = new ControlServerProcessorAdaptor(
+                this,
+                registryService
+        );
+        this.metricsService = new InfluxDBMetricsService();
+
+        serverBootstrap = new ServerBootstrap()
+                .group(new NioEventLoopGroup(controlServerConfig.getNioThreadCount()), new NioEventLoopGroup())
+                .channel(NioServerSocketChannel.class)
+                .option(ChannelOption.SO_BACKLOG, 1024)
+                .option(ChannelOption.SO_REUSEADDR, true)
+                .childOption(ChannelOption.SO_KEEPALIVE, false)
+                .childOption(ChannelOption.TCP_NODELAY, true)
+                .childOption(ChannelOption.SO_SNDBUF, 65535)
+                .childOption(ChannelOption.SO_RCVBUF, 65535)
+                .childHandler(new ChannelInitializer<NioSocketChannel>() {
+                    @Override
+                    protected void initChannel(NioSocketChannel ch) throws Exception {
+                        ch.pipeline().addLast(new IdleStateHandler(
+                                0, 0, controlServerConfig.getServiceOfflineTtl()));
+
+                        ch.pipeline().addLast(new LengthFieldBasedFrameDecoder(
+                                NameserverSystemConstants.MAX_FRAME_LENGTH, 0,
+                                4, 0, 4));
+
+                        ch.pipeline().addLast(new LengthFieldPrepender(4));
+
+                        ch.pipeline().addLast(new RemotingCommandDecoder());
+                        ch.pipeline().addLast(new RemotingCommandEncoder());
+                        ch.pipeline().addLast(processorAdaptor);
+                    }
+                });
+
+        updateNameServerState(INIT_FINISH);
+    }
+
+    /**
+     * 启动
+     *
+     * @throws ControlServerException NameserverStartException
+     */
+    public ChannelFuture start() throws ControlServerException {
+        log.info("start nameserver [{}], configuration:\n {}",
+                controlServerConfig.getServiceInstance(), controlServerConfig);
+
+        try {
+            nameserverChannelFuture = serverBootstrap.bind(
+                    controlServerConfig.getServiceInstance().getHost(),
+                    controlServerConfig.getServiceInstance().getPort()
+            );
+
+            nameserverChannelFuture.addListener(new ChannelFutureListener() {
+                @Override
+                public void operationComplete(ChannelFuture channelFuture) throws Exception {
+                    updateNameServerState(RUNNING);
+                }
+            });
+
+            return nameserverChannelFuture;
+        } catch (Exception e) {
+            updateNameServerState(SHUT_DOWN);
+            throw new ControlServerException("start error", e);
+        }
+    }
+
+    /**
+     * 添加自定义命令处理器
+     *
+     * @param commandKey           commandKey 命令标识
+     * @param customRequestHandler customRequestHandler    处理器
+     */
+    public void addCustomCommandHandler(String commandKey, CustomRequestHandler customRequestHandler)
+            throws CustomCommandException {
+        customCommandProcessor.addCustomCommandHandler(commandKey, customRequestHandler);
+    }
+
+    /**
+     * 调用自定义命令handler
+     *
+     * @param channel channel
+     * @param request request
+     * @return response
+     */
+    public RemotingCommand tryInvokeCustomCommand(Channel channel, RemotingCommand request) {
+        RemotingCommand response = null;
+
+        try {
+            // Step 1 校验是否注册服务
+            String key = channel.attr(NettyConstants.CLIENT_NAME).get();
+
+            if (!registryService.existServiceInstance(key)) {
+                log.debug("channel[{}] didn't registry, drop request [{}]", key, request);
+                closeChannel(channel);
+                return null;
+            }
+
+            // Step 2 运行自定义命令
+            response = customCommandProcessor.tryInvokeCustomCommandHandler(channel, request);
+
+            if (response.getTransactionId() == null) {
+                response.setTransactionId(request.getTransactionId());
+            }
+        } catch (Exception e) {
+            log.error("client custom command[{}] execute error", request, e);
+
+            response = new RemotingCommand();
+            response.setTransactionId(request.getTransactionId());
+            response.setFlag(RemotingCommandFlagConstants.CUSTOM_COMMAND_RESPONSE);
+            response.setCode(RemotingCommandCodeConstants.FAIL);
+            response.setBody(Serializer.Algorithm.JDK.serialize(new RPCResultWrapper<>(null, e)));
+        }
+
+        return response;
+    }
+
+    /**
+     * 给服务实例发送命令
+     *
+     * @param group           group
+     * @param serviceId       serviceId
+     * @param instanceId      instanceId
+     * @param remotingCommand remotingCommand
+     * @return CompletableFuture<RemotingCommand>
+     */
+    public CompletableFuture<RemotingCommand> sendCommandToServiceInstance(
+            String group,
+            String serviceId,
+            String instanceId,
+            RemotingCommand remotingCommand
+    ) {
+        // Step 1 获取连接
+        String key = NameserverUtil.generateServiceInstanceKey(group, serviceId, instanceId);
+        ConnectEntry connectEntry = connectionService.getServiceInstanceChannel(key);
+
+        if (connectEntry == null || !connectEntry.isUsable()) {
+            log.error("[{}] channel is unusable", key);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                CountDownLatch latch = new CountDownLatch(1);
+                AtomicReference<RemotingCommand> result = new AtomicReference<>();
+
+                // Step 2 注册请求
+                boolean registry = processorAdaptor.registryRequest(remotingCommand, response -> {
+                    result.set(response);
+                    latch.countDown();
+                });
+
+                if (registry) {
+                    connectEntry.getChannel().writeAndFlush(remotingCommand);
+                }
+
+                latch.await();
+                return result.get();
+            } catch (InterruptedException e) {
+                throw new RuntimeException("send command %s error".formatted(remotingCommand), e);
             }
         }, executorService);
     }
 
-
     /**
-     * 打印账号列表
+     * 关闭连接某客户端的channel连接
      *
-     * @return String
+     * @param channel channel
      */
-    public String printAccountList() {
-        List<AccountPrintDto> list = accounts.stream().map(accountContext -> {
-            NetworkProxy proxy = accountContext.getProxy();
-            BrowserEnv browserEnv = accountContext.getBrowserEnv();
-            return AccountPrintDto
-                    .builder()
-                    .name(accountContext.getClientAccount().getName())
-                    .proxyInfo(proxy.getId() + "-" + proxy.getAddress())
-                    .browserEnvInfo(String.valueOf(browserEnv == null ? "NO_ENV" : browserEnv.getId()))
-                    .usable(accountContext.isUsable())
-                    .startDateTime(accountContext.getConnectStatusInfo().getStartDateTime())
-                    .updateDateTime(accountContext.getConnectStatusInfo().getUpdateDateTime())
-                    .heartBeatCount(accountContext.getConnectStatusInfo().getHeartBeatCount().get())
-                    .connectStatus(accountContext.getConnectStatusInfo().getConnectStatus())
-                    .build();
-        }).toList();
-
-        return "账号列表:\n" +
-                CommandLineTablePrintHelper.generateTableString(list, AccountPrintDto.class) +
-                "\n";
-    }
-
-    /**
-     * 打印账号收益
-     *
-     * @return String
-     */
-    public String printAccountReward() {
-        StringBuilder sb = new StringBuilder();
-
-        List<RewordInfo> list = accounts.stream().map(AccountContext::getRewordInfo).toList();
-
-        sb.append("收益列表:\n")
-                .append(CommandLineTablePrintHelper.generateTableString(list, RewordInfo.class))
-                .append("\n");
-
-        return sb.toString();
-    }
-
-}
-
-package cn.com.helei.DepinBot.core.bot;
-
-import cn.com.helei.DepinBot.core.BaseDepinBotConfig;
-import cn.com.helei.DepinBot.core.commandMenu.CommandMenuNode;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-import org.jline.reader.LineReader;
-import org.jline.reader.LineReaderBuilder;
-import org.jline.reader.impl.DefaultParser;
-import org.jline.terminal.Terminal;
-import org.jline.terminal.TerminalBuilder;
-
-import java.io.IOException;
-import java.util.List;
-import java.util.Stack;
-
-
-/**
- * 命令行交互的depin机器人
- */
-@Slf4j
-@Getter
-public abstract class CommandLineDepinBot<Req, Resp> extends AccountAutoManageDepinBot<Req, Resp> {
-
-
-    public CommandLineDepinBot(BaseDepinBotConfig baseDepinBotConfig) {
-        super(baseDepinBotConfig);
-    }
-
-    /**
-     * 构建command菜单
-     *
-     * @return 主菜单节点
-     */
-    protected abstract CommandMenuNode buildMenuNode();
-
-
-    /**
-     * 运行机器人
-     *
-     * @throws IOException IOException
-     */
-    protected void doExecute() throws IOException {
-        //Step 1 获取输入
-        CommandMenuNode mainMenuNode = getMenuNode();
-        Terminal terminal = TerminalBuilder.builder().system(true).build();
-        LineReader reader = LineReaderBuilder.builder().terminal(terminal).parser(new DefaultParser()).build();
-
-        Stack<CommandMenuNode> menuNodeStack = new Stack<>();
-        CommandMenuNode currentMenuNode = mainMenuNode;
-
-        //Step 2 不断监听控制台输入
-        while (true) {
-            //Step 2.1 获取输入
-            String choice = reader.readLine("\n<\n" + getInvokeActionAndMenuNodePrintStr(currentMenuNode) + "请选择>");
-            try {
-                //Step 2.2 退出
-                if ("exit".equals(choice)) {
-                    exitHandler();
-                    break;
-                }
-
-                //Step 2.3 选择操作
-                int option = Integer.parseInt(choice.trim());
-                if (option == 0) {
-                    //返回上一级菜单
-                    if (!menuNodeStack.isEmpty()) {
-                        currentMenuNode = menuNodeStack.pop();
-                    }
-                } else if (option > 0 && option <= currentMenuNode.getSubNodeList().size()) {
-                    //进入选择的菜单
-                    menuNodeStack.push(currentMenuNode);
-                    currentMenuNode = currentMenuNode.getSubNodeList().get(option - 1);
-                } else {
-                    System.out.println("输入无效，请重新输入");
-                }
-
-                //终点节点，不进入，直接返回
-                if (currentMenuNode.isEnd()) {
-                    System.out.println(getInvokeActionAndMenuNodePrintStr(currentMenuNode));
-                    currentMenuNode = menuNodeStack.pop();
-                }
-            } catch (Exception e) {
-                System.out.println("输入无效，请重新输入");
-            }
-        }
-    }
-
-
-    /**
-     * 获取菜单， 会放入额外的固定菜单
-     *
-     * @return CommandMenuNode
-     */
-    private CommandMenuNode getMenuNode() {
-        CommandMenuNode menuNode = buildMenuNode();
-
-        //获取到子类菜单后，给子类菜单添加新的菜单选项
-        return new DefaultCommandMenuBuilder(this)
-                .addDefaultMenuNode(menuNode);
-    }
-
-    /**
-     * 退出回调
-     */
-    protected void exitHandler() {
-    }
-
-
-
-    /**
-     * 执行Action回调，获取当前菜单打印的字符串
-     *
-     * @param currentMenuNode currentMenuNode
-     * @return String
-     */
-    public String getInvokeActionAndMenuNodePrintStr(CommandMenuNode currentMenuNode) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(currentMenuNode.getDescribe()).append("\n");
-
-        if (currentMenuNode.getAction() != null) {
-            sb.append(currentMenuNode.getAction().get()).append("\n");
-        }
-
-        sb.append("选项:\n");
-        List<CommandMenuNode> menuNodeList = currentMenuNode.getSubNodeList();
-        for (int i = 0; i < menuNodeList.size(); i++) {
-            sb.append(i + 1).append(". ").append(menuNodeList.get(i).getTittle()).append("\n");
-        }
-
-        sb.append("0. 返回上一级菜单\n");
-
-        return sb.toString();
-    }
-
-}
-package cn.com.helei.DepinBot.core.bot;
-
-import cn.com.helei.DepinBot.core.commandMenu.CommandMenuNode;
-
-
-/**
- * 默认菜单构造器
- */
-public class DefaultCommandMenuBuilder {
-
-    private final CommandLineDepinBot<?,?> commandLineDepinBot;
-
-    public DefaultCommandMenuBuilder(CommandLineDepinBot<?,?> commandLineDepinBot) {
-        this.commandLineDepinBot = commandLineDepinBot;
-    }
-
-
-    /**
-     * 添加默认菜单节点，并返回添加后的菜单
-     *
-     * @param menuNode 原菜单节点
-     * @return 添加默认菜单节点后的菜单
-     */
-    public CommandMenuNode addDefaultMenuNode(CommandMenuNode menuNode) {
-        return menuNode.addSubMenu(buildProxyListMenuNode())
-                .addSubMenu(buildBrowserListMenuNode())
-                .addSubMenu(buildAccountListMenuNode())
-                .addSubMenu(buildStartAccountConnectMenuNode());
-    }
-
-    /**
-     * 构建查看代理列表的菜单节点
-     *
-     * @return 查看代理列表菜单节点
-     */
-    private CommandMenuNode buildProxyListMenuNode() {
-        return new CommandMenuNode(
-                "查看代理列表",
-                "当前代理列表文件:" + commandLineDepinBot.getProxyPool().getConfigClassPath(),
-                commandLineDepinBot.getProxyPool()::printPool
-        );
-    }
-
-    /**
-     * 构建查看浏览器环境列表的菜单节点
-     *
-     * @return 查看浏览器环境列表菜单节点
-     */
-    private CommandMenuNode buildBrowserListMenuNode() {
-        return new CommandMenuNode(
-                "查看浏览器环境列表",
-                "当前代理列表文件:" + commandLineDepinBot.getBrowserEnvPool().getConfigClassPath(),
-                commandLineDepinBot.getBrowserEnvPool()::printPool
-        );
-    }
-
-    /**
-     * 账户列表菜单节点
-     *
-     * @return 账户列表节点
-     */
-    private CommandMenuNode buildAccountListMenuNode() {
-        CommandMenuNode accountListMenuNode = new CommandMenuNode(
-                "查看账号",
-                "当前账户详情列表:",
-                commandLineDepinBot::printAccountList
-        );
-
-        return accountListMenuNode.addSubMenu(buildAccountRewardMenuNode());
-    }
-
-    /**
-     * 查看账户收益菜单节点
-     *
-     * @return 账户收益节点
-     */
-    private CommandMenuNode buildAccountRewardMenuNode() {
-        return new CommandMenuNode(
-                "查看账号收益",
-                "账号收益详情列表:",
-                commandLineDepinBot::printAccountReward
-        );
-    }
-
-    /**
-     * 开始账户连接菜单节点
-     *
-     * @return 连接账户菜单节点
-     */
-    private CommandMenuNode buildStartAccountConnectMenuNode() {
-        CommandMenuNode menuNode = new CommandMenuNode(
-                "启动账号",
-                "启动账号界面，",
-                () -> commandLineDepinBot.startAccountDepinClient() + "\n"
-                        + commandLineDepinBot.printAccountList()
-        );
-
-        CommandMenuNode refresh = new CommandMenuNode(true,"刷新", "当前账户列表",
-                commandLineDepinBot::printAccountList);
-
-        menuNode.addSubMenu(refresh);
-        return menuNode;
-    }
-
-}
-
-
-package cn.com.helei.DepinBot.core.dto.system;
-
-import com.alibaba.fastjson.JSONObject;
-import lombok.Builder;
-import lombok.Data;
-import lombok.Getter;
-
-import java.util.List;
-
-@Data
-@Builder
-public class CpuInfo {
-
-    public String archName;
-
-    public List<String> features;
-
-    public String modelName;
-
-    public int numOfProcessors;
-
-    public List<CpuProcessor> cpuProcessors;
-
-    public List<JSONObject> temperatures;
-
-    @Getter
-    public static class CpuProcessor {
-
-        private final JSONObject usage;
-
-        public CpuProcessor() {
-            this.usage = new JSONObject();
-        }
-
-        public void setUsage(Double idle, Double kernel, Double total, Double user) {
-            this.usage.put("idle", idle);
-            this.usage.put("kernel", kernel);
-            this.usage.put("total", total);
-            this.usage.put("user", user);
-        }
-    }
-}
-
-package cn.com.helei.DepinBot.core.dto.system;
-
-import lombok.Builder;
-import lombok.Data;
-
-@Data
-@Builder
-public class GpuInfo {
-
-    private String renderer;
-
-    private String vendor;
-}
-
-package cn.com.helei.DepinBot.core.dto.system;
-
-import lombok.Builder;
-import lombok.Data;
-
-@Data
-@Builder
-public class MemoryInfo {
-
-    private Long availableCapacity;
-
-    private Long capacity;
-}
-package cn.com.helei.DepinBot.core.dto;
-
-import cn.com.helei.DepinBot.core.constants.ConnectStatus;
-import lombok.Data;
-
-import java.time.LocalDateTime;
-import java.util.concurrent.atomic.AtomicInteger;
-
-/**
- * Account的连接状态
- */
-@Data
-public class ConnectStatusInfo {
-
-    /**
-     * 开始时间
-     */
-    private volatile LocalDateTime startDateTime;
-
-    /**
-     * 更新时间
-     */
-    private volatile LocalDateTime updateDateTime;
-
-    /**
-     * 心跳数
-     */
-    private final AtomicInteger heartBeatCount = new AtomicInteger(0);
-
-    /**
-     * 错误的心跳数
-     */
-    private final AtomicInteger errorHeartBeatCount = new AtomicInteger(0);
-
-    /**
-     * 连接状态
-     */
-    private volatile ConnectStatus connectStatus = ConnectStatus.NEW;
-}
-package cn.com.helei.DepinBot.core.netty.base;
-
-import cn.com.helei.DepinBot.core.netty.constants.NettyConstants;
-import io.netty.channel.*;
-import io.netty.handler.codec.http.FullHttpResponse;
-import io.netty.handler.codec.http.websocketx.*;
-import io.netty.handler.timeout.IdleStateEvent;
-import io.netty.util.CharsetUtil;
-import lombok.extern.slf4j.Slf4j;
-
-
-/**
- * WebSocket客户端处理器基础类
- * 处理连接握手
- *
- * @param <P>
- * @param <T>
- */
-@Slf4j
-@ChannelHandler.Sharable
-public abstract class BaseWebSocketClientHandler<P, T> extends SimpleChannelInboundHandler<Object> {
-    private WebSocketClientHandshaker handshaker;
-
-    private ChannelPromise handshakeFuture;
-
-    protected AbstractWebsocketClient<P, T> websocketClient;
-
-    /**
-     * 收到消息处理
-     *
-     * @param text 消息字符串
-     */
-    protected abstract void whenReceiveMessage(String text);
-
-
-    public void init(WebSocketClientHandshaker handshaker) {
-        this.handshaker = handshaker;
-    }
-
-    @Override
-    public void handlerAdded(ChannelHandlerContext ctx) {
-        handshakeFuture = ctx.newPromise();
-    }
-
-    @Override
-    public void channelActive(ChannelHandlerContext ctx) {
-        Channel channel = ctx.channel();
-        log.info("WebSocket Client [{}] connected!", websocketClient.getName());
-        channel.attr(NettyConstants.CLIENT_NAME).set(websocketClient.getName());
-        handshaker.handshake(channel);
-    }
-
-    @Override
-    public void channelInactive(ChannelHandlerContext ctx) {
-        log.warn("WebSocket Client [{}] disconnected!, start reconnect", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
-        websocketClient.reconnect();
-//        websocketClient.close();
-    }
-
-    @Override
-    public void channelUnregistered(ChannelHandlerContext ctx) throws Exception {
-        log.warn("WebSocket Client [{}] unregistered!", ctx.channel().attr(NettyConstants.CLIENT_NAME).get());
-    }
-
-    @Override
-    public void channelRead0(ChannelHandlerContext ctx, Object msg) throws Exception {
-        Channel ch = ctx.channel();
-        // 如果握手未完成，处理 FullHttpResponse
-        if (!handshaker.isHandshakeComplete()) {
-            if (msg instanceof FullHttpResponse response) {
-                try {
-                    handshaker.finishHandshake(ch, response);
-                    log.info("WebSocket client [{}] Handshake complete!", ch.attr(NettyConstants.CLIENT_NAME).get());
-                    handshakeFuture.setSuccess();
-
-                    connectCompleteHandler(ch);
-                } catch (WebSocketHandshakeException e) {
-                    log.info("WebSocket client [{}] Handshake failed!", ch.attr(NettyConstants.CLIENT_NAME).get());
-                    handshakeFuture.setFailure(e);
-                }
-                return;
-            }
-        }
-
-        if (msg instanceof FullHttpResponse response) {
-            if (response.status().code() / 100 > 3) {
-                throw new IllegalStateException(
-                        "Unexpected FullHttpResponse (getStatus=" + response.status() +
-                                ", content=" + response.content().toString(CharsetUtil.UTF_8) + ')');
-            }
-        } else if (msg instanceof WebSocketFrame frame) {
-            switch (frame) {
-                case TextWebSocketFrame textFrame -> {
-                    log.debug("websocket client [{}] 接收到的消息：{}", ch.attr(NettyConstants.CLIENT_NAME).get(), textFrame.text());
-                    whenReceiveMessage(textFrame.text());
-                }
-                case PongWebSocketFrame pongWebSocketFrame -> handlerPong(ch, pongWebSocketFrame);
-                case PingWebSocketFrame pingWebSocketFrame -> handlerPing(ch, pingWebSocketFrame);
-                case CloseWebSocketFrame closeWebSocketFrame -> handlerClose(ch, closeWebSocketFrame);
-                default -> {
-                    log.warn("channel[{}]收到位置类型的消息[{}]", ch.attr(NettyConstants.CLIENT_NAME).get(), frame.getClass().getName());
-                }
-            }
-        }
-    }
-
-
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        if (!handshakeFuture.isDone()) {
-            handshakeFuture.setFailure(cause);
-        }
-        ctx.close();
-        log.error("业务处理错误，websocket client关闭", cause);
-    }
-
-    @Override
-    public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
-        // IdleStateHandler 所产生的 IdleStateEvent 的处理逻辑.
-        if (evt instanceof IdleStateEvent e) {
-            switch (e.state()) {
-                case READER_IDLE:
-                    handleReaderIdle(ctx);
-                    break;
-                case WRITER_IDLE:
-                    handleWriterIdle(ctx);
-                    break;
-                case ALL_IDLE:
-                    handleAllIdle(ctx);
-                    break;
-                default:
-                    break;
-            }
-        }
-    }
-
-    /**
-     * 连接完成
-     *
-     * @param ch ch
-     */
-    protected void connectCompleteHandler(Channel ch) {
-        log.debug("websocket active");
-    }
-
-    /**
-     * 处理close消息
-     *
-     * @param ch                  Channel ch
-     * @param closeWebSocketFrame closeWebSocketFrame
-     */
-    protected void handlerClose(Channel ch, CloseWebSocketFrame closeWebSocketFrame) {
-        log.warn("websocket client关闭");
-        ch.close();
-    }
-
-
-    /**
-     * 处理pong消息
-     *
-     * @param ch                 Channel ch
-     * @param pongWebSocketFrame pongWebSocketFrame
-     */
-    protected void handlerPong(Channel ch, PongWebSocketFrame pongWebSocketFrame) {
-        log.debug("WebSocket Client [{}] received pong", ch.attr(NettyConstants.CLIENT_NAME).get());
-
-    }
-
-
-    /**
-     * 处理ping消息
-     *
-     * @param ch                 ch
-     * @param pingWebSocketFrame pingWebSocketFrame
-     */
-    protected void handlerPing(Channel ch, PingWebSocketFrame pingWebSocketFrame) {
-        log.debug("WebSocket Client [{}] received ping", ch.attr(NettyConstants.CLIENT_NAME).get());
-        websocketClient.sendPong();
-    }
-
-    /**
-     * 超过限定时间channel没有读时触发
-     *
-     * @param ctx ctx
-     */
-    protected void handleReaderIdle(ChannelHandlerContext ctx) {
-    }
-
-    /**
-     * 超过限定时间channel没有写时触发
-     *
-     * @param ctx ctx
-     */
-    protected void handleWriterIdle(ChannelHandlerContext ctx) {
-    }
-
-    /**
-     * 超过限定时间channel没有读写时触发
-     *
-     * @param ctx ctx
-     */
-    protected void handleAllIdle(ChannelHandlerContext ctx) {
-        websocketClient.sendPing();
-    }
-
-    public ChannelFuture handshakeFuture() {
-        return handshakeFuture;
-    }
-}
-package cn.com.helei.DepinBot.core.util;
-
-import cn.com.helei.DepinBot.core.dto.system.CpuInfo;
-import cn.com.helei.DepinBot.core.dto.system.GpuInfo;
-import cn.com.helei.DepinBot.core.dto.system.MemoryInfo;
-import cn.com.helei.DepinBot.core.network.NetworkProxyPool;
-import com.alibaba.fastjson.JSONObject;
-import lombok.Data;
-import org.yaml.snakeyaml.Yaml;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.security.SecureRandom;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-
-
-@Data
-public class SystemInfo {
-
-    public final static SystemInfo INSTANCE;
-
-    private static final String RANDOM_ID_TYPE1 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-
-    private static final List<String> features = List.of("mmx", "sse", "sse2", "sse3", "ssse3", "sse4_1", "sse4_2", "avx");
-
-    private static final List<Integer> processorCount = List.of(4, 8, 16, 32);
-
-    private static final SecureRandom random = new SecureRandom();
-
-    private List<String> cpuModelNames;
-
-    private List<String> renderers;
-
-    private List<String> vendors;
-
-    private List<String> osList;
-
-    static {
-        INSTANCE = loadFromYaml("system-info.yaml");
-    }
-
-    /**
-     * 获取随机id
-     *
-     * @param length length
-     * @return String
-     */
-    public String getRandomId(int length) {
-        StringBuilder result = new StringBuilder();
-
-        for (int i = 0; i < length; i++) {
-            result.append(RANDOM_ID_TYPE1.charAt(random.nextInt(RANDOM_ID_TYPE1.length())));
-        }
-
-        return result.toString();
-    }
-
-
-    /**
-     * 随机cpu信息
-     *
-     * @return CpuInfo
-     */
-    public CpuInfo generateRandomCpuInfo() {
-        Integer processor = processorCount.get(random.nextInt(processorCount.size()));
-
-        List<CpuInfo.CpuProcessor> cpuProcessors = new ArrayList<>();
-        for (int i = 0; i < processor; i++) {
-            CpuInfo.CpuProcessor e = new CpuInfo.CpuProcessor();
-            e.setUsage(
-                    Math.floor(Math.random() * 2000000000000L),
-                    Math.floor(Math.random() * 10000000000L),
-                    Math.floor(Math.random() * 2000000000000L),
-                    Math.floor(Math.random() * 50000000000L)
-            );
-            cpuProcessors.add(e);
-        }
-
-        return CpuInfo.builder()
-                .archName("x86_64")
-                .features(features)
-                .modelName(cpuModelNames.get(random.nextInt(cpuModelNames.size())))
-                .numOfProcessors(processor)
-                .cpuProcessors(cpuProcessors)
-                .temperatures(List.of())
-                .build();
-    }
-
-
-    /**
-     * 随机GPU信息
-     *
-     * @return GpuInfo
-     */
-    public GpuInfo generateRandomGpuInfo() {
-        return GpuInfo
-                .builder()
-                .renderer(renderers.get(random.nextInt(renderers.size())))
-                .vendor(vendors.get(random.nextInt(vendors.size())))
-                .build();
-    }
-
-    /**
-     * 随机操作系统信息
-     *
-     * @return os
-     */
-    public String generateRandomOperatingSystem() {
-        return osList.get(random.nextInt(osList.size()));
-    }
-
-    /**
-     * 随机内存信息
-     *
-     * @return JSONObject
-     */
-    public MemoryInfo generateRandomMemoryInfo() {
-        return MemoryInfo
-                .builder()
-                .availableCapacity((long) (Math.floor(Math.random() * 1000000000) + 1000000000))
-                .capacity((long) (Math.floor(Math.random() * 1000000000) + 2000000000))
-                .build();
-    }
-
-    public static SystemInfo loadFromYaml(String classpath) {
-        Yaml yaml = new Yaml();
-        try (InputStream inputStream = NetworkProxyPool.class.getClassLoader().getResourceAsStream(classpath)) {
-            Map<String, Object> yamlData = yaml.load(inputStream);
-            Map<String, Object> bot = (Map<String, Object>) yamlData.get("bot");
-            Map<String, Object> system = (Map<String, Object>) bot.get("system");
-
-            return yaml.loadAs(yaml.dump(system), SystemInfo.class);
-        } catch (IOException e) {
-            throw new RuntimeException(String.format("价值配置网络代理池文件[%s]发生错误", classpath));
-        }
-    }
-
-
-    public static void main(String[] args) {
-        CpuInfo x = INSTANCE.generateRandomCpuInfo();
-        System.out.println(x);
-        System.out.println(INSTANCE.generateRandomGpuInfo());
-    }
-}
-
-package cn.com.helei.DepinBot.core;
-
-import cn.com.helei.DepinBot.core.dto.AccountContext;
-import cn.com.helei.DepinBot.core.constants.ConnectStatus;
-import cn.com.helei.DepinBot.core.netty.base.AbstractWebsocketClient;
-import cn.com.helei.DepinBot.core.netty.constants.WebsocketClientStatus;
-import com.alibaba.fastjson.JSONObject;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-
-import java.time.LocalDateTime;
-
-
-@Slf4j
-@Getter
-public abstract class BaseDepinWSClient<Req, Resp> extends AbstractWebsocketClient<Req, Resp> {
-
-
-    /**
-     * client对应的账号
-     */
-    private final AccountContext accountContext;
-
-    public BaseDepinWSClient(
-            AccountContext accountContext,
-            BaseDepinWSClientHandler<Req, Resp> handler
-    ) {
-        super(accountContext.getClientAccount().getConnectUrl(), handler);
-
-        super.setName(accountContext.getClientAccount().getName());
-        super.setHeaders(accountContext.getWSHeaders());
-        super.setProxy(accountContext.getProxy());
-        super.setClientStatusChangeHandler(this::whenClientStatusChange);
-
-        this.accountContext = accountContext;
-
-        updateClientStatus(WebsocketClientStatus.NEW);
-    }
-
-
-    public abstract Req getHeartbeatMessage(BaseDepinWSClient<Req, Resp> wsClient);
-
-    public abstract void whenAccountReceiveResponse(BaseDepinWSClient<Req, Resp> wsClient, String id, Resp response) ;
-
-    public abstract void whenAccountReceiveMessage(BaseDepinWSClient<Req, Resp> wsClient, Resp message);
-    /**
-     * ws客户端状态改变，同步更新账户状态
-     *
-     * @param newClientStatus 最新的客户端状态
-     */
-    public void whenClientStatusChange(WebsocketClientStatus newClientStatus) {
-        accountContext.getConnectStatusInfo().setConnectStatus(
-                switch (newClientStatus) {
-                    case NEW -> {
-                        accountContext.getConnectStatusInfo().setStartDateTime(LocalDateTime.now());
-                        accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
-                        yield ConnectStatus.NEW;
-                    }
-                    case STARTING -> {
-                        accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
-                        yield ConnectStatus.STARTING;
-                    }
-                    case RUNNING -> {
-                        accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
-                        yield ConnectStatus.RUNNING;
-                    }
-                    case STOP, SHUTDOWN -> {
-                        accountContext.getConnectStatusInfo().setUpdateDateTime(LocalDateTime.now());
-                        accountContext.setUsable(false);
-                        yield ConnectStatus.STOP;
-                    }
-                }
-        );
-    }
-}
-package cn.com.helei.DepinBot.core;
-
-import cn.com.helei.DepinBot.core.dto.ConnectStatusInfo;
-import cn.com.helei.DepinBot.core.netty.base.AbstractWebSocketClientHandler;
-import io.netty.channel.ChannelHandlerContext;
-import lombok.extern.slf4j.Slf4j;
-
-@Slf4j
-public abstract class BaseDepinWSClientHandler<Req, Resp> extends AbstractWebSocketClientHandler<Req, Resp> {
-
-    /**
-     * channel 空闲，向其发送心跳
-     * @param ctx ctx
-     */
-    @Override
-    protected void handleAllIdle(ChannelHandlerContext ctx) {
-        BaseDepinWSClient<Req, Resp> depinWSClient = getDepinWSClient();
-
-        depinWSClient
-                .sendMessage(depinWSClient.getHeartbeatMessage(depinWSClient))
-                .whenCompleteAsync((unused, throwable) -> {
-                    ConnectStatusInfo connectStatusInfo = depinWSClient
-                            .getAccountContext()
-                            .getConnectStatusInfo();
-
-                    if (throwable != null) {
-                        log.error("client[{}] 发送心跳异常", websocketClient.getName(), throwable);
-                        // 发送心跳失败，记录次数
-                        connectStatusInfo.getErrorHeartBeatCount().getAndIncrement();
-                    }
-
-                    // 心跳计数
-                    connectStatusInfo
-                            .getHeartBeatCount()
-                            .getAndIncrement();
-                }, depinWSClient.getCallbackInvoker());
-    }
-
-
-    @Override
-    public String getRequestId(Req request) {
-        return "";
-    }
-
-    @Override
-    public String getResponseId(Resp response) {
-        return "";
-    }
-
-
-    @Override
-    protected void handleResponseMessage(String id, Resp response) {
-        BaseDepinWSClient<Req, Resp> depinWSClient = getDepinWSClient();
-
-        depinWSClient.whenAccountReceiveResponse(depinWSClient, id, response);
-    }
-
-    @Override
-    protected void handleOtherMessage(Resp message) {
-        BaseDepinWSClient<Req, Resp> depinWSClient = getDepinWSClient();
-
-        depinWSClient.whenAccountReceiveMessage(depinWSClient, message);
-    }
-
-    private BaseDepinWSClient<Req, Resp> getDepinWSClient() {
-        return (BaseDepinWSClient<Req, Resp>) websocketClient;
-    }
-}
-package cn.com.helei.DepinBot.core;
-
-import cn.com.helei.DepinBot.core.bot.CommandLineDepinBot;
-import cn.com.helei.DepinBot.core.dto.AccountContext;
-import com.alibaba.fastjson.JSONObject;
-import lombok.Getter;
-import lombok.Setter;
-
-
-public class SimpleDepinWSClient extends BaseDepinWSClient<JSONObject, JSONObject> {
-
-    private final CommandLineDepinBot<JSONObject, JSONObject> bot;
-
-    public SimpleDepinWSClient(
-            CommandLineDepinBot<JSONObject, JSONObject> bot,
-            AccountContext accountContext
-    ) {
-        super(accountContext, new SimpleDepinWSClientHandler());
-        this.bot = bot;
-        ((SimpleDepinWSClient.SimpleDepinWSClientHandler) handler).setWsClient(this);
-    }
-
-    @Override
-    public JSONObject getHeartbeatMessage(BaseDepinWSClient<JSONObject, JSONObject> wsClient) {
-        return bot.getHeartbeatMessage(wsClient);
-    }
-
-    @Override
-    public void whenAccountReceiveResponse(BaseDepinWSClient<JSONObject, JSONObject> wsClient, String id, JSONObject response) {
-        bot.whenAccountReceiveResponse(wsClient, id, response);
-    }
-
-    @Override
-    public void whenAccountReceiveMessage(BaseDepinWSClient<JSONObject, JSONObject> wsClient, JSONObject message) {
-        bot.whenAccountReceiveMessage(wsClient, message);
-    }
-
-
-    @Setter
-    @Getter
-    private static class SimpleDepinWSClientHandler extends BaseDepinWSClientHandler<JSONObject, JSONObject> {
-
-        private SimpleDepinWSClient wsClient;
-
-        @Override
-        public JSONObject convertMessageToRespType(String message) {
-            return JSONObject.parseObject(message);
-        }
-    }
-}
-package cn.com.helei.DepinBot.oasis;
-
-import cn.com.helei.DepinBot.core.BaseDepinWSClient;
-import cn.com.helei.DepinBot.core.bot.CommandLineDepinBot;
-import cn.com.helei.DepinBot.core.SimpleDepinWSClient;
-import cn.com.helei.DepinBot.core.commandMenu.CommandMenuNode;
-import cn.com.helei.DepinBot.core.dto.AccountContext;
-import cn.com.helei.DepinBot.core.network.NetworkProxy;
-import cn.com.helei.DepinBot.core.util.SystemInfo;
-import cn.hutool.core.util.StrUtil;
-import com.alibaba.fastjson.JSONObject;
-import lombok.extern.slf4j.Slf4j;
-import org.jetbrains.annotations.NotNull;
-
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Semaphore;
-import java.util.concurrent.atomic.AtomicInteger;
-
-@Slf4j
-public class OasisDepinBot extends CommandLineDepinBot<JSONObject, JSONObject> {
-
-    private final OasisApi oasisApi;
-
-    private final Semaphore concurrentSemaphore;
-
-    public OasisDepinBot(String oasisBotConfigPath) {
-        super(OasisBotConfig.loadYamlConfig(oasisBotConfigPath));
-        this.oasisApi = new OasisApi(getExecutorService());
-        this.concurrentSemaphore = new Semaphore(getBaseDepinBotConfig().getConcurrentCount());
-    }
-
-    @Override
-    protected CommandMenuNode buildMenuNode() {
-        CommandMenuNode main = new CommandMenuNode("主菜单", "欢迎使用机器人", null);
-
-        CommandMenuNode register = new CommandMenuNode(true, "账户注册",
-                "开始批量注册账号", this::registerAccount);
-
-        CommandMenuNode takeToken = new CommandMenuNode(true, "获取token",
-                "开始获取token", this::loginAndTakeToken);
-
-        CommandMenuNode resendCode = new CommandMenuNode(true, "重发验证邮件",
-                "开始重发验证邮件", this::resendCode);
-
-
-        return main.addSubMenu(register).addSubMenu(takeToken).addSubMenu(resendCode);
-    }
-
-
-    @Override
-    public BaseDepinWSClient<JSONObject, JSONObject> buildAccountWSClient(AccountContext accountContext) {
-        return new SimpleDepinWSClient(this, accountContext);
-    }
-
-
-    @Override
-    public void whenAccountConnected(BaseDepinWSClient<JSONObject, JSONObject> depinWSClient, Boolean success) {
-        //Step 1 发送机器信息
-        depinWSClient.sendMessage(generateRandomSystemData());
-
-        //Step 2 主动发一次心跳
-        depinWSClient.sendMessage(getHeartbeatMessage(depinWSClient));
-    }
-
-    @Override
-    public void whenAccountReceiveResponse(BaseDepinWSClient<JSONObject, JSONObject> depinWSClient, String id, JSONObject response) {
-
-    }
-
-    @Override
-    public void whenAccountReceiveMessage(BaseDepinWSClient<JSONObject, JSONObject> depinWSClient, JSONObject message) {
-        String accountName = depinWSClient.getAccountContext().getClientAccount().getName();
-        log.debug("账户[{}]收到消息[{}]", accountName, message);
-
-        switch (message.getString("type")) {
-            case "serverMetrics" -> {
-                log.info("账户[{}]心跳已发送, token[{}]-总运行时间[{}]秒-总积分[{}]",
-                        accountName,
-                        message.getString("token"),
-                        message.getString("totalUptime"),
-                        message.getString("creditsEarned")
-                );
-            }
-            case "acknowledged" -> {
-                log.warn("系统更新:[{}]", message);
-            }
-            case "error" -> {
-                if (message.getJSONObject("data").getString("code").equals("invalid_token")) {
-                    log.warn("账户[{}]需要发送机器信息", accountName);
-                    depinWSClient.sendMessage(generateRandomSystemData());
-                }
-            }
-            default -> {
-                log.warn("账户[{}]收到位置消息[{}]", accountName, message);
-            }
-        }
-    }
-
-    @Override
-    public JSONObject getHeartbeatMessage(BaseDepinWSClient<JSONObject, JSONObject> depinWSClient) {
-        log.info("账户[{}]发送心跳", depinWSClient.getAccountContext().getClientAccount().getName());
-
-        // 定时发送心跳
-        JSONObject pingFrame = new JSONObject();
-        pingFrame.put("id", SystemInfo.INSTANCE.getRandomId(26));
-        pingFrame.put("type","heartbeat");
-
-        JSONObject data = new JSONObject();
-        data.put("version", "0.1.7");
-        data.put("mostRecentModel", "unknown");
-        data.put("status", "active");
-
-        pingFrame.put("data", data);
-
-        return pingFrame;
-    }
-
-
-    /**
-     * 注册
-     *
-     * @return 注册
-     */
-    private String registerAccount() {
-        OasisBotConfig oasisBotConfig = (OasisBotConfig) getBaseDepinBotConfig();
-        String inviteCode = oasisBotConfig.getInviteCode();
-
-        log.info("开始注册账户");
-        AtomicInteger successCount = new AtomicInteger(0);
-        List<CompletableFuture<Void>> futureList = getAccounts().stream().map(accountContext -> {
-            try {
-                concurrentSemaphore.acquire();
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
-
-            String email = accountContext.getClientAccount().getEmail();
-
-            NetworkProxy proxy = accountContext.getProxy();
-
-            log.info("注册[{}]..使用邀请码[{}]..代理[{}-{}]", email, inviteCode, proxy.getId(), proxy.getAddress());
-            return oasisApi.registerUser(proxy, email, accountContext.getClientAccount().getPassword(), inviteCode)
-                    .exceptionally(throwable -> {
-                        log.error("注册[{}]时发生异常", email, throwable);
-                        return false;
-                    })
-                    .thenAcceptAsync(success -> {
-                        if (success) {
-                            accountContext.setUsable(true);
-                            successCount.getAndIncrement();
-                        } else {
-                            accountContext.setUsable(false);
-                        }
-                    }).whenCompleteAsync((Void, throwable) -> {
-                        concurrentSemaphore.release();
-                    });
-        }).toList();
-
-
-        try {
-            CompletableFuture.allOf(futureList.toArray(new CompletableFuture[0])).get();
-        } catch (InterruptedException | ExecutionException e) {
-            return "等待账户注册完成时发生错误" + e.getMessage();
-        }
-
-        return "注册完成,成功注册" + successCount.get() + "个账户" + "共:" + getAccounts().size() + "个账户";
-    }
-
-
-    /**
-     * 登录获取token
-     *
-     * @return token
-     */
-    private String loginAndTakeToken() {
-
-        List<CompletableFuture<Void>> futures = getAccounts().stream().map(accountContext -> {
-            try {
-                concurrentSemaphore.acquire();
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
-
-            String email = accountContext.getClientAccount().getEmail();
-            NetworkProxy proxy = accountContext.getProxy();
-
-            return oasisApi
-                    .loginUser(proxy, email, accountContext.getClientAccount().getPassword())
-                    .thenAccept(token -> {
-                        if (StrUtil.isNotBlank(token)) {
-                            log.info("邮箱[{}]登录成功，token[{}]", email, token);
-
-                            accountContext.setParam("token", token);
-                        }
-                    }).exceptionally(throwable -> {
-                        log.error("邮箱[{}]登录失败, {}", email, throwable.getMessage());
-                        return null;
-                    });
-        }).toList();
-
-        try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
-        } catch (InterruptedException | ExecutionException e) {
-            return "等待token获取完成发生错误，" + e.getMessage();
-        }
-
-        return "token获取完成，共:" + getAccounts().size() + "个账户";
-    }
-
-    /**
-     * 重发验证邮件
-     *
-     * @return 打印的字符串
-     */
-    private String resendCode() {
-        List<CompletableFuture<Void>> futures = getAccounts().stream().map(accountContext -> {
-            try {
-                concurrentSemaphore.acquire();
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
-
-            String email = accountContext.getClientAccount().getEmail();
-            NetworkProxy proxy = accountContext.getProxy();
-
-            return oasisApi
-                    .resendCode(proxy, email)
-                    .thenAccept(success -> {
-                        if (success) {
-                            log.info("重发邮件[{}]成功", email);
-                        }
-                        concurrentSemaphore.release();
-                    }).exceptionally(throwable -> {
-                        log.error("邮箱[{}]重发验证邮件失败, {}", email, throwable.getMessage());
-                        return null;
-                    });
-        }).toList();
-
-        try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
-        } catch (InterruptedException | ExecutionException e) {
-            return "等待token获取完成发生错误，" + e.getMessage();
-        }
-
-        return "token获取完成，共:" +  getAccounts().size() + "个账户";
-    }
-
-    /**
-     * 创建随机的系统数据
-     *
-     * @return JSONObject
-     */
-    private static @NotNull JSONObject generateRandomSystemData() {
-        JSONObject systemData = new JSONObject();
-
-        systemData.put("id", SystemInfo.INSTANCE.getRandomId(26));
-        systemData.put("type", "system");
-
-        JSONObject data = new JSONObject();
-        data.put("gpuInfo", SystemInfo.INSTANCE.generateRandomGpuInfo());
-        data.put("cpuInfo", SystemInfo.INSTANCE.generateRandomCpuInfo());
-        data.put("memoryInfo", SystemInfo.INSTANCE.generateRandomMemoryInfo());
-        data.put("machineId", SystemInfo.INSTANCE.getRandomId(32).toLowerCase());
-        data.put("operatingSystem", SystemInfo.INSTANCE.generateRandomOperatingSystem());
-
-        systemData.put("data", data);
-        return systemData;
-    }
-}
-package cn.com.helei.DepinBot.openLedger;
-
-import cn.com.helei.DepinBot.core.BaseDepinWSClient;
-import cn.com.helei.DepinBot.core.bot.CommandLineDepinBot;
-import cn.com.helei.DepinBot.core.commandMenu.CommandMenuNode;
-import cn.com.helei.DepinBot.core.dto.AccountContext;
-import cn.com.helei.DepinBot.core.dto.RewordInfo;
-import cn.com.helei.DepinBot.core.util.RestApiClient;
-import cn.com.helei.DepinBot.core.util.RestApiClientFactory;
-import cn.hutool.core.util.BooleanUtil;
-import com.alibaba.fastjson.JSONObject;
-import lombok.extern.slf4j.Slf4j;
-
-import java.time.LocalDateTime;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-
-
-/**
- * OpenLedger depin 项目机器人
- */
-@Slf4j
-public class OpenLedgerDepinBot extends CommandLineDepinBot<String, String> {
-
-    private final OpenLedgerConfig openLedgerConfig;
-
-    public OpenLedgerDepinBot(OpenLedgerConfig openLedgerConfig) {
-        super(openLedgerConfig);
-        this.openLedgerConfig = openLedgerConfig;
-    }
-
-    @Override
-    protected CommandMenuNode buildMenuNode() {
-        CommandMenuNode menuNode = new CommandMenuNode("主菜单", "这是主菜单，请选择", null);
-        CommandMenuNode menuNodeA = new CommandMenuNode("子菜单A", "这是子菜单A，请选择", null);
-        CommandMenuNode menuNodeB = new CommandMenuNode("子菜单B", "这是子菜单B，请选择", null);
-
-        menuNodeA.addSubMenu(new CommandMenuNode("子菜单A-1", "这是子菜单A-1，请选择", () -> "haha进入了A-1"));
-        menuNodeA.addSubMenu(new CommandMenuNode("子菜单A-2", "这是子菜单A-2，请选择", () -> "haha进入了A-2"));
-
-        menuNodeB.addSubMenu(new CommandMenuNode("子菜单B-1", "这是子菜单B-1，请选择", null));
-        menuNodeB.addSubMenu(new CommandMenuNode("子菜单B-2", "这是子菜单B-2，请选择", null));
-
-        menuNode.addSubMenu(menuNodeA);
-        menuNode.addSubMenu(menuNodeB);
-
-        return menuNode;
-    }
-
-    @Override
-    public BaseDepinWSClient<String, String> buildAccountWSClient(AccountContext accountContext) {
-        return new OpenLedgerDepinWSClient(accountContext);
-    }
-
-    @Override
-    public void whenAccountConnected(BaseDepinWSClient<String, String> depinWSClient, Boolean success) {
-        if (BooleanUtil.isTrue(success)) {
-            //Step 1 1 设置定时刷新奖励信息设置
-            addTimer(() -> {
-                updateRewardInfo(depinWSClient.getAccountContext());
-            }, openLedgerConfig.getAccountRewardRefreshIntervalSeconds(), TimeUnit.SECONDS);
-        }
-    }
-
-    @Override
-    public void whenAccountReceiveResponse(BaseDepinWSClient<String, String> depinWSClient, String id, String response) {
-
-    }
-
-    @Override
-    public void whenAccountReceiveMessage(BaseDepinWSClient<String, String> depinWSClient, String message) {
-
-    }
-
-    @Override
-    public String getHeartbeatMessage(BaseDepinWSClient<String, String> depinWSClient) {
-        return "";
-    }
-
-    /**
-     * 更新奖励信息
-     *
-     * @param accountContext accountContext
-     */
-    private void updateRewardInfo(AccountContext accountContext) {
-        log.info("开始账户[{}]更新奖励信息", accountContext.getClientAccount().getName());
-
-        RewordInfo rewordInfo = accountContext.getRewordInfo();
-        if (rewordInfo == null) {
+    public void closeChannel(Channel channel) {
+        if (channel == null) {
             return;
         }
 
-        //计算当前获得的奖励
-        CompletableFuture<JSONObject> rewardFuture = queryReward(accountContext);
-        CompletableFuture<JSONObject> rewardRealtimeFuture = queryRewardRealtime(accountContext);
-        CompletableFuture<JSONObject> claimDetailFuture = queryClaimDetail(accountContext);
+        String key = channel.attr(NettyConstants.CLIENT_NAME).get();
 
-        rewardFuture.thenAcceptBothAsync(rewardRealtimeFuture, (reward, rewardRealtime) -> {
-                    //总分
-                    rewordInfo.addTotalPoints(reward.getDouble("totalPoint"));
-                    rewordInfo.addSessionPoints(reward.getDouble("point"));
-                    rewordInfo.setSessionId(reward.getString("name"));
-
-
-                    //今日链接奖励
-                    if (rewardRealtime != null) {
-                        Double todayHeartBeats = rewardRealtime.getDouble("total_heartbeats");
-
-                        rewordInfo.addTodayPoints(todayHeartBeats);
-                        rewordInfo.addTotalPoints(todayHeartBeats);
-                        rewordInfo.addSessionPoints(todayHeartBeats);
-                    }
-
-                    //今日签到奖励
-                    try {
-                        JSONObject claimDetail = claimDetailFuture.get();
-                        if (claimDetail != null && claimDetail.getBoolean("claimed")) {
-                            Double dailyPoint = claimDetail.getDouble("dailyPoint");
-
-                            rewordInfo.addTodayPoints(dailyPoint);
-                            rewordInfo.addTotalPoints(dailyPoint);
-                            rewordInfo.addSessionPoints(dailyPoint);
-                        }
-                    } catch (Exception e) {
-                        log.error("计算奖励查询每日签到信息发生异常, [{}}", accountContext, e);
-                    }
-
-                    rewordInfo.setUpdateTime(LocalDateTime.now());
-                    log.info("账户[{}]更新奖励信息更新完毕[{}}", accountContext.getClientAccount().getName(), rewordInfo);
-                }, getExecutorService())
-                .exceptionally(throwable -> {
-                    log.error("计算奖励查询每日签到信息发生异常, [{}}", accountContext, throwable);
-                    return null;
-                });
+        if (registryService.existServiceInstance(key)) {
+            connectionService.closeServiceChannel(channel, key);
+        } else if (channel.isActive()) {
+            channel.close();
+        }
     }
 
-
-    /**
-     * 查询每日签到信息
-     *
-     * @param accountContext accountContext
-     * @return {
-     * "status": "SUCCESS",
-     * "message": null,
-     * "data": {
-     * "tier": "Shrimp",
-     * "image": "<a href="https://cdn.openledger.xyz/Tier-2-active.png">...</a>",
-     * "claimed": true,
-     * "dailyPoint": 50,
-     * "nextClaim": "2025-01-19T00:00:00.000Z"
-     * }
-     * }
-     */
-    private CompletableFuture<JSONObject> queryClaimDetail(AccountContext accountContext) {
-        RestApiClient restApiClient = RestApiClientFactory.getClient(accountContext.getProxy());
-        String url = "https://rewardstn.openledger.xyz/api/v1/claim_details";
-
-        return requestAndTakeData(accountContext, restApiClient, url);
+    public String nextTxId() {
+        return DistributeIdMaker.DEFAULT.nextId(controlServerConfig.getServiceInstance().toString());
     }
 
     /**
-     * 查查reword
+     * 更新状态
      *
-     * @param accountContext accountContext
-     * @return {
-     * "status": "SUCCESS",
-     * "message": null,
-     * "data": {
-     * "totalPoint": "2989.00",
-     * "point": "2989.00",
-     * "name": "Epoch 1",
-     * "endDate": "2025-01-31"
-     * }
-     * }
+     * @param newState newState
+     * @throws ControlServerException NameserverException
      */
-    private CompletableFuture<JSONObject> queryReward(AccountContext accountContext) {
-        RestApiClient restApiClient = RestApiClientFactory.getClient(accountContext.getProxy());
-        String url = "https://rewardstn.openledger.xyz/api/v1/reward";
+    private void updateNameServerState(NameserverState newState) throws ControlServerException {
+        synchronized (this) {
+            boolean isUpdate = switch (newState) {
+                case JUST_START: {
+                    yield state == null || state == JUST_START;
+                }
+                case INIT_FINISH:
+                    yield state == JUST_START || state == INIT_FINISH;
+                case RUNNING:
+                    yield state == INIT_FINISH;
+                case SHUT_DOWN:
+                    yield state != SHUT_DOWN;
+            };
 
-        return requestAndTakeData(accountContext, restApiClient, url);
-    }
-
-    /**
-     * 查查reword history
-     *
-     * @param accountContext accountContext
-     * @return {
-     * "status": "SUCCESS",
-     * "message": null,
-     * "data": [
-     * {
-     * "date": "2025-01-18",
-     * "total_points": 50,
-     * "details": [
-     * {
-     * "claim_type": 2,
-     * "points": 50
-     * }
-     * ]
-     * }
-     * ]
-     * }
-     */
-    private CompletableFuture<JSONObject> queryRewordHistory(AccountContext accountContext) {
-        RestApiClient restApiClient = RestApiClientFactory.getClient(accountContext.getProxy());
-        String url = "https://rewardstn.openledger.xyz/api/v1/reward_history";
-
-        return requestAndTakeData(accountContext, restApiClient, url);
-    }
-
-
-    /**
-     * 查查reword realtime
-     *
-     * @param accountContext accountContext
-     * @return {
-     * "status": "SUCCESS",
-     * "message": null,
-     * "data": [
-     * {
-     * "date": "2025-01-18",
-     * "total_heartbeats": "134",
-     * "total_scraps": "0",
-     * "total_prompts": "0"
-     * }
-     * ]
-     * }
-     */
-    private CompletableFuture<JSONObject> queryRewardRealtime(AccountContext accountContext) {
-        RestApiClient restApiClient = RestApiClientFactory.getClient(accountContext.getProxy());
-        String url = "https://rewardstn.openledger.xyz/api/v1/reward_realtime";
-
-        return requestAndTakeData(accountContext, restApiClient, url);
-    }
-
-    private CompletableFuture<JSONObject> requestAndTakeData(AccountContext accountContext, RestApiClient restApiClient, String url) {
-        return restApiClient
-                .request(
-                        url,
-                        "get",
-                        accountContext.getRestHeaders(),
-                        null,
-                        null
-                )
-                .thenApplyAsync(s -> {
-                    JSONObject resp = JSONObject.parseObject(s);
-                    if (resp.getString("status").equalsIgnoreCase("success")) {
-                        //一次heartbeats一分
-                        return resp.getJSONArray("data").getJSONObject(0);
-                    }
-                    return null;
-                }, getExecutorService());
+            if (isUpdate) {
+                log.info("nameserver[{}] status updated [{}]->[{}]", controlServerConfig.getServiceInstance(), state,
+                        newState);
+                state = newState;
+            } else {
+                throw new ControlServerException("state cannot from [%s] to [%s]".formatted(state, newState));
+            }
+        }
     }
 }
-package cn.com.helei.DepinBot.openLedger;
-
-
-import cn.com.helei.DepinBot.core.dto.AccountContext;
-import cn.com.helei.DepinBot.core.dto.ConnectStatusInfo;
-import cn.com.helei.DepinBot.core.BaseDepinWSClient;
-import cn.com.helei.DepinBot.core.BaseDepinWSClientHandler;
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
-import lombok.extern.slf4j.Slf4j;
-import org.jetbrains.annotations.NotNull;
-
-import java.time.LocalDateTime;
-import java.util.Random;
-
-/**
- * OpenLedgerDepinClient
- */
-@Slf4j
-public class OpenLedgerDepinWSClient extends BaseDepinWSClient<String, String> {
-
-    public OpenLedgerDepinWSClient(AccountContext accountContext) {
-        super(accountContext, new OpenLedgerDepinClientHandler(accountContext));
-    }
-
-    @Override
-    public String getHeartbeatMessage(BaseDepinWSClient<String, String> wsClient) {
-        return "";
-    }
-
-    @Override
-    public void whenAccountReceiveResponse(BaseDepinWSClient<String, String> wsClient, String id, String response) {
-
-    }
-
-    @Override
-    public void whenAccountReceiveMessage(BaseDepinWSClient<String, String> wsClient, String message) {
-
-    }
-
-
-    /**
-     * OpenLedgerDepinClient 的 Netty Handler
-     */
-    public static class OpenLedgerDepinClientHandler extends BaseDepinWSClientHandler<String, String> {
-
-        private final Random random = new Random();
-
-        private final AccountContext accountContext;
-
-        public OpenLedgerDepinClientHandler(AccountContext accountContext) {
-            this.accountContext = accountContext;
-        }
-
-        @Override
-        protected void handleOtherMessage(String message) {
-
-        }
-
-        @Override
-        public String convertMessageToRespType(String message) {
-            return message;
-        }
-
-
-        protected String heartBeatMessage() {
-            //发送心跳时更新状态
-            ConnectStatusInfo statusInfo = accountContext.getConnectStatusInfo();
-
-            statusInfo.setUpdateDateTime(LocalDateTime.now());
-            statusInfo.getHeartBeatCount().incrementAndGet();
-
-            JSONObject heartBeatMessage = buildHeartBeatMessageContext();
-
-            return heartBeatMessage.toJSONString();
-        }
-
-
-        /**
-         * 构建心跳消息体
-         *
-         * @return JSONObject
-         */
-        private @NotNull JSONObject buildHeartBeatMessageContext() {
-            OpenLedgerConfig.OpenLedgerAccount openLedgerAccount = (OpenLedgerConfig.OpenLedgerAccount)
-                    accountContext.getClientAccount();
-
-
-            JSONObject heartBeatMessage = new JSONObject();
-            heartBeatMessage.put("msgType", "HEARTBEAT");
-            heartBeatMessage.put("workerType", "LWEXT");
-            heartBeatMessage.put("workerID", openLedgerAccount.getIdentity());
-
-            JSONObject message = new JSONObject();
-            JSONObject worker = new JSONObject();
-            worker.put("Identity", openLedgerAccount.getIdentity());
-            worker.put("ownerAddress", openLedgerAccount.getOwnerAddress());
-            worker.put("type", "LWEXT");
-            worker.put("Host", openLedgerAccount.getOpenLedgerConfig().getOrigin());
-            message.put("Worker", worker);
-
-            JSONObject capacity = new JSONObject();
-            capacity.put("AvailableMemory", randomAM(0.5, 0.99));
-            capacity.put("AvailableStorage", "99.99");
-            capacity.put("AvailableGPU", "");
-            capacity.put("AvailableModels", new JSONArray());
-
-            message.put("Capacity", capacity);
-            heartBeatMessage.put("message", message);
-            return heartBeatMessage;
-        }
-
-
-        /**
-         * 获取随机AvailableMemory
-         */
-        public double randomAM(double min, double max) {
-            // 生成范围内的两位小数
-            double randomValue = min + random.nextDouble((max - min) * 100); // 乘以 100 是为了得到两位小数
-            randomValue = Math.round(randomValue * 100.0) / 100.0; // 四舍五入并保留两位小数
-            return randomValue;
-        }
-    }
-
-}
-bot:
-  system:
-    cpuModelNames:
-      - AMD Ryzen 5 5600G with Radeon Graphics
-      - Intel Core i9-10900K
-      - AMD Ryzen 9 5900X
-      - Intel Core i7-11700K
-      - AMD Ryzen 7 5800X
-      - Intel Core i5-11600K
-      - AMD Ryzen 5 5600X
-      - Intel Core i3-1135G7
-      - AMD Ryzen 3 5400G
-      - Intel Core i3-10100
-      - AMD Ryzen 5 3600
-      - Intel Core i5-10400
-      - AMD Ryzen 7 3800X
-      - Intel Core i7-10700K
-      - AMD Ryzen 9 3900X
-      - Intel Core i9-11900K
-      - AMD Ryzen 5 2400G
-      - Intel Core i3-8100
-      - AMD Ryzen 7 2700X
-      - Intel Core i5-8600K
-      - AMD Ryzen 3 3200G
-      - Intel Core i7-9700K
-      - AMD Ryzen 5 1500X
-      - Intel Core i3-3225
-      - AMD Ryzen 9 5950X
-      - Intel Core i9-11980XE
-      - AMD Ryzen 7 4800H
-      - Intel Core i7-8850H
-      - AMD Ryzen 5 4500U
-      - Intel Core i5-1135G7
-
-    renderers:
-      - "ANGLE (AMD, AMD Radeon(TM) Graphics (0x00001638) Direct3D11 vs_5_0 ps_5_0, D3D11)"
-      - "ANGLE (NVIDIA, GeForce GTX 1080 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)"
-      - "ANGLE (Intel, Iris Xe Graphics (0x00008086) Direct3D11 vs_5_0 ps_5_0, D3D11)"
-
-    vendors:
-      - "Google Inc. (AMD)"
-      - "NVIDIA"
-      - "Intel"
-    osList:
-      - "windows"
-      - "linux"
