@@ -1,235 +1,2228 @@
-package cn.com.vortexa.bot_platform.service.impl;
+package cn.com.vortexa.example.optimai;
 
-import cn.com.vortexa.db_layer.service.IAccountBaseInfoService;
-import cn.com.vortexa.rpc.IAccountBaseInfoRPC;
-import cn.com.vortexa.common.config.SystemConfig;
-import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.bot_father.anno.BotMethod;
+import cn.com.vortexa.bot_father.anno.BotWSMethodConfig;
+import cn.com.vortexa.bot_father.bot.AutoLaunchBot;
+import cn.com.vortexa.bot_father.config.AutoBotConfig;
+import cn.com.vortexa.bot_father.service.BotApi;
+import cn.com.vortexa.common.constants.BotJobType;
 import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.AccountContext;
+
+import java.util.List;
+
+/**
+ * @author h30069248
+ * @since 2025/3/24 17:14
+ */
+public class OptimAIBot extends AutoLaunchBot<OptimAIBot> {
+
+    private static final String WS_CONNECT_URL = "wss://ws.optimai.network";
+
+    private final int WS_RECONNECT_INTERVAL_SECOND = 60 * 60 * 24;
+
+    private OptimAIAPI optimAIAPI;
+
+    @Override
+    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
+        this.optimAIAPI = new OptimAIAPI(this);
+    }
+
+    @Override
+    protected OptimAIBot getInstance() {
+        return this;
+    }
+
+    @BotMethod(
+        jobType = BotJobType.REGISTER
+    )
+    public Result registry(AccountContext uniAC, List<AccountContext> sameIdACList, String inviteCode) {
+        return optimAIAPI.registry(uniAC, inviteCode);
+    }
+
+    @BotMethod(
+        jobType = BotJobType.WEB_SOCKET_CONNECT,
+        intervalInSecond = WS_RECONNECT_INTERVAL_SECOND,
+        bowWsConfig = @BotWSMethodConfig(
+            isRefreshWSConnection = true,
+            reconnectLimit = 4,
+            heartBeatIntervalSecond = 15 * 60,
+            nioEventLoopGroupThreads = 2,
+            wsConnectCount = 20
+        )
+    )
+    public OptimAIWSClient buildKeepAliveWSClient(AccountContext accountContext) {
+        OptimAIWSClient client = new OptimAIWSClient(accountContext, WS_CONNECT_URL);
+        client.set
+        return client;
+    }
+}
+package cn.com.vortexa.example.stork_bot;
+
+import cn.com.vortexa.bot_father.BotLauncher;
+import cn.com.vortexa.bot_father.anno.BotApplication;
+import cn.com.vortexa.bot_father.anno.BotMethod;
+import cn.com.vortexa.bot_father.bot.AutoLaunchBot;
+import cn.com.vortexa.bot_father.config.AutoBotConfig;
+import cn.com.vortexa.bot_father.service.BotApi;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.com.vortexa.common.exception.BotStartException;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import static cn.com.vortexa.example.stork_bot.StorkBotAPI.PASSWORD_KEY;
+
+@BotApplication(name = "stork_bot", accountParams = PASSWORD_KEY)
+public class StorkBot extends AutoLaunchBot<StorkBot> {
+
+
+    private StorkBotAPI storkBotAPI;
+
+    @Override
+    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
+        storkBotAPI = new StorkBotAPI(this);
+    }
+
+    @Override
+    protected StorkBot getInstance() {
+        return this;
+    }
+
+    @BotMethod(jobType = BotJobType.REGISTER)
+    public Result signUp(AccountContext exampleAC, List<AccountContext> sameABIList, String inviteCode) {
+        return storkBotAPI.signup(exampleAC, sameABIList, inviteCode);
+    }
+
+    @BotMethod(jobType = BotJobType.TIMED_TASK, intervalInSecond = 60 * 20)
+    public void tokenRefresh(AccountContext accountContext) {
+        storkBotAPI.refreshToken(accountContext);
+    }
+
+    @BotMethod(jobType = BotJobType.TIMED_TASK, intervalInSecond = 60 * 5)
+    public void keepAlive(AccountContext accountContext) {
+        storkBotAPI.keepAlive(accountContext);
+    }
+
+    public static void main(String[] args) throws BotStartException, BotInitException {
+        List<String> list = new ArrayList<>(List.of(args));
+
+        list.add("--vortexa.botKey=stork_test");
+        list.add("--vortexa.customConfig.invite_code=WSJQRJD5CB");
+        list.add("--vortexa.accountConfig.configFilePath=stork_google.xlsx");
+        list.add("--add-opens java.base/java.lang=ALL-UNNAMED");
+
+        BotLauncher.launch(StorkBot.class, list.toArray(new String[0]));
+    }
+
+}
+spring:
+  datasource:
+    quartz:
+      url: jdbc:mysql://localhost:3306/job_store
+      username: root
+      password: 123456
+      driver-class-name: com.mysql.cj.jdbc.Driver
+      type: com.zaxxer.hikari.HikariDataSource
+
+  quartz:
+    job-store-type: jdbc
+    jdbc:
+      table-prefix: QRTZ_
+      driver-class: com.mysql.cj.jdbc.Driver
+      url: jdbc:mysql://localhost:3306/job_store
+      user: root
+      password: 123456
+      scheduler:
+        instance-name: QuartzScheduler
+
+vortexa:
+  botKey: stork_test
+
+  script-agent:
+    registryCenterUrl: ws://localhost:18848
+    nio-thread-count: 1
+    service-offline-ttl: 60
+    service-instance:
+      host: localhost
+      port: 20001
+package cn.com.vortexa.bot_father.anno;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface BotWSMethodConfig {
+    /**
+     * 是否刷新ws连
+     *
+     * @return boolean
+     */
+    boolean isRefreshWSConnection() default false;
+
+
+    boolean wsUnlimitedRetry() default false;
+
+    /**
+     * 重连次数
+     */
+    int reconnectLimit() default 3;
+
+    /**
+     * 心跳间隔
+     */
+    int heartBeatIntervalSecond() default  30;
+
+    /**
+     * nio 线程数
+     */
+    int nioEventLoopGroupThreads() default 1;
+
+    /**
+     * websocket 并发数量
+     */
+    int wsConnectCount() default 50;
+
+    /**
+     * 重连减少的间隔
+     */
+    int reconnectCountDownSecond() default 180;
+}
+package cn.com.vortexa.bot_father.bot;
+
+import static cn.com.vortexa.bot_father.service.impl.BotAccountContextServiceImpl.BOT_ACCOUNT_CONTEXT_TABLE_PREFIX;
+import static cn.com.vortexa.common.entity.BotInfo.BASIC_JOB_LIST_KEY;
+
+import cn.com.vortexa.bot_father.service.BotApi;
+import cn.com.vortexa.bot_father.constants.BotStatus;
+import cn.com.vortexa.common.config.SystemConfig;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.constants.HttpMethod;
+import cn.com.vortexa.common.dto.job.AutoBotJobParam;
+import cn.com.vortexa.bot_father.util.log.AppendLogger;
+import cn.com.vortexa.common.dto.AutoBotRuntimeInfo;
+import cn.com.vortexa.bot_father.config.AutoBotConfig;
+import cn.com.vortexa.common.entity.BotInfo;
+import cn.com.vortexa.common.entity.BotInstance;
+import cn.com.vortexa.common.entity.ProxyInfo;
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.com.vortexa.common.exception.BotStatusException;
 import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.excel.ExcelReadUtil;
-import cn.com.vortexa.db_layer.mapper.AccountBaseInfoMapper;
-import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.common.entity.AccountBaseInfo;
-import cn.hutool.core.lang.Pair;
+import cn.com.vortexa.common.util.NamedThreadFactory;
+import cn.com.vortexa.common.util.http.RestApiClientFactory;
+import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.StrUtil;
+
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+
+import lombok.Getter;
+import lombok.Setter;
+
+import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.*;
+import java.util.function.Supplier;
+
+public abstract class AbstractAutoBot {
+
+    private static final ProxyInfo DEFAULT_PROXY = new ProxyInfo();
+
+    public final AppendLogger logger = new AppendLogger(getClass());
+
+    /**
+     * 代理并发控制
+     */
+    private final Map<ProxyInfo, Semaphore> networkSyncControllerMap;
+
+    /**
+     * bot api
+     */
+    @Getter
+    private BotApi botApi;
+
+    /**
+     * bot运行时信息
+     */
+    @Getter
+    private final AutoBotRuntimeInfo autoBotRuntimeInfo;
+
+    /**
+     * 请求并发数量
+     */
+    @Getter
+    @Setter
+    private int requestConcurrentCount = 5;
+
+    /**
+     * bot信息
+     */
+    @Getter
+    private BotInfo botInfo;
+
+    @Getter
+    private BotInstance botInstance;
+
+    /**
+     * 配置
+     */
+    @Getter
+    private AutoBotConfig autoBotConfig;
+
+    /**
+     * 执行异步任务的线程池
+     */
+    @Getter
+    private ExecutorService executorService;
+
+    /**
+     * 状态
+     */
+    @Getter
+    private BotStatus status = BotStatus.NEW;
+
+    public AbstractAutoBot() {
+        this.networkSyncControllerMap = new ConcurrentHashMap<>();
+        this.autoBotRuntimeInfo = new AutoBotRuntimeInfo();
+    }
+
+    /**
+     * 初始化方法
+     *
+     * @param autoBotConfig autoBotConfig
+     * @throws BotInitException BotInitException
+     */
+    public final void init(BotApi botApi, AutoBotConfig autoBotConfig) throws BotInitException {
+        this.botApi = botApi;
+
+        // Step 1 参数校验
+        if (StrUtil.isBlank(autoBotConfig.getBotKey())) {
+            throw new IllegalArgumentException("bot key is empty!");
+        }
+
+        // Step 2 进入INIT状态，获取参数
+        updateState(BotStatus.INIT);
+        this.autoBotConfig = autoBotConfig;
+        try {
+            // Step 2.1 获取BotInfo,解析Bot Job
+            botInfo = buildBotInfo();
+            resolveBotJobMethod();
+        } catch (Exception e) {
+            throw new BotInitException("resolve bot job error", e);
+        }
+
+        // Step 2.2 保存bot info
+        try {
+            if (botApi.getBotInfoRPC().insertOrUpdateRPC(botInfo) == 1) {
+                Map<String, Object> query = new HashMap<>();
+                query.put("name", botInfo.getName());
+                // 保存成还需查询botId
+                Integer id = botApi.getBotInfoRPC().conditionQueryRPC(query).getFirst().getId();
+                botInfo.setId(id);
+                AutoBotConfig.BOT_ID = id;
+                logger.info("save bot info success, id:" + botInfo.getId());
+            }
+        } catch (SQLException e) {
+            throw new BotInitException("save bot info error", e);
+        }
+
+        this.botInstance = BotInstance.builder()
+            .botId(botInfo.getId())
+            .botName(botInfo.getName())
+            .botKey(autoBotConfig.getBotKey())
+            .build();
+
+        // Step 2.3 设置logger前缀与线程池
+        String botName = runtimeBotName();
+        logger.append(botName);
+        this.executorService = Executors.newThreadPerTaskExecutor(
+            new NamedThreadFactory(botInfo.getName() + "-executor"));
+
+        try {
+            // Step 2.4 初始化存储的Table
+            logger.info("start init database table");
+            // 检查对应分表是否存在
+            if (!botApi.getBotAccountService()
+                .checkAndCreateShardedTable(botInfo.getId(), getAutoBotConfig().getBotKey(), true)) {
+                throw new RuntimeException("bot account table create error");
+            }
+            logger.info("database table init finish");
+
+            // Step 2.5 初始化BotInstance实例
+            logger.info("start init bot instance");
+
+            BotInstance dbInstance = getBotApi().getBotInstanceRPC().selectOneRPC(botInstance);
+
+            // 数据库存在bot instance实例信息，用数据库的。 否则用BotInfo信息生成BotInstance信息写入库
+            if (dbInstance != null) {
+                this.botInstance = dbInstance;
+                logger.info("exist botInstance, use exist instance config");
+            } else {
+                logger.info("no instance, create it...");
+
+                String tableName = getBotApi().getTableShardStrategy().generateTableName(
+                    BOT_ACCOUNT_CONTEXT_TABLE_PREFIX,
+                    new Object[] {botInstance.getBotId(), botInstance.getBotKey()}
+                );
+                botInstance.setBotName(botInfo.getName());
+                botInstance.setAccountTableName(tableName);
+                botInstance.setJobParams(botInfo.getJobParams());
+                botInstance.setParams(botInfo.getParams());
+
+                if (botApi.getBotInstanceRPC().insertOrUpdateRPC(botInstance) > 0) {
+                    logger.info("new bot instance create success");
+                } else {
+                    throw new BotInitException("new bot instance create error");
+                }
+            }
+
+            // Step 2.5 子类初始化
+            doInit();
+
+            // Step 2。6 更新状态
+            updateState(BotStatus.INIT_FINISH);
+        } catch (Exception e) {
+            logger.error("init error", e);
+            updateState(BotStatus.INIT_ERROR);
+        }
+    }
+
+    /**
+     * 初始化方法
+     */
+    protected abstract void doInit() throws BotInitException;
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy proxy
+     * @param url url
+     * @param method method
+     * @param headers headers
+     * @param params params
+     * @param body body
+     * @return CompletableFuture<String> response str
+     */
+    public CompletableFuture<String> syncRequest(
+        ProxyInfo proxy,
+        String url,
+        HttpMethod method,
+        Map<String, String> headers,
+        JSONObject params,
+        JSONObject body
+    ) {
+        return syncRequest(proxy, url, method, headers, params, body, 1);
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy proxy
+     * @param url url
+     * @param method method
+     * @param headers headers
+     * @param params params
+     * @param body body
+     * @return CompletableFuture<String> response str
+     */
+    public CompletableFuture<String> syncRequest(
+        ProxyInfo proxy,
+        String url,
+        HttpMethod method,
+        Map<String, String> headers,
+        JSONObject params,
+        JSONObject body,
+        int retryTimes
+    ) {
+        return syncRequest(proxy, url, method, headers, params, body, null, retryTimes);
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy proxy
+     * @param url url
+     * @param method method
+     * @param headers headers
+     * @param params params
+     * @param body body
+     * @return CompletableFuture<Response> String
+     */
+    public CompletableFuture<String> syncRequest(
+        ProxyInfo proxy,
+        String url,
+        HttpMethod method,
+        Map<String, String> headers,
+        JSONObject params,
+        JSONObject body,
+        Supplier<String> requestStart
+    ) {
+        return syncRequest(
+            proxy,
+            url,
+            method,
+            headers,
+            params,
+            body,
+            requestStart,
+            1
+        );
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy proxy
+     * @param url url
+     * @param method method
+     * @param headers headers
+     * @param params params
+     * @param body body
+     * @return CompletableFuture<Response> String
+     */
+    public CompletableFuture<String> syncRequest(
+        ProxyInfo proxy,
+        String url,
+        HttpMethod method,
+        Map<String, String> headers,
+        JSONObject params,
+        JSONObject body,
+        Supplier<String> requestStart,
+        int retryTimes
+    ) {
+        return syncCCHandler(proxy, requestStart, () -> {
+            try {
+                return RestApiClientFactory.getClient(proxy).request(
+                    url,
+                    method,
+                    headers,
+                    params,
+                    body,
+                    retryTimes
+                ).get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy proxy
+     * @param url url
+     * @param method method
+     * @param headers headers
+     * @param params params
+     * @param body body
+     * @return CompletableFuture<Response> String
+     */
+    public CompletableFuture<List<String>> syncStreamRequest(
+        ProxyInfo proxy,
+        String url,
+        HttpMethod method,
+        Map<String, String> headers,
+        JSONObject params,
+        JSONObject body,
+        Supplier<String> requestStart
+    ) {
+        return syncCCHandler(proxy, requestStart, () -> {
+            try {
+                return RestApiClientFactory.getClient(proxy).streamRequest(
+                    url,
+                    method,
+                    headers,
+                    params,
+                    body
+                ).get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    public <R> CompletableFuture<R> syncCCHandler(
+        ProxyInfo proxy,
+        Supplier<String> requestStart,
+        Supplier<R> request
+    ) {
+
+        Semaphore networkController = networkSyncControllerMap
+            .compute(proxy == null ? DEFAULT_PROXY : proxy, (k, v) -> {
+                if (v == null) {
+                    v = new Semaphore(requestConcurrentCount);
+                }
+                return v;
+            });
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                networkController.acquire();
+                // 随机延迟
+                TimeUnit.MILLISECONDS.sleep(RandomUtil.randomLong(1000, 3000));
+
+                String str = "start network request";
+                if (requestStart != null) {
+                    str = requestStart.get();
+                }
+                logger.info("同步器允许发送请求 - " + str);
+
+                return request.get();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            } finally {
+                networkController.release();
+            }
+        }, executorService);
+    }
+
+    /**
+     * 打印BotRuntimeInfo
+     *
+     * @return string
+     */
+    public String printBotRuntimeInfo() {
+        StringBuilder sb = new StringBuilder();
+        getAutoBotRuntimeInfo().getKeyValueInfoMap().forEach((k, v) -> {
+            sb.append(k).append(": ").append(v).append("\n");
+        });
+        return sb.toString();
+    }
+
+    /**
+     * 获取app的配置目录
+     *
+     * @return String
+     */
+    public String getAppConfigDir() {
+        return FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_APP_PATH, getBotInstance().getBotKey());
+    }
+
+    /**
+     * 更新BotStatus
+     *
+     * @param newStatus 新状态
+     */
+    public synchronized void updateState(BotStatus newStatus) throws BotStatusException {
+        boolean b = true;
+        if (newStatus.equals(BotStatus.SHUTDOWN)) {
+            status = BotStatus.SHUTDOWN;
+            b = false;
+        } else {
+            b = switch (status) {
+                //当前为NEW，新状态才能为NEW,SHUTDOWN
+                case NEW -> BotStatus.INIT.equals(newStatus);
+                //当前为INIT，新状态只能为INIT_FINISH、INIT_ERROR,SHUTDOWN
+                case INIT -> newStatus.equals(BotStatus.INIT_FINISH)
+                    || newStatus.equals(BotStatus.INIT_ERROR);
+                //当前为INIT_ERROR,新状态只能为ACCOUNT_LOADING, SHUTDOWN
+                case INIT_ERROR -> newStatus.equals(BotStatus.INIT);
+                //当前状态为INIT_FINISH，新状态只能为ACCOUNT_LIST_CONNECT, SHUTDOWN
+                case INIT_FINISH -> newStatus.equals(BotStatus.STARTING);
+                //当前状态为STARING，新状态只能为RUNNING,SHUTDOWN
+                case STARTING -> newStatus.equals(BotStatus.RUNNING);
+                //RUNNING，新状态只能为 SHUTDOWN
+                case RUNNING -> false;
+                case SHUTDOWN -> false;
+            };
+        }
+
+        if (b) {
+            logger.info("Status change [%s] => [%s]".formatted(status, newStatus));
+            this.status = newStatus;
+        } else {
+            throw new BotStatusException(
+                String.format("%s status can't from[%s] -> to[%s]", runtimeBotName(), status, newStatus));
+        }
+    }
+
+    public String runtimeBotName() {
+        return "Bot[%s]-[%s]".formatted(botInstance.getBotName(), autoBotConfig.getBotKey());
+    }
+
+    protected synchronized Map<String, AutoBotJobParam> getJobParams() {
+        return this.botInstance.getJobParams();
+    }
+
+    protected synchronized AutoBotJobParam getJobParam(String jobName) {
+        return this.botInstance.getJobParams() == null ? null : this.botInstance.getJobParams().get(jobName);
+    }
+
+    protected synchronized void setJobParam(String jobKey, AutoBotJobParam jobParam) {
+        //        if (!this.botInfo.getJobParams().containsKey(jobKey)) {
+        this.botInfo.getJobParams().put(jobKey, jobParam);
+        //        }
+    }
+
+    protected synchronized void addBasicJob(BotJobType jobType) {
+        if (this.botInfo.getJobParams() == null) {
+            this.botInfo.setParams(new HashMap<>());
+        }
+
+        this.botInfo.getParams().compute(BASIC_JOB_LIST_KEY, (k, v) -> {
+            if (v == null) {
+                v = new HashSet<String>();
+            }
+            if (v instanceof JSONArray t) {
+                v = new HashSet<String>();
+                for (int i = 0; i < t.size(); i++) {
+                    ((HashSet<String>) v).add(t.getString(i));
+                }
+            }
+            Set<String> set = (HashSet<String>) v;
+            set.add(jobType.name());
+            return v;
+        });
+    }
+
+    protected abstract BotInfo buildBotInfo() throws BotInitException;
+
+    protected abstract void resolveBotJobMethod();
+}
+package cn.com.vortexa.bot_father.bot;
+
+import cn.com.vortexa.bot_father.util.persistence.AccountPersistenceManager;
+import cn.com.vortexa.bot_father.util.persistence.impl.DBAccountPersistenceManager;
+import cn.com.vortexa.common.dto.ACListOptResult;
+import cn.com.vortexa.common.dto.BotACJobResult;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.dto.job.AutoBotJobParam;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.hutool.core.util.BooleanUtil;
+
+import com.alibaba.fastjson.JSONArray;
+
+import lombok.Getter;
+
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.function.BiFunction;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+import static cn.com.vortexa.common.entity.BotInfo.ACCOUNT_PARAMS_KEY;
+
+public abstract class AccountManageAutoBot extends AbstractAutoBot {
+
+    /**
+     * job并发控制信号量， jobName -> semaphore
+     */
+    private final ConcurrentMap<String, Semaphore> jobCCSemaphoreMap = new ConcurrentHashMap<>();
+
+    @Getter
+    private final List<AccountContext> accountContexts = new ArrayList<>();
+
+    @Getter
+    private final Map<Integer, List<AccountContext>> acMap = new HashMap<>();
+
+    @Getter
+    private final List<AccountContext> uniqueACList = new ArrayList<>();
+
+    /**
+     * 持久化管理器
+     */
+    @Getter
+    private AccountPersistenceManager persistenceManager;
+
+    @Override
+    protected void doInit() throws BotInitException {
+        // Step 1 初始化保存的线程
+        this.persistenceManager = new DBAccountPersistenceManager(getBotApi());
+
+        this.persistenceManager.init();
+
+        // Step 2 初始化账户
+        this.initAccounts();
+
+        acMap.putAll(
+            getAccountContexts()
+                .stream()
+                .collect(Collectors.groupingBy(ac ->
+                    ac.getAccountBaseInfoId() == null ? -1 : ac.getAccountBaseInfoId())
+                )
+        );
+
+        uniqueACList.addAll(acMap.values().stream().map(List::getFirst).toList());
+    }
+
+    /**
+     * 注册账户
+     *
+     * @return CompletableFuture<Result>
+     */
+    public abstract CompletableFuture<ACListOptResult> registerAccount();
+
+    /**
+     * 登录并获取token
+     *
+     * @return CompletableFuture<Result>
+     */
+    public abstract CompletableFuture<ACListOptResult> loginAndTakeTokenAccount();
+
+    /**
+     * 更新账户奖励信息
+     *
+     * @return CompletableFuture<Result>
+     */
+    public abstract CompletableFuture<ACListOptResult> updateAccountRewordInfo();
+
+    /**
+     * 获取jb name列表
+     *
+     * @return List<String>
+     */
+    public abstract Set<String> botJobNameList();
+
+    /**
+     * 账号被加载后调用
+     *
+     * @param accountContexts accountContexts
+     */
+    protected void accountsLoadedHandler(List<AccountContext> accountContexts) {
+    }
+
+    public CompletableFuture<ACListOptResult> uniqueAsyncForACList(
+        BiFunction<AccountContext, List<AccountContext>, CompletableFuture<Result>> buildResultFuture,
+        BiFunction<AccountContext, BotACJobResult, BotACJobResult> resultHandler,
+        String jobName
+    ) {
+
+        return asyncForACList(
+            new ArrayList<>(uniqueACList),
+            accountContext -> buildResultFuture.apply(accountContext, acMap.get(accountContext.getAccountBaseInfoId())),
+            resultHandler,
+            jobName
+        );
+    }
+
+    public CompletableFuture<ACListOptResult> uniqueSyncForACList(
+        BiFunction<AccountContext, List<AccountContext>, CompletableFuture<Result>> buildResultFuture,
+        BiFunction<AccountContext, BotACJobResult, BotACJobResult> resultHandler,
+        String jobName
+    ) {
+
+        return syncForACList(
+            new ArrayList<>(uniqueACList),
+            accountContext -> buildResultFuture.apply(accountContext, acMap.get(accountContext.getAccountBaseInfoId())),
+            resultHandler,
+            jobName
+        );
+    }
+
+    /**
+     * 遍历账户
+     *
+     * @param buildResultFuture buildResultFuture   具体执行的方法
+     * @param resultHandler resultHandler   处理结果的方法
+     * @return CompletableFuture<ACListOptResult>
+     */
+    public CompletableFuture<ACListOptResult> syncForACList(
+        Function<AccountContext, CompletableFuture<Result>> buildResultFuture,
+        BiFunction<AccountContext, BotACJobResult, BotACJobResult> resultHandler,
+        String jobName
+    ) {
+        return syncForACList(getAccountContexts(), buildResultFuture, resultHandler, jobName);
+    }
+
+    /**
+     * 异步遍历账户
+     *
+     * @param buildResultFuture buildResultFuture   具体执行的方法
+     * @param resultHandler resultHandler   处理结果的方法
+     * @return CompletableFuture<ACListOptResult>
+     */
+    public CompletableFuture<ACListOptResult> asyncForACList(
+        Function<AccountContext, CompletableFuture<Result>> buildResultFuture,
+        BiFunction<AccountContext, BotACJobResult, BotACJobResult> resultHandler,
+        String jobName
+    ) {
+        return asyncForACList(getAccountContexts(), buildResultFuture, resultHandler, jobName);
+    }
+
+    /**
+     * 同步遍历账户
+     *
+     * @param buildResultFuture buildResultFuture   具体执行的方法
+     * @param resultHandler resultHandler   处理结果的方法
+     * @return CompletableFuture<ACListOptResult>
+     */
+    public CompletableFuture<ACListOptResult> syncForACList(
+        List<AccountContext> accountContexts,
+        Function<AccountContext, CompletableFuture<Result>> buildResultFuture,
+        BiFunction<AccountContext, BotACJobResult, BotACJobResult> resultHandler,
+        String jobName
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            List<BotACJobResult> results = new ArrayList<>();
+            int successCount = 0;
+
+            for (AccountContext accountContext : new HashSet<>(accountContexts)) {
+                if (checkAccountContainsParams(accountContext)) {
+                    BotACJobResult botACJobResult = new BotACJobResult(
+                        getBotInstance().getBotId(),
+                        getBotInstance().getBotName(),
+                        jobName,
+                        accountContext.getId()
+                    );
+
+                    CompletableFuture<Result> future = buildResultFuture.apply(accountContext);
+
+                    try {
+                        Result result = future.get();
+                        if (result.getSuccess()) {
+                            successCount++;
+                        }
+                        botACJobResult = resultHandler.apply(accountContext, botACJobResult.setResult(result));
+                        results.add(botACJobResult);
+                    } catch (InterruptedException | ExecutionException e) {
+                        throw new RuntimeException(e);
+                    }
+                }
+            }
+
+            return ACListOptResult.builder()
+                .botId(getBotInstance().getBotId())
+                .botName(getBotInstance().getBotName())
+                .jobName(jobName)
+                .successCount(successCount)
+                .success(true)
+                .results(results)
+                .build();
+        }, getExecutorService());
+    }
+
+    /**
+     * 异步遍历账户
+     *
+     * @param buildResultFuture buildResultFuture   具体执行的方法
+     * @param resultHandler resultHandler   处理结果的方法
+     * @return CompletableFuture<ACListOptResult>
+     */
+    public CompletableFuture<ACListOptResult> asyncForACList(
+        List<AccountContext> accountContexts,
+        Function<AccountContext, CompletableFuture<Result>> buildResultFuture,
+        BiFunction<AccountContext, BotACJobResult, BotACJobResult> resultHandler,
+        String jobName
+    ) {
+        // Step 1 遍历账户，获取执行结果
+        List<CompletableFuture<BotACJobResult>> futures = accountContexts.stream()
+            .filter(this::checkAccountContainsParams)
+            .map(accountContext -> {
+                try {
+                    // 获取信号量
+                    getCcSemaphore(jobName).acquire();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+
+                BotACJobResult botACJobResult = new BotACJobResult(
+                    getBotInstance().getBotId(),
+                    getBotInstance().getBotKey(),
+                    jobName,
+                    accountContext.getId()
+                );
+                CompletableFuture<Result> future;
+
+                try {
+                    future = buildResultFuture.apply(accountContext);
+                } catch (Exception e) {
+                    getCcSemaphore(jobName).release();
+                    botACJobResult.setErrorMsg(e.getMessage());
+                    return CompletableFuture.completedFuture(botACJobResult);
+                }
+
+                return future.thenApplyAsync(botACJobResult::setResult, getExecutorService())
+                    .whenComplete((result, throwable) -> {
+                        // 释放信号量
+                        getCcSemaphore(jobName).release();
+                    });
+            }).toList();
+
+        // Step 2 等待执行完成，转换执行结果
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+            .thenApplyAsync(unused -> {
+                List<BotACJobResult> results = new ArrayList<>();
+
+                int success = 0;
+                for (int i = 0; i < futures.size(); i++) {
+                    CompletableFuture<BotACJobResult> future = futures.get(i);
+                    AccountContext accountContext = accountContexts.get(i);
+
+                    try {
+                        BotACJobResult result = future.get();
+                        BotACJobResult botACJobResult = resultHandler.apply(accountContext, result);
+
+                        if (BooleanUtil.isTrue(botACJobResult.getSuccess())) {
+                            success++;
+                        }
+
+                        results.add(botACJobResult);
+                    } catch (InterruptedException | ExecutionException e) {
+                        String errorMsg = String.format("[%s] %s 获取异步结果发生错误",
+                            accountContext.getId(), accountContext.getSimpleInfo());
+
+                        logger.error(errorMsg, e);
+
+                        results.add(
+                            new BotACJobResult(
+                                getBotInstance().getBotId(),
+                                getBotInstance().getBotKey(),
+                                jobName,
+                                accountContext.getId(),
+                                false,
+                                errorMsg,
+                                null
+                            )
+                        );
+                    }
+                }
+
+                return ACListOptResult.builder()
+                    .botId(getBotInstance().getBotId())
+                    .botName(getBotInstance().getBotKey())
+                    .jobName(jobName)
+                    .successCount(success)
+                    .success(true)
+                    .results(results)
+                    .build();
+            });
+    }
+
+    /**
+     * 检查账户是否含有指定参数
+     *
+     * @param accountContext accountContext
+     * @return boolean
+     */
+    private boolean checkAccountContainsParams(AccountContext accountContext) {
+        // 过滤掉没有账户需要参数的
+        Object o = getBotInstance().getParams().get(ACCOUNT_PARAMS_KEY);
+        // 使用的json序列化进db，反序列化得到的是JsonArray
+        if (o instanceof JSONArray jsonArray) {
+            for (Object obj : jsonArray) {
+                String key = (String) obj;
+                if (accountContext.getParam(key) == null) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 初始化账号方法
+     */
+    private void initAccounts() throws BotInitException {
+        Integer botId = getBotInstance().getBotId();
+
+        try {
+            logger.info("开始加载账户数据");
+            // Step 1 获取持久化的
+            List<AccountContext> accountContexts = persistenceManager
+                .loadAccountContexts(botId, getAutoBotConfig().getBotKey());
+
+            // Step 2 没有保存的数据
+            if (accountContexts == null || accountContexts.isEmpty()) {
+                logger.warn("没有账户数据");
+            } else {
+                logger.info("使用历史账户数据, 共:" + accountContexts.size());
+
+                // Step 3 加载到bot (字段修改监听)
+                registerAccountsInBot(accountContexts);
+
+                accountsLoadedHandler(accountContexts);
+
+                this.accountContexts.addAll(accountContexts);
+            }
+        } catch (Exception e) {
+            throw new BotInitException("初始化账户发生错误", e);
+        }
+    }
+
+    /**
+     * 将账户加载到bot， 会注册监听，当属性发生改变时自动刷入磁盘
+     *
+     * @param accountContexts accountContexts
+     */
+    private void registerAccountsInBot(List<AccountContext> accountContexts) {
+        persistenceManager.registerPersistenceListener(accountContexts);
+    }
+
+    /**
+     * 获取并发控制的信号量
+     *
+     * @param jobName jobName
+     * @return Semaphore
+     */
+    private Semaphore getCcSemaphore(String jobName) {
+        return jobCCSemaphoreMap.computeIfAbsent(jobName, key -> {
+            AutoBotJobParam autoBotJobParam = getJobParam(key);
+            if (autoBotJobParam == null) {
+                return new Semaphore(getRequestConcurrentCount());
+            }
+            return new Semaphore(autoBotJobParam.getConcurrentCount());
+        });
+    }
+
+}
+package cn.com.vortexa.bot_father.bot;
+
+import cn.com.vortexa.bot_father.anno.BotApplication;
+import cn.com.vortexa.bot_father.anno.BotMethod;
+import cn.com.vortexa.bot_father.websocket.AccountWSClientBuilder;
+import cn.com.vortexa.bot_father.websocket.BaseBotWSClient;
+import cn.com.vortexa.bot_father.websocket.WebSocketClientLauncher;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.bot_father.constants.MapConfigKey;
+import cn.com.vortexa.common.dto.ACListOptResult;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.bot_father.config.AutoBotConfig;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.common.entity.BotInfo;
+import cn.com.vortexa.common.exception.BotMethodFormatException;
+import cn.com.vortexa.common.exception.BotMethodInvokeException;
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.com.vortexa.bot_father.dto.job.AutoBotJobRuntimeParam;
+import cn.hutool.core.util.BooleanUtil;
+import cn.hutool.core.util.StrUtil;
+
+import com.alibaba.fastjson.JSONArray;
+
+import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
-import org.springframework.stereotype.Service;
+import org.jetbrains.annotations.NotNull;
 
-import java.io.IOException;
-import java.io.Serializable;
-import java.sql.SQLException;
-import java.time.LocalDateTime;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.*;
+import java.util.concurrent.*;
+
+import static cn.com.vortexa.common.entity.BotInfo.ACCOUNT_PARAMS_KEY;
+import static cn.com.vortexa.common.entity.BotInfo.CONFIG_PARAMS_KEY;
+
+@Slf4j
+public abstract class AnnoDriveAutoBot<T extends JobInvokeAutoBot> extends JobInvokeAutoBot {
+
+    /**
+     * ws client 启动器
+     */
+    private final WebSocketClientLauncher webSocketClientLauncher = new WebSocketClientLauncher(this);
+
+    /**
+     * 注册方法
+     */
+    @Getter
+    private Method registerMethod;
+
+    /**
+     * 登录方法
+     */
+    @Getter
+    private Method loginMethod;
+
+    /**
+     * 奖励更新方法
+     */
+    @Getter
+    private Method updateRewordMethod;
+
+    /**
+     * 构建bot info， 会解析注解查询db，给上层父类调用
+     *
+     * @return BotInfo
+     */
+    @Override
+    protected BotInfo buildBotInfo() throws BotInitException {
+        // 解析bot 基本信息
+        try {
+            BotApplication annotation = getInstance().getClass().getAnnotation(BotApplication.class);
+
+            if (annotation != null) {
+                String botName = annotation.name();
+                if (StrUtil.isBlank(botName)) {
+                    throw new IllegalArgumentException("bot name 不能为空");
+                }
+
+                //  解析bot 自定义配置, 看是否有满足的
+                AutoBotConfig botConfig = getAutoBotConfig();
+                Map<String, Object> customConfig = botConfig.getCustomConfig();
+                for (String key : annotation.configParams()) {
+                    if (!customConfig.containsKey(key)) {
+                        throw new IllegalArgumentException("缺乏Bot必要参数[%s]".formatted(key));
+                    }
+                }
+
+                BotInfo botInfo = null;
+
+                // 查询是否存在botKey的bot
+                Map<String, Object> query = new HashMap<>();
+                query.put("name", botName);
+                List<BotInfo> dbBotInfoList = getBotApi().getBotInfoRPC().conditionQueryRPC(query);
+
+                // 查询bot是否存在，不存在则创建
+                if (dbBotInfoList == null || dbBotInfoList.isEmpty()) {
+                    logger.warn("不存在bot info, 自动创建...");
+                    botInfo = generateFromAnno(annotation);
+                } else {
+                    botInfo = dbBotInfoList.getFirst();
+                    botInfo.fixMapValueType();
+                }
+                return botInfo;
+            } else {
+                throw new IllegalArgumentException("bot 应该带有 @BotApplication注解");
+            }
+        } catch (Exception e) {
+            throw new BotInitException(e);
+        }
+    }
+
+    @Override
+    protected void resolveBotJobMethod() {
+        // 解析bot job 参数
+
+        // Step 1 遍历方法
+        for (Method method : getClass().getDeclaredMethods()) {
+            method.setAccessible(true);
+
+            // Step 2 找到方法中带有BotMethod注解的
+            if (method.isAnnotationPresent(BotMethod.class)) {
+                BotMethod botJobMethod = method.getAnnotation(BotMethod.class);
+
+                // Step 3 根据BotMethod注解 的jobType，方法分类
+                switch (botJobMethod.jobType()) {
+                    case REGISTER -> registerMethodHandler(method);
+                    case LOGIN -> loginMethodHandler(method);
+                    case QUERY_REWARD -> queryRewardMethodHandler(method, botJobMethod);
+                    case ONCE_TASK, TIMED_TASK -> timedTaskMethodHandler(method, botJobMethod);
+                    case WEB_SOCKET_CONNECT -> webSocketConnectMethodHandler(method, botJobMethod);
+                }
+            }
+        }
+    }
+
+    /**
+     * 注册type账号
+     *
+     * @return String
+     */
+    @Override
+    public CompletableFuture<ACListOptResult> registerAccount() {
+        if (registerMethod == null) {
+            return CompletableFuture.completedFuture(ACListOptResult.fail(
+                getBotInstance().getBotId(),
+                getBotInstance().getBotName(),
+                BotJobType.REGISTER.name(),
+                "未找到注册方法"
+            ));
+        }
+        return uniqueAsyncForACList(
+            (accountContext, accountContexts) -> {
+                if (BooleanUtil.isTrue(accountContext.isSignUp())) {
+                    // 账户注册过，
+                    String errorMsg = String.format("[%s]账户[%s]-email[%s]注册过", accountContext.getId(),
+                        accountContext.getName(),
+                        accountContext.getAccountBaseInfo().getEmail());
+
+                    log.warn(errorMsg);
+
+                    return CompletableFuture.completedFuture(Result.fail(errorMsg));
+                } else if (registerMethod != null) {
+                    // 调用注册方法注册
+                    return invokeBotMethod(
+                        registerMethod,
+                        accountContext,
+                        accountContexts,
+                        getAutoBotConfig().getConfig(MapConfigKey.INVITE_CODE_KEY)
+                    ).thenApplyAsync(result -> {
+                        if (result.getSuccess()) {
+                            for (AccountContext ac : accountContexts) {
+                                AccountContext.signUpSuccess(ac);
+                            }
+                        }
+                        return result;
+                    });
+                } else {
+                    return CompletableFuture.completedFuture(Result.fail("未知错误"));
+                }
+            },
+            (accountContext, result) -> {
+                // 登录成功
+                if (BooleanUtil.isTrue(result.getSuccess())) {
+                    //注册成功
+                    AccountContext.signUpSuccess(accountContext);
+                }
+                return result;
+            },
+            BotJobType.REGISTER.name()
+        );
+    }
+
+    /**
+     * 获取账号的token
+     *
+     * @return String
+     */
+    @Override
+    public CompletableFuture<ACListOptResult> loginAndTakeTokenAccount() {
+        if (loginMethod == null) {
+            return CompletableFuture.completedFuture(ACListOptResult.fail(
+                getBotInstance().getBotId(),
+                getBotInstance().getBotName(),
+                BotJobType.LOGIN.name(),
+                "未找到登录方法"
+            ));
+        }
+
+        return asyncForACList(
+            accountContext -> invokeBotMethod(
+                loginMethod,
+                accountContext
+            ),
+            (accountContext, result) -> {
+                // 登录成功
+                if (BooleanUtil.isTrue(result.getSuccess())) {
+                    String token = result.getData() == null ? null :
+                        (result.getData() instanceof String ? (String) result.getData() : null);
+
+                    // token不为空，设置到accountContext里
+                    if (StrUtil.isNotBlank(token)) {
+                        accountContext.setParam(MapConfigKey.TOKEN_KEY, token);
+                    } else {
+                        log.debug("账号[{}]-[{}]token为空", accountContext.getId(), accountContext.getName());
+                    }
+                }
+                return result;
+            },
+            BotJobType.LOGIN.name()
+        );
+    }
+
+    @Override
+    public CompletableFuture<ACListOptResult> updateAccountRewordInfo() {
+        if (updateRewordMethod == null) {
+            return CompletableFuture.completedFuture(ACListOptResult.fail(
+                getBotInstance().getBotId(),
+                getBotInstance().getBotName(),
+                BotJobType.QUERY_REWARD.name(),
+                "未找到奖励查询方法"
+            ));
+        }
+
+        return asyncForACList(
+            getUniqueACList(),
+            accountContext -> invokeBotMethod(
+                updateRewordMethod,
+                accountContext,
+                getAcMap().get(accountContext.getAccountBaseInfoId())
+            ),
+            (accountContext, result) -> result,
+            BotJobType.QUERY_REWARD.name()
+        );
+    }
+
+    @Override
+    public Set<String> botJobNameList() {
+        return getJobParams().keySet();
+    }
+
+    protected abstract T getInstance();
+
+    /**
+     * 注册方法处理器
+     *
+     * @param method method
+     */
+    private void registerMethodHandler(Method method) {
+        logger.debug("add register method");
+        if (method.getReturnType() == Result.class
+            && method.getParameterCount() == 3
+            && method.getParameters()[0].getType() == AccountContext.class
+            && method.getParameters()[1].getType() == List.class
+            && method.getParameters()[2].getType() == String.class) {
+
+            if (this.registerMethod == null) {
+                this.registerMethod = method;
+                this.addBasicJob(BotJobType.REGISTER);
+            } else {
+                throw new BotMethodFormatException("注册方法只能有一个");
+            }
+        } else {
+            throw new BotMethodFormatException("注册方法错误, " +
+                "应为 Result methodName(AccountContext accountContext, List<AccountContext> sameAccountBaseInfoIdLists, String inviteCode)");
+        }
+    }
+
+    /**
+     * 登录方法处理器
+     *
+     * @param method method
+     */
+    private void loginMethodHandler(Method method) {
+        logger.debug("add login method");
+        if (method.getReturnType() == Result.class
+            && method.getParameterCount() == 1
+            && method.getParameters()[0].getType() == AccountContext.class
+        ) {
+
+            if (this.loginMethod == null) {
+                this.loginMethod = method;
+                this.addBasicJob(BotJobType.LOGIN);
+            } else {
+                throw new BotMethodFormatException("登录方法只能有一个");
+            }
+        } else {
+            throw new BotMethodFormatException("登录方法错误, " +
+                "应为 Result methodName(AccountContext ac");
+        }
+    }
+
+    /**
+     * 奖励查询方法处理器
+     *
+     * @param method method
+     * @param botJobMethod botJobMethod
+     */
+    private void queryRewardMethodHandler(Method method, BotMethod botJobMethod) {
+        logger.debug("add reword query method");
+        if (method.getReturnType() == Result.class
+            && method.getParameterCount() == 2
+            && method.getParameters()[0].getType() == AccountContext.class
+            && method.getParameters()[1].getType() == List.class
+        ) {
+
+            if (this.updateRewordMethod == null) {
+                this.updateRewordMethod = method;
+            } else {
+                throw new BotMethodFormatException("收益查询方法只能有一个");
+            }
+
+            registryJobInBot(
+                getInstance(),
+                method,
+                null,
+                botJobMethod
+            );
+        } else {
+            throw new BotMethodFormatException("收益查询方法错误, " +
+                "应为 Result methodName(AccountContext ac, List<AccountContext> sameAccountBaseInfoIdLists)");
+        }
+    }
+
+    /**
+     * 定时任务方法处理器
+     *
+     * @param method method
+     * @param botJobMethod botJobMethod
+     */
+    private void timedTaskMethodHandler(Method method, BotMethod botJobMethod) {
+        logger.debug("add [%s] method".formatted(botJobMethod));
+
+        if (method.getParameterCount() > 2
+            || method.getParameterCount() < 1
+            || method.getParameters()[0].getType() != AccountContext.class
+            || (method.getParameterCount() == 2 && method.getParameters()[1].getType() != List.class)
+        ) {
+            throw new BotMethodFormatException("定时任务方法错误, " +
+                "应为 void methodName(AccountContext ac) 或 " +
+                "void methodName(AccountContext exampleAC, List<AccountContext> sameABIIdList) ");
+        }
+
+        registryJobInBot(
+            getInstance(),
+            method,
+            null,
+            botJobMethod
+        );
+    }
+
+    /**
+     * Web socket 方法处理器
+     *
+     * @param method method
+     * @param botJobMethodAnno botJobMethodAnno
+     */
+    private void webSocketConnectMethodHandler(Method method, BotMethod botJobMethodAnno) {
+        logger.debug("add ws [%s] method".formatted(botJobMethodAnno));
+        Class<?> returnType = method.getReturnType();
+
+        // 检查方法是否符合要求
+        if (cn.com.vortexa.bot_father.websocket.BaseBotWSClient.class.isAssignableFrom(returnType)
+            && method.getParameterCount() == 1
+            && method.getParameters()[0].getType() == AccountContext.class
+        ) {
+            try {
+                // 符合要求，添加到jobMap
+                String jobName = registryJobInBot(
+                    webSocketClientLauncher,
+                    WebSocketClientLauncher.lanuchMethod,
+                    null,
+                    botJobMethodAnno
+                );
+
+                AutoBotJobRuntimeParam runtimeParam = getJobRuntimeParamMap().get(jobName);
+
+                if (runtimeParam != null) {
+                    // 添加额外参数
+                    runtimeParam.setExtraParams(new Object[] {
+                        getJobParam(jobName), (AccountWSClientBuilder) accountContext -> {
+                        Object invoke = method.invoke(getInstance(), accountContext);
+                        return (BaseBotWSClient<?>) invoke;
+                    }
+                    });
+                }
+
+            } catch (Exception e) {
+                throw new BotMethodFormatException(e);
+            }
+        } else {
+            throw new BotMethodFormatException(
+                "websocket 方法错误, 应为 BotWebSocketContext<?,?> methodName(AccountContext)");
+        }
+    }
+
+    /**
+     * 运行bot method
+     *
+     * @param method method
+     * @param args args
+     * @return CompletableFuture<R>
+     */
+    private @NotNull CompletableFuture<Result> invokeBotMethod(Method method, Object... args) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                return (Result) method.invoke(this, args);
+            } catch (IllegalAccessException | InvocationTargetException e) {
+                throw new BotMethodInvokeException(String.format(
+                    "执行[%s]-[%s]方法发生异常",
+                    getBotInstance().getBotKey(),
+                    method.getName()
+                ), e);
+            }
+        }, getExecutorService());
+    }
+
+    protected BotInfo generateFromAnno(BotApplication annotation) {
+        BotInfo botInfo = new BotInfo();
+        botInfo.setName(annotation.name());
+        botInfo.setDescribe(annotation.describe());
+        botInfo.setImage(annotation.image());
+        botInfo.setLimitProjectIds(Arrays.toString(annotation.limitProjectIds()));
+        botInfo.getParams()
+            .put(CONFIG_PARAMS_KEY, JSONArray.parseArray(JSONArray.toJSONString(annotation.configParams())));
+        botInfo.getParams()
+            .put(ACCOUNT_PARAMS_KEY, JSONArray.parseArray(JSONArray.toJSONString(annotation.accountParams())));
+
+        return botInfo;
+    }
+}
+package cn.com.vortexa.bot_father.bot;
+
+import cn.com.vortexa.bot_father.config.AutoBotConfig;
+import cn.com.vortexa.bot_father.constants.BotStatus;
+import cn.com.vortexa.bot_father.service.BotApi;
+import cn.com.vortexa.bot_father.view.MenuCMDLineAutoBot;
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.com.vortexa.common.exception.BotStartException;
+import cn.hutool.core.util.BooleanUtil;
+import cn.hutool.core.util.StrUtil;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.List;
+import java.util.function.BiFunction;
+import java.util.function.Supplier;
+
+/**
+ * @param <T>
+ */
+public abstract class AutoLaunchBot<T extends AnnoDriveAutoBot<T>> extends AnnoDriveAutoBot<T> {
+
+    private static final Logger log = LoggerFactory.getLogger(AutoLaunchBot.class);
+
+    @Override
+    protected final void doInit() throws BotInitException {
+        super.doInit();
+    }
+
+    /**
+     * 启动Bot
+     *
+     * @param botConfig botConfig
+     * @param botApi    botApi
+     * @throws BotStartException BotStartException
+     * @throws BotInitException  BotInitException
+     */
+    public void launch(AutoBotConfig botConfig, BotApi botApi, Supplier<Boolean> initHandler) throws BotStartException, BotInitException {
+        String botKey = botConfig.getBotKey();
+        if (StrUtil.isBlank(botKey)) {
+            throw new BotStartException("botKey is empty");
+        }
+
+        T instance = getInstance();
+
+        // 初始化
+        instance.init(botApi, botConfig);
+
+        if (BooleanUtil.isTrue(initHandler.get())) {
+            botInitialized(botConfig, botApi);
+
+            if (botConfig.isCommandMenu()) {
+                MenuCMDLineAutoBot<AutoBotConfig> menuCMDLineAutoBot
+                    = new MenuCMDLineAutoBot<>(instance, List.of());
+
+                // 启动
+                menuCMDLineAutoBot.start();
+                log.info("bot[{}] running as cli-ui mode", getBotInstance().getBotKey());
+            } else {
+                // 启动
+                instance.updateState(BotStatus.RUNNING);
+                log.info("bot[{}] running as headless mode", getBotInstance().getBotKey());
+            }
+        } else {
+            log.error("bot start cancel by init");
+        }
+    }
+
+    protected abstract void botInitialized(AutoBotConfig botConfig, BotApi botApi);
+}
+package cn.com.vortexa.bot_father.bot;
+
+import cn.com.vortexa.bot_father.anno.BotMethod;
+import cn.com.vortexa.bot_father.anno.BotWSMethodConfig;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.dto.ACListOptResult;
+import cn.com.vortexa.common.dto.BotACJobResult;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.dto.job.AutoBotJobParam;
+import cn.com.vortexa.common.dto.job.AutoBotJobWSParam;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.job.core.AutoBotJobInvoker;
+import cn.com.vortexa.bot_father.dto.job.AutoBotJobRuntimeParam;
+import cn.hutool.core.util.BooleanUtil;
+import cn.hutool.core.util.StrUtil;
+import lombok.Getter;
+import org.jetbrains.annotations.NotNull;
+import org.quartz.CronExpression;
+import org.quartz.JobKey;
+
+import java.lang.reflect.Method;
+import java.text.ParseException;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ConcurrentHashMap;
+
+
+import static cn.com.vortexa.common.constants.BotJobType.ACCOUNT_SPLIT_JOB;
+import static cn.com.vortexa.common.dto.job.AutoBotJobParam.START_AT;
+
+@Getter
+public abstract class JobInvokeAutoBot extends AccountManageAutoBot implements AutoBotJobInvoker {
+
+    private final Map<String, AutoBotJobRuntimeParam> jobRuntimeParamMap = new ConcurrentHashMap<>();
+
+    private final Random random = new Random();
+
+    @Override
+    public void invokeJob(JobKey jobKey, AutoBotJobParam jobParam) {
+        String jobName = jobKey.getName();
+
+        // Step 1 获取运行时参数
+        AutoBotJobRuntimeParam runtimeParam = jobRuntimeParamMap.get(jobName);
+
+        // 账户拆分任务,不需要遍历账户列表
+        if (ACCOUNT_SPLIT_JOB.equals(jobParam.getJobType())) {
+            runtimeParam = jobRuntimeParamMap.get(jobKey.getGroup());
+            invokeAccountSplitJob(jobKey, jobParam, runtimeParam);
+            return;
+        }
+
+        // 动态触发器
+        // 遍历账户，生成新的一些一次性任务执行
+        if (BooleanUtil.isTrue(jobParam.getDynamicTrigger())) {
+            splitJobByAccount(jobParam, jobName);
+            return;
+        }
+
+        // Step 2 调用执行方法
+        logger.info("开始执行[%s]定时任务".formatted(jobName));
+
+        CompletableFuture<ACListOptResult> future = null;
+        if (BooleanUtil.isTrue(jobParam.getUniqueAccount())) {
+            future = uniqueForEachAccount(runtimeParam, jobName, jobParam, this::uniqueInvoke);
+        } else {
+            future = normalForEachAccount(runtimeParam, jobName, jobParam, this::normalInvoke);
+        }
+
+        acListOptResultHandler(future);
+
+
+        logger.info("[%s]定时任务执行完毕".formatted(jobName));
+    }
+
+
+    /**
+     * 将Job注册到Bot中
+     *
+     * @param method           方法
+     * @param botJobMethodAnno 方法上的BotMethod注解
+     */
+    public String registryJobInBot(
+            Object invokeObj,
+            Method method,
+            Object[] extraParams,
+            BotMethod botJobMethodAnno
+    ) {
+        AutoBotJobParam autoBotJobParam = null;
+
+        try {
+            Integer intervalInSecond = null;
+            CronExpression cronExpression = null;
+
+            String jobName = StrUtil.isBlank(botJobMethodAnno.jobName()) ? method.getName() : botJobMethodAnno.jobName();
+
+            // Step 1 判断合法性
+            if (botJobMethodAnno.intervalInSecond() != 0) {
+                intervalInSecond = botJobMethodAnno.intervalInSecond();
+            } else if (StrUtil.isNotBlank(botJobMethodAnno.cronExpression())) {
+                cronExpression = new CronExpression(botJobMethodAnno.cronExpression());
+                logger.info("%s cronExpression:[%s]".formatted(jobName, cronExpression.getCronExpression()));
+            } else if (botJobMethodAnno.jobType() != BotJobType.ONCE_TASK) {
+                throw new IllegalArgumentException("定时任务需设置时间间隔或cron表达式");
+            }
+
+            // Step 2 设置job运行时参数
+            getJobRuntimeParamMap().put(
+                    jobName,
+                    AutoBotJobRuntimeParam
+                            .builder()
+                            .target(invokeObj)
+                            .method(method)
+                            .extraParams(extraParams)
+                            .build()
+            );
+
+            // Step 3 构建job task参数
+            autoBotJobParam = AutoBotJobParam
+                    .builder()
+                    .jobName(jobName)
+                    .jobType(botJobMethodAnno.jobType())
+                    .description(botJobMethodAnno.description())
+                    .cronExpression(botJobMethodAnno.cronExpression())
+                    .intervalInSecond(intervalInSecond)
+                    .concurrentCount(botJobMethodAnno.concurrentCount())
+                    .autoBotJobWSParam(convertWSConfigParam(botJobMethodAnno.bowWsConfig()))
+                    .uniqueAccount(botJobMethodAnno.uniqueAccount())
+                    .dynamicTrigger(botJobMethodAnno.dynamicTrigger())
+                    .dynamicTimeWindowMinute(botJobMethodAnno.dynamicTimeWindowMinute())
+                    .syncExecute(botJobMethodAnno.syncExecute())
+                    .build();
+
+            // Step 4 设置
+            setJobParam(jobName, autoBotJobParam);
+
+            getBotApi().getBotJobService().registerJobInvoker(new JobKey(jobName, getAutoBotConfig().getBotKey()), this);
+
+            return jobName;
+        } catch (ParseException e) {
+            throw new IllegalArgumentException(
+                    String.format("[%s]-[%s]BotJobMethod上错误的cron表达式[%s]",
+                            getBotInstance().getBotKey(), method.getName(), botJobMethodAnno.cronExpression()),
+                    e
+            );
+        }
+    }
+
+    /**
+     * 开始任务
+     *
+     * @param jobName jobName
+     * @return BotACJobResult
+     */
+    public BotACJobResult startBotJob(String jobName) {
+        return getBotApi().getBotJobService().startJob(
+                getAutoBotConfig().getBotKey(),
+                jobName,
+                getJobParam(jobName),
+                getInstance()
+        );
+    }
+
+
+    /**
+     * 根据账户拆分job
+     *
+     * @param param   param
+     * @param jobName jobName
+     */
+    private void splitJobByAccount(AutoBotJobParam param, String jobName) {
+        if (BooleanUtil.isTrue(param.getUniqueAccount())) {
+            uniqueAsyncForACList(
+                    (accountContext, accountContexts) -> buildNewJob(param, accountContext),
+                    (accountContext, result) -> result,
+                    jobName
+            );
+        } else {
+            asyncForACList(
+                    (accountContext) -> buildNewJob(param, accountContext),
+                    (accountContext, result) -> result,
+                    jobName
+            );
+        }
+    }
+
+    /**
+     * 运行拆分的job
+     *
+     * @param jobKey       jobKey
+     * @param param        param
+     * @param runtimeParam runtimeParam
+     */
+    private void invokeAccountSplitJob(JobKey jobKey, AutoBotJobParam param, AutoBotJobRuntimeParam runtimeParam) {
+        Integer acId = Integer.parseInt(jobKey.getName());
+
+        List<AccountContext> list = getAcMap().get(acId);
+
+        if (list.isEmpty()) {
+            throw new IllegalArgumentException("不存在bot account " + acId);
+        } else {
+            AccountContext accountContext = list.getFirst();
+
+            if (BooleanUtil.isTrue(param.getUniqueAccount())) {
+                uniqueInvoke(accountContext, list, runtimeParam.getExtraParams(), runtimeParam.getMethod(), runtimeParam.getTarget());
+            } else {
+                normalInvoke(accountContext, list, runtimeParam.getExtraParams(), runtimeParam.getMethod(), runtimeParam.getTarget());
+            }
+        }
+    }
+
+    /**
+     * 普通账户遍历处理
+     *
+     * @param runtimeParam runtimeParam
+     * @param jobName      jobName
+     * @param jobParam jobParam
+     * @return CompletableFuture<ACListOptResult>
+     */
+    private CompletableFuture<ACListOptResult> normalForEachAccount(
+            AutoBotJobRuntimeParam runtimeParam,
+            String jobName,
+            AutoBotJobParam jobParam,
+            AccountJobMethodInvokeHandler handler
+    ) {
+        Object[] extraParams = runtimeParam.getExtraParams();
+        Method jobMethod = runtimeParam.getMethod();
+        Object invokeObj = runtimeParam.getTarget();
+
+        if (BooleanUtil.isTrue(jobParam.getSyncExecute())) {
+            return syncForACList(
+                    accountContext -> handler.invoke(accountContext, null, extraParams, jobMethod, invokeObj),
+                    (accountContext, result) -> result,
+                    jobName
+            );
+        } else {
+            return asyncForACList(
+                    accountContext -> handler.invoke(accountContext, null, extraParams, jobMethod, invokeObj),
+                    (accountContext, result) -> result,
+                    jobName
+            );
+        }
+    }
+
+    /**
+     * 独有账户遍历处理
+     *
+     * @param runtimeParam runtimeParam
+     * @param jobName      jobName
+     * @param jobParam  jobParam
+     * @return CompletableFuture<ACListOptResult>
+     */
+    private CompletableFuture<ACListOptResult> uniqueForEachAccount(AutoBotJobRuntimeParam runtimeParam, String jobName, AutoBotJobParam jobParam, AccountJobMethodInvokeHandler handler) {
+        Object[] extraParams = runtimeParam.getExtraParams();
+        Method jobMethod = runtimeParam.getMethod();
+        Object invokeObj = runtimeParam.getTarget();
+
+        if (BooleanUtil.isTrue(jobParam.getSyncExecute())) {
+            return uniqueSyncForACList(
+                    (accountContext, accountContexts) -> handler.invoke(accountContext, accountContexts, extraParams, jobMethod, invokeObj),
+                    (accountContext, result) -> result,
+                    jobName
+            );
+        } else {
+            return uniqueAsyncForACList(
+                    (accountContext, accountContexts) -> handler.invoke(accountContext, accountContexts, extraParams, jobMethod, invokeObj),
+                    (accountContext, result) -> result,
+                    jobName
+            );
+        }
+    }
+
+
+    private @NotNull CompletableFuture<Result> normalInvoke(AccountContext accountContext, List<AccountContext> accountContexts, Object[] extraParams, Method jobMethod, Object invokeObj) {
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                // 封装参数
+                Object[] params;
+                if (extraParams == null) {
+                    params = new Object[]{accountContext};
+                } else {
+                    params = new Object[1 + extraParams.length];
+                    params[0] = accountContext;
+                    System.arraycopy(extraParams, 0, params, 1, extraParams.length);
+                }
+
+                // 调用执行的job method
+                jobMethod.setAccessible(true);
+                Object invoke = jobMethod.invoke(invokeObj, params);
+                return Result.ok(invoke);
+            } catch (Exception e) {
+                logger.error("执行定时任务发生异常", e);
+                return Result.fail("执行定时任务发生异常" + e.getCause().getMessage());
+            }
+        }, getExecutorService());
+    }
+
+    private @NotNull CompletableFuture<Result> uniqueInvoke(AccountContext accountContext, List<AccountContext> accountContexts, Object[] extraParams, Method jobMethod, Object invokeObj) {
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                // 封装参数
+                Object[] params;
+                if (extraParams == null) {
+                    params = new Object[]{accountContext, accountContexts};
+                } else {
+                    params = new Object[2 + extraParams.length];
+                    params[0] = accountContext;
+                    params[1] = accountContexts;
+                    System.arraycopy(extraParams, 0, params, 1, extraParams.length);
+                }
+
+                // 调用执行的job method
+                jobMethod.setAccessible(true);
+                Object invoke = jobMethod.invoke(invokeObj, params);
+                return Result.ok(invoke);
+            } catch (Exception e) {
+                logger.error("执行定时任务发生异常", e);
+                return Result.fail("执行定时任务发生异常" + e.getCause().getMessage());
+            }
+        });
+    }
+
+
+    /**
+     * 根据account context构建新的job
+     *
+     * @param param          param
+     * @param accountContext accountContext
+     * @return CompletableFuture<Result>
+     */
+    private @NotNull CompletableFuture<Result> buildNewJob(
+            AutoBotJobParam param,
+            AccountContext accountContext
+    ) {
+        return CompletableFuture.supplyAsync(() -> {
+            // Step 1 计算开始时间
+            long startAt = System.currentTimeMillis()
+                    + (Long.max(1, random.nextInt(param.getDynamicTimeWindowMinute())) * 60 * 1000);
+
+            // Step 2 生成参数
+            String newJobName = String.valueOf(accountContext.getId());
+            AutoBotJobParam jobParam = AutoBotJobParam
+                    .builder()
+                    .jobType(ACCOUNT_SPLIT_JOB)
+                    .jobName(newJobName)
+                    .intervalInSecond(param.getIntervalInSecond())
+                    .autoBotJobWSParam(param.getAutoBotJobWSParam())
+                    .uniqueAccount(param.getUniqueAccount())
+                    .build();
+
+            jobParam.putParam(START_AT, startAt);
+
+            // Step 3 开始job
+            getBotApi().getBotJobService().startJob(
+                    param.getJobName(),
+                    newJobName,
+                    jobParam,
+                    getInstance(),
+                    false
+            );
+            return Result.ok("job start at " + startAt);
+        }, getExecutorService()).exceptionallyAsync(throwable -> {
+            logger.error("split job by account, create new job error", throwable);
+            return Result.fail("split job by account, create new job error" + throwable.getMessage());
+        });
+    }
+
+    protected abstract AutoBotJobInvoker getInstance();
+
+    /**
+     * 账户列表操作结果处理
+     *
+     * @param future future
+     */
+    private void acListOptResultHandler(CompletableFuture<ACListOptResult> future) {
+        future.thenAcceptAsync(acListOptResult -> {
+            if (!acListOptResult.getSuccess()) {
+                logger.info("botId[%s]-botName[%s]-jobName[%s] 定时任务执行失败, %s".formatted(
+                        acListOptResult.getBotId(), acListOptResult.getBotName(), acListOptResult.getJobName(), acListOptResult.getErrorMsg()
+                ));
+            } else {
+                logger.info("botId[%s]-botName[%s]-jobName[%s] 定时任务执行成功, %s".formatted(
+                        acListOptResult.getBotId(), acListOptResult.getBotName(), acListOptResult.getJobName(), acListOptResult.getErrorMsg()
+                ));
+            }
+        });
+    }
+
+    /**
+     * 转换BotWSMethodConfig 为 AutoBotJobWSParam
+     *
+     * @param methodConfig methodConfig
+     * @return AutoBotJobWSParam
+     */
+    private AutoBotJobWSParam convertWSConfigParam(BotWSMethodConfig methodConfig) {
+        return new AutoBotJobWSParam(
+                methodConfig.isRefreshWSConnection(),
+                methodConfig.wsUnlimitedRetry(),
+                methodConfig.nioEventLoopGroupThreads(),
+                methodConfig.wsConnectCount(),
+                methodConfig.reconnectLimit(),
+                methodConfig.heartBeatIntervalSecond(),
+                methodConfig.reconnectCountDownSecond()
+        );
+    }
+
+    private interface AccountJobMethodInvokeHandler {
+
+        CompletableFuture<Result> invoke(AccountContext accountContext, List<AccountContext> accountContexts, Object[] extraParams, Method jobMethod, Object invokeObj);
+
+    }
+}
+package cn.com.vortexa.bot_father.config;
+
+
+import cn.com.vortexa.bot_father.dto.AutoBotAccountConfig;
+import cn.com.vortexa.bot_father.dto.AutoBotConfigFilePathConfig;
+import lombok.Data;
+import lombok.ToString;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.stereotype.Component;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@Data
+@ToString
+@Component
+@ConfigurationProperties(prefix = "vortexa")
+public class AutoBotConfig {
+
+    /**
+     * bot id
+     */
+    public static Integer BOT_ID;
+
+
+    /**
+     * botName
+     */
+    public static String BOT_NAME;
+
+
+    /**
+     * 标识bot，不同于bot id， botKey是由用户定义的
+     */
+    private String botKey;
+
+    /**
+     * 是否开启命令行菜单
+     */
+    private boolean commandMenu = true;
+
+    /**
+     * 配置文件配置
+     */
+    private AutoBotConfigFilePathConfig filePathConfig = new AutoBotConfigFilePathConfig();
+
+    /**
+     * 账户配置
+     */
+    private AutoBotAccountConfig accountConfig = new AutoBotAccountConfig();
+
+    /**
+     * 自定义配置
+     */
+    private Map<String, Object> customConfig = new HashMap<>();
+
+
+    public String getConfig(String key) {
+        return String.valueOf(customConfig.get(key));
+    }
+
+    public void setConfig(String key, String value) {
+        this.customConfig.put(key, value);
+    }
+
+}
+package cn.com.vortexa.bot_father.mapper;
+
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.db_layer.mapper.IBaseMapper;
+import cn.com.vortexa.db_layer.plugn.table_shard.TableShard;
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.BotIdBasedTableShardStrategy;
+import org.apache.ibatis.annotations.Param;
+
+import java.util.List;
+
+import static cn.com.vortexa.bot_father.service.impl.BotAccountContextServiceImpl.BOT_ACCOUNT_CONTEXT_TABLE_PREFIX;
+
 
 /**
  * <p>
- * 服务实现类
+ * Mapper 接口
  * </p>
  *
  * @author com.helei
  * @since 2025-02-05
  */
-@Slf4j
-@Service
-public class AccountBaseInfoServiceImpl extends AbstractBaseService<AccountBaseInfoMapper, AccountBaseInfo>
-    implements IAccountBaseInfoRPC, IAccountBaseInfoService
-{
+@TableShard(
+        tableNamePrefix = BOT_ACCOUNT_CONTEXT_TABLE_PREFIX,
+        values = {"botId", "botKey"},
+        fieldFlag = true,
+        shardStrategy = BotIdBasedTableShardStrategy.class,
+        targetClass = AccountContext.class
+)
+public interface BotAccountContextMapper extends IBaseMapper<AccountContext> {
 
-    public static final String DEFAULT_ACCOUNT_TYPE = "default";
+    Integer createIfTableNotExist(@Param("botId") Integer botId, @Param("botKey") String botKey);
 
-    public AccountBaseInfoServiceImpl() {
-        super(accountBaseInfo -> {
-            accountBaseInfo.setInsertDatetime(LocalDateTime.now());
-            accountBaseInfo.setUpdateDatetime(LocalDateTime.now());
-            accountBaseInfo.setIsValid(1);
-        });
-    }
-
-    @Override
-    public AccountBaseInfo queryByIdRPC(Serializable id) {
-        return super.queryById(id);
-    }
-
-    @Override
-    public PageResult<AccountBaseInfo> conditionPageQueryRPC(int page, int limit, Map<String, Object> filterMap)
-        throws SQLException {
-        return super.conditionPageQuery(page, limit, filterMap);
-    }
-
-    @Override
-    public Result saveAccountBaseInfos(List<Map<String, Object>> rawLines) {
-        if (rawLines == null || rawLines.isEmpty()) {
-            return Result.fail("导入数据不能为空");
-        }
-
-        try {
-            importFromRaw(rawLines);
-            return Result.ok();
-        } catch (Exception e) {
-            log.error("导入账户数据失败", e.getCause());
-            return Result.fail("导入账户数据失败," + e.getMessage());
-        }
-    }
-
-    @Override
-    public Result queryTypedInfo() {
-        try {
-            List<Pair<String, Integer>> typedInfo = getBaseMapper().queryTypedInfo();
-            return Result.ok(typedInfo);
-        } catch (Exception e) {
-            log.error("查询AccountBaseInfo分类信息失败,", e.getCause());
-            return Result.fail(e.getCause().getMessage());
-        }
-    }
-
-    @Override
-    public Integer importFromExcel(String botConfigPath) {
-        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, botConfigPath);
-        AtomicInteger total = new AtomicInteger();
-        try {
-            ExcelReadUtil.readExcelAsMap(
-                proxyFilePath,
-                (type, map) -> AccountBaseInfo.builder()
-                    .type(type)
-                    .name(autoCast(map.remove("name")))
-                    .email(autoCast(map.remove("email")))
-                    .password(autoCast(map.remove("password")))
-                    .params(map)
-                    .build(),
-                (type, accountBaseInfos) -> CompletableFuture.runAsync(() -> {
-                    log.info("[{}] 账号基本信息读取完毕, 共[{}]", type, accountBaseInfos.size());
-                    Integer insertCount = null;
-                    try {
-                        insertCount = insertOrUpdateBatch(accountBaseInfos);
-                    } catch (SQLException e) {
-                        throw new RuntimeException(e);
-                    }
-
-                    log.info("[{}] 账号基本信息保存成功, 新增[{}], 共[{}]", type, insertCount, accountBaseInfos.size());
-
-                    total.addAndGet(accountBaseInfos.size());
-                })
-            );
-
-        } catch (IOException e) {
-            log.error("从文件导入账号基本信息出错", e);
-        }
-
-        return total.get();
-    }
-
-    @Override
-    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
-        log.info("导入账户基本信息，共[{}]条", rawLines.size());
-        List<AccountBaseInfo> list = rawLines.stream().map(map -> {
-            String type = autoCast(map.remove("type"));
-
-            return AccountBaseInfo.builder()
-                .type(StrUtil.isBlank(type) ? DEFAULT_ACCOUNT_TYPE : type)
-                .name(autoCast(map.remove("name")))
-                .email(autoCast(map.remove("email")))
-                .password(autoCast(map.remove("password")))
-                .params(map)
-                .build();
-        }).toList();
-
-        return insertOrUpdateBatch(list);
-    }
+    List<String> queryBotAccountTableNames(@Param("botId") Integer botId);
 }
-package cn.com.vortexa.bot_platform.service.impl;
+package cn.com.vortexa.bot_father.scriptagent;
 
-import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.BotInfo;
-import cn.com.vortexa.db_layer.mapper.BotInfoMapper;
-import cn.com.vortexa.db_layer.service.IBotInfoService;
-import cn.com.vortexa.rpc.IBotInfoRPC;
-import cn.hutool.core.util.StrUtil;
-import lombok.extern.slf4j.Slf4j;
-
-import org.springframework.stereotype.Service;
-
-import java.sql.SQLException;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- *  服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-07
- */
-@Slf4j
-@Service
-public class BotInfoServiceImpl extends AbstractBaseService<BotInfoMapper, BotInfo> implements IBotInfoService, IBotInfoRPC {
-
-
-    public BotInfoServiceImpl() {
-        super(botInfo -> {
-            botInfo.setInsertDatetime(LocalDateTime.now());
-            botInfo.setUpdateDatetime(LocalDateTime.now());
-            botInfo.setIsValid(1);
-        });
-    }
-
-    @Override
-    public Result bindBotAccountBaseInfo(Integer botId, String botKey, List<Integer> bindAccountBaseInfoList) {
-
-        // Step 1 参数校验
-        if (botId == null || StrUtil.isBlank(botKey)) {
-            log.error("Bot[{}]-[{}]绑定账户时参数botId/botKey为空", botId, botKey);
-            return Result.fail("参数botId/botKey不能为空");
-        }
-
-        BotInfo dbBotInfo = query().eq("id", botId).one();
-        if (dbBotInfo == null) {
-            log.error("Bot[{}]-[{}] 不存在该bot", botId, botKey);
-            return Result.fail("不存在该bot");
-        }
-
-        if (bindAccountBaseInfoList == null) bindAccountBaseInfoList = List.of();
-
-        return Result.ok(bindAccountBaseInfoList);
-    }
-
-
-    @Override
-    public Integer insertOrUpdateRPC(BotInfo botInfo) throws SQLException {
-        return insertOrUpdate(botInfo);
-    }
-
-    @Override
-    public List<BotInfo> conditionQueryRPC(Map<String, Object> filterMap) throws SQLException {
-        return conditionQuery(filterMap);
-    }
-}
-package cn.com.vortexa.bot_platform.service.impl;
-
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.db_layer.mapper.BotInfoMapper;
-import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.common.entity.BotInfo;
-import cn.com.vortexa.common.entity.BotInstance;
-import cn.com.vortexa.db_layer.mapper.BotInstanceMapper;
-import cn.com.vortexa.db_layer.service.IBotInstanceService;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-
-import cn.com.vortexa.rpc.IBotInstanceRPC;
+import cn.com.vortexa.control.ScriptAgent;
+import cn.com.vortexa.control.config.ScriptAgentConfig;
+import cn.com.vortexa.control.dto.RPCArgsWrapper;
+import cn.com.vortexa.control.dto.RequestHandleResult;
+import cn.com.vortexa.control.exception.CustomCommandException;
+import cn.com.vortexa.control.exception.CustomCommandInvokeException;
+import cn.com.vortexa.control.protocol.Serializer;
+import cn.com.vortexa.control.dto.RPCServiceInfo;
+import cn.com.vortexa.control.util.RPCMethodUtil;
 import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import java.io.FileNotFoundException;
+import java.lang.reflect.Method;
+import java.util.List;
+
+/**
+ * @author helei
+ * @since 2025/3/21 15:04
+ */
+@Slf4j
+@Configuration
+@ConditionalOnClass(ScriptAgent.class)
+public class BotScriptAgentConfig {
+
+    private static final String APPLICATION_FILE_NAME = "application.yaml";
+
+    private static final String NAMESERVER_CONFIG_PREFIX = "vortexa.scriptAgent";
+
+    @Autowired(required = false)
+    private List<RPCServiceInfo<?>> rpcServiceInfos;
+
+    @Bean
+    public ScriptAgentConfig scriptAgentClientConfig() throws FileNotFoundException {
+        return ScriptAgentConfig.loadConfig(APPLICATION_FILE_NAME, NAMESERVER_CONFIG_PREFIX);
+    }
+
+    @Bean
+    public ScriptAgent scriptAgent() throws FileNotFoundException, CustomCommandException {
+        ScriptAgentConfig scriptAgentConfig = scriptAgentClientConfig();
+        ScriptAgent scriptAgent = new ScriptAgent(scriptAgentConfig);
+
+        addCustomCommandHandler(scriptAgent);
+
+        return scriptAgent;
+    }
+
+    private void addCustomCommandHandler(ScriptAgent scriptAgent) throws CustomCommandException {
+        if (rpcServiceInfos == null) return;
+
+        for (RPCServiceInfo<?> rpcServiceInfo : rpcServiceInfos) {
+            Class<?> interfaces = rpcServiceInfo.getInterfaces();
+            Object ref = rpcServiceInfo.getRef();
+
+            for (Method method : interfaces.getDeclaredMethods()) {
+                method.setAccessible(true);
+                String key = RPCMethodUtil.buildRpcMethodKey(interfaces.getName(), method);
+
+                scriptAgent.addCustomCommandHandler(key, request -> {
+                    RequestHandleResult result = new RequestHandleResult();
+
+                    log.debug("invoke rpc method[{}]", method.getName());
+                    try {
+                        byte[] body = request.getBody();
+                        RPCArgsWrapper params = Serializer.Algorithm.JDK.deserialize(body, RPCArgsWrapper.class);
+                        result.setData(method.invoke(ref, params.getArgs()));
+                        result.setSuccess(true);
+                        return result;
+                    } catch (Exception e) {
+                        log.error("invoke rpc method [{}] error", method.getName());
+                        throw new CustomCommandInvokeException(e);
+                    }
+                });
+            }
+        }
+    }
+}
+package cn.com.vortexa.bot_father.service.impl;
+
+import cn.com.vortexa.bot_father.config.AutoBotConfig;
+import cn.com.vortexa.bot_father.mapper.BotAccountContextMapper;
+import cn.com.vortexa.bot_father.service.IBotAccountContextService;
+import cn.com.vortexa.common.config.SystemConfig;
+import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.common.entity.BotInstance;
+import cn.com.vortexa.common.entity.BrowserEnv;
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.excel.ExcelReadUtil;
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
+import cn.com.vortexa.db_layer.service.AbstractBaseService;
+import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
+import cn.com.vortexa.rpc.api.platform.IBrowserEnvRPC;
+import cn.com.vortexa.control.anno.RPCReference;
+import cn.hutool.core.util.StrUtil;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.SQLException;
 import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -238,603 +2231,70 @@ import java.util.stream.Collectors;
  * </p>
  *
  * @author com.helei
- * @since 2025-02-18
+ * @since 2025-02-05
  */
 @Slf4j
 @Service
-public class BotInstanceServiceImpl extends AbstractBaseService<BotInstanceMapper, BotInstance>
-    implements IBotInstanceRPC, IBotInstanceService {
+public class BotAccountContextServiceImpl extends AbstractBaseService<BotAccountContextMapper, AccountContext> implements IBotAccountContextService {
+
+    public static final String BOT_ACCOUNT_CONTEXT_TABLE_PREFIX = "t_bot_account_context";
 
     @Autowired
-    private BotInfoMapper botInfoMapper;
+    private AutoBotConfig botConfig;
 
-    public BotInstanceServiceImpl() {
-        super(botInstance -> {
-            botInstance.setInsertDatetime(LocalDateTime.now());
-            botInstance.setUpdateDatetime(LocalDateTime.now());
-            botInstance.setIsValid(1);
-        });
-    }
+    @Autowired
+    private ITableShardStrategy tableShardStrategy;
 
-    @Override
-    public PageResult<BotInstance> conditionPageQuery(int page, int limit, Map<String, Object> filterMap) throws SQLException {
+    @RPCReference
+    private IBotInstanceRPC botInstanceRPC;
 
-        PageResult<BotInstance> result = super.conditionPageQuery(page, limit, filterMap);
+    @RPCReference
+    private IBrowserEnvRPC browserEnvRPC;
 
-        // 填充botInfo
-        List<Integer> botIds = result.getList().stream().map(BotInstance::getBotId).toList();
-        Map<Integer, BotInfo> idMapBotInfo = botInfoMapper.selectBatchIds(botIds)
-                .stream().collect(Collectors.toMap(BotInfo::getId, botInfo -> botInfo));
-
-        for (BotInstance instance : result.getList()) {
-            instance.setBotInfo(idMapBotInfo.get(instance.getBotId()));
-        }
-
-        return result;
-    }
-
-
-    @Override
-    public Boolean existsBotInstance(BotInstance query) {
-        return getBaseMapper().exists(new QueryWrapper<>(query));
-    }
-
-    @Override
-    public Boolean existsBotInstanceRPC(BotInstance query) {
-        return existsBotInstance(query);
-    }
-
-    @Override
-    public Integer insertOrUpdateRPC(BotInstance instance) throws SQLException {
-        return insertOrUpdate(instance);
-    }
-}
-package cn.com.vortexa.bot_platform.service.impl;
-
-import cn.com.vortexa.db_layer.service.IBrowserEnvService;
-import cn.com.vortexa.rpc.IBrowserEnvRPC;
-import cn.com.vortexa.rpc.anno.RPCConsumer;
-import cn.com.vortexa.common.config.SystemConfig;
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.excel.ExcelReadUtil;
-import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.BrowserEnv;
-import cn.com.vortexa.common.util.pool.IdMarkPool;
-import cn.com.vortexa.db_layer.mapper.BrowserEnvMapper;
-import lombok.extern.slf4j.Slf4j;
-
-import org.springframework.stereotype.Service;
-
-import java.io.Serializable;
-import java.sql.SQLException;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-
-import static cn.com.vortexa.common.entity.BrowserEnv.USER_AGENT_KEY;
-
-/**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
- */
-@Slf4j
-@Service
-public class BrowserEnvServiceImpl extends AbstractBaseService<BrowserEnvMapper, BrowserEnv>
-    implements IBrowserEnvRPC, IBrowserEnvService {
-
-    private IdMarkPool<BrowserEnv> pool;
-
-    public BrowserEnvServiceImpl() {
-        super(browserEnv -> {
-            browserEnv.setInsertDatetime(LocalDateTime.now());
-            browserEnv.setUpdateDatetime(LocalDateTime.now());
-            browserEnv.setIsValid(1);
+    public BotAccountContextServiceImpl() {
+        super(accountContext -> {
+            accountContext.setInsertDatetime(LocalDateTime.now());
+            accountContext.setUpdateDatetime(LocalDateTime.now());
+            accountContext.setIsValid(1);
         });
     }
 
 
-
     @Override
-    public Result saveBrowserEnvs(List<Map<String, Object>> rawLines) {
-        if (rawLines == null || rawLines.isEmpty()) {
-            return Result.fail("导入数据不能为空");
+    public Result saveBotAccountContext(Integer botId, String botKey, List<Map<String, Object>> rawLines) {
+        if (botId == null || StrUtil.isBlank(botKey)) {
+            return Result.fail("botId或botKey不能为空");
         }
 
         try {
             importFromRaw(rawLines);
+
             return Result.ok();
         } catch (Exception e) {
-            return Result.fail("导入浏览器环境失败," + e.getMessage());
+            log.error("botId[{}]-botKey[{}] 报错账户信息失败", botId, botKey, e);
+            return Result.fail("保存失败, " + e.getMessage());
         }
     }
 
+
     @Override
-    public synchronized List<BrowserEnv> getUselessBrowserEnv(int count) {
-        if (pool == null) {
-            log.info("loading Browser Env pool...");
-            this.pool = IdMarkPool.create(list(), BrowserEnv.class);
-            log.info("loading Browser Env pool success");
+    @Transactional
+    public Boolean checkAndCreateShardedTable(Integer botId, String botKey, boolean existUpdate) throws SQLException {
+        if (botId == null || StrUtil.isBlank(botKey)) {
+            log.error("botId/botKey为空");
+            return false;
         }
-
-        return pool.getLessUsedItem(count);
-    }
-
-    @Override
-    public Integer importFromExcel(String fileBotConfigPath) throws SQLException {
-        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
-
-        List<Map<String, Object>> headerList = ExcelReadUtil.readExcelToMap(proxyFilePath);
-
-        log.info("文件解析成功, 共[{}]个", headerList.size());
-        return importFromRaw(headerList);
-    }
-
-    @Override
-    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
-
-        List<BrowserEnv> list = rawLines.stream().map(map -> {
-            Object userAgent = map.remove(USER_AGENT_KEY);
-            if (userAgent == null) {
-                return null;
-            }
-
-            BrowserEnv browserEnv = new BrowserEnv();
-            browserEnv.setUserAgent((String) userAgent);
-            browserEnv.setOtherHeader(map);
-            return browserEnv;
-        }).filter(Objects::nonNull).toList();
-
-        return insertOrUpdateBatch(list);
-    }
-
-    @Override
-    public BrowserEnv queryByIdRPC(Serializable id) {
-        return super.queryById(id);
-    }
-
-    @Override
-    public PageResult<BrowserEnv> conditionPageQueryRPC(int page, int limit, Map<String, Object> filterMap)
-        throws SQLException {
-        return super.conditionPageQuery(page, limit, filterMap);
-    }
-}
-package cn.com.vortexa.bot_platform.service.impl;
-
-import cn.com.vortexa.db_layer.service.IDiscordAccountService;
-import cn.com.vortexa.rpc.IDiscordAccountRPC;
-import cn.com.vortexa.rpc.anno.RPCConsumer;
-import cn.com.vortexa.common.config.SystemConfig;
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.excel.ExcelReadUtil;
-import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.DiscordAccount;
-import cn.com.vortexa.db_layer.mapper.DiscordAccountMapper;
-import cn.com.vortexa.rpc.constants.BotPlatFromRCCode;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-
-import java.io.Serializable;
-import java.sql.SQLException;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
- */
-@Slf4j
-@Service
-public class DiscordAccountServiceImpl extends AbstractBaseService<DiscordAccountMapper, DiscordAccount> implements
-    IDiscordAccountRPC, IDiscordAccountService {
-
-    public DiscordAccountServiceImpl() {
-        super(discordAccount -> {
-            discordAccount.setInsertDatetime(LocalDateTime.now());
-            discordAccount.setUpdateDatetime(LocalDateTime.now());
-            discordAccount.setIsValid(1);
-        });
-    }
-
-
-
-
-    public Result saveDiscordAccounts(List<Map<String, Object>> rawLines) {
-        if (rawLines == null || rawLines.isEmpty()) {
-            return Result.fail("导入数据不能为空");
-        }
-
         try {
-            importFromRaw(rawLines);
-            return Result.ok();
+            getBaseMapper().createIfTableNotExist(botId, botKey);
+            return true;
         } catch (Exception e) {
-            return Result.fail("导入discord账号失败," + e.getMessage());
-        }
-    }
-
-    @Override
-    public Integer importFromExcel(String fileBotConfigPath) {
-        String dirResourcePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
-
-        try {
-            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(dirResourcePath);
-
-            return importFromRaw(rawLines);
-        } catch (Exception e) {
-            log.error("读取discord account 文件[{}]发生异常", dirResourcePath, e);
-            return 0;
-        }
-    }
-
-    @Override
-    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
-        List<DiscordAccount> discordAccounts = rawLines.stream().map(map -> DiscordAccount.builder()
-                .username(autoCast(map.remove("username")))
-                .password(autoCast(map.remove("password")))
-                .bindEmail(autoCast(map.remove("bind_email")))
-                .bindEmailPassword(autoCast(map.remove("bind_email_password")))
-                .token(autoCast(map.remove("token")))
-                .params(map)
-                .build()
-        ).toList();
-
-        return insertOrUpdateBatch(discordAccounts);
-    }
-
-    @Override
-    public DiscordAccount queryByIdRPC(Serializable id) {
-        return super.queryById(id);
-    }
-
-    @Override
-    public PageResult<DiscordAccount> conditionPageQueryRPC(int page, int limit, Map<String, Object> filterMap)
-        throws SQLException {
-        return super.conditionPageQuery(page, limit, filterMap);
-    }
-}
-package cn.com.vortexa.bot_platform.service.impl;
-
-import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.common.entity.ProjectInfo;
-import cn.com.vortexa.db_layer.mapper.ProjectInfoMapper;
-import cn.com.vortexa.db_layer.service.IProjectInfoService;
-import org.springframework.stereotype.Service;
-
-import java.time.LocalDateTime;
-
-/**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-07
- */
-@Service
-public class ProjectInfoServiceImpl extends AbstractBaseService<ProjectInfoMapper, ProjectInfo> implements
-    IProjectInfoService {
-
-    public ProjectInfoServiceImpl() {
-        super(projectInfo -> {
-            projectInfo.setInsertDatetime(LocalDateTime.now());
-            projectInfo.setUpdateDatetime(LocalDateTime.now());
-            projectInfo.setIsValid(1);
-        });
-    }
-
-}
-package cn.com.vortexa.bot_platform.service.impl;
-
-import cn.com.vortexa.db_layer.service.IProxyInfoService;
-import cn.com.vortexa.rpc.IProxyInfoRPC;
-import cn.com.vortexa.rpc.anno.RPCConsumer;
-import cn.com.vortexa.common.config.SystemConfig;
-import cn.com.vortexa.common.constants.ProxyProtocol;
-import cn.com.vortexa.common.constants.ProxyType;
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.excel.ExcelReadUtil;
-import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.ProxyInfo;
-import cn.com.vortexa.db_layer.mapper.ProxyInfoMapper;
-import cn.com.vortexa.rpc.constants.BotPlatFromRCCode;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-
-import java.io.Serializable;
-import java.sql.SQLException;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- *  服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
- */
-@Slf4j
-@Service
-public class ProxyInfoServiceImpl extends AbstractBaseService<ProxyInfoMapper, ProxyInfo> implements IProxyInfoRPC,IProxyInfoService {
-
-
-    public ProxyInfoServiceImpl() {
-        super(proxyInfo -> {
-            proxyInfo.setInsertDatetime(LocalDateTime.now());
-            proxyInfo.setUpdateDatetime(LocalDateTime.now());
-            proxyInfo.setIsValid(1);
-        });
-
-    }
-
-
-    @Override
-    public Result saveProxyInfos(List<Map<String, Object>> rawLines) {
-        if (rawLines == null || rawLines.isEmpty()) {
-            return Result.fail("导入数据不能为空");
-        }
-
-        try {
-            importFromRaw(rawLines);
-            return Result.ok();
-        } catch (Exception e) {
-            log.error("saveProxyInfos error", e);
-            return Result.fail("导入代理信息失败," + e.getMessage());
-        }
-    }
-
-    @Override
-    public Integer importFromExcel(String botConfigPath) {
-        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, botConfigPath);
-
-        int total = 0;
-
-        try {
-            List<Map<String, Object>> staticProxies = ExcelReadUtil.readExcelToMap(proxyFilePath, "static");
-
-            total += importFromRaw(staticProxies);
-
-            List<Map<String, Object>> dynamicProxies = ExcelReadUtil.readExcelToMap(proxyFilePath, "dynamic");
-
-            total += importFromRaw(dynamicProxies);
-
-            log.info("代理配置文件解析成功，static-proxy:[{}], dynamic-proxy:[{}]", staticProxies.size(), dynamicProxies.size());
-
-            return total;
-        } catch (Exception e) {
-            log.error("解析代理配置文件[{}]错误", proxyFilePath, e);
-
-            return 0;
-        }
-    }
-
-    @Override
-    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
-
-        List<ProxyInfo> list = rawLines.stream().map(map -> {
-            String proxyProtocol = autoCast(map.remove("proxy_protocol"));
-            if (proxyProtocol == null) proxyProtocol = autoCast(map.remove("proxyProtocol"));
-
-            Object port = map.remove("port");
-            return ProxyInfo.builder()
-                    .proxyType(ProxyType.STATIC)
-                    .host(autoCast(map.remove("host")))
-                    .port(port instanceof Integer ? (Integer) port : Integer.parseInt(autoCast(port)))
-                    .proxyProtocol(ProxyProtocol.valueOf(proxyProtocol.toUpperCase()))
-                    .username(autoCast(map.remove("username")))
-                    .password(autoCast(map.remove("password")))
-                    .params(map)
-                    .build();
-        }).toList();
-
-        return insertOrUpdateBatch(list);
-    }
-
-    @Override
-    public ProxyInfo queryByIdRPC(Serializable id) {
-        return super.queryById(id);
-    }
-
-    @Override
-    public PageResult<ProxyInfo> conditionPageQueryRPC(int page, int limit, Map<String, Object> filterMap)
-        throws SQLException {
-        return super.conditionPageQuery(page, limit, filterMap);
-    }
-}
-package cn.com.vortexa.bot_platform.service.impl;
-
-import cn.com.vortexa.db_layer.service.ITelegramAccountService;
-import cn.com.vortexa.rpc.ITelegramAccountRPC;
-import cn.com.vortexa.rpc.anno.RPCConsumer;
-import cn.com.vortexa.common.config.SystemConfig;
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.excel.ExcelReadUtil;
-import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.TelegramAccount;
-import cn.com.vortexa.db_layer.mapper.TelegramAccountMapper;
-import cn.com.vortexa.rpc.constants.BotPlatFromRCCode;
-import lombok.extern.slf4j.Slf4j;
-
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.core.convert.ConversionService;
-import org.springframework.stereotype.Service;
-
-import java.io.Serializable;
-import java.sql.SQLException;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-06
- */
-@Slf4j
-@Service
-public class TelegramAccountServiceImpl extends AbstractBaseService<TelegramAccountMapper, TelegramAccount> implements
-    ITelegramAccountRPC, ITelegramAccountService {
-
-    private final ConversionService conversionService;
-
-    public TelegramAccountServiceImpl(
-        @Qualifier("conversionService") ConversionService conversionService) {
-        super(telegramAccount -> {
-            telegramAccount.setInsertDatetime(LocalDateTime.now());
-            telegramAccount.setUpdateDatetime(LocalDateTime.now());
-            telegramAccount.setIsValid(1);
-        });
-        this.conversionService = conversionService;
-    }
-
-
-
-    @Override
-    public Result saveTelegrams(List<Map<String, Object>> rawLines) {
-        if (rawLines == null || rawLines.isEmpty()) {
-            return Result.fail("导入数据不能为空");
-        }
-
-        try {
-            importFromRaw(rawLines);
-            return Result.ok();
-        } catch (Exception e) {
-            return Result.fail("导入telegram账号失败," + e.getMessage());
+            throw new SQLException("check and create sharded table[%s]-[%s] error".formatted(botId, botKey), e);
         }
     }
 
     @Override
     public Integer importFromExcel(String fileBotConfigPath) throws SQLException {
-        String dirResourcePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
-
-        try {
-            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(dirResourcePath);
-
-            return importFromRaw(rawLines);
-        } catch (Exception e) {
-            log.error("读取telegram account 文件[{}]发生异常", dirResourcePath, e);
-            return 0;
-        }
-    }
-
-    @Override
-    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
-        List<TelegramAccount> telegramAccounts = rawLines.stream().map(map -> TelegramAccount.builder()
-            .username(autoCast(map.remove("username")))
-            .password(autoCast(map.remove("password")))
-            .phonePrefix(autoCast(map.remove("phone_prefix")))
-            .phone(autoCast(map.remove("phone")))
-            .token(autoCast(map.remove("token")))
-            .params(map)
-            .build()
-        ).toList();
-
-        return insertOrUpdateBatch(telegramAccounts);
-    }
-
-    @Override
-    public TelegramAccount queryByIdRPC(Serializable id) {
-        return queryById(id);
-    }
-
-    @Override
-    public PageResult<TelegramAccount> conditionPageQueryRPC(int page, int limit, Map<String, Object> filterMap)
-        throws SQLException {
-        return super.conditionPageQuery(page, limit, filterMap);
-    }
-}
-package cn.com.vortexa.bot_platform.service.impl;
-
-import cn.com.vortexa.db_layer.service.ITwitterAccountService;
-import cn.com.vortexa.rpc.ITwitterAccountRPC;
-import cn.com.vortexa.common.config.SystemConfig;
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.excel.ExcelReadUtil;
-import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.TwitterAccount;
-import cn.com.vortexa.db_layer.mapper.TwitterAccountMapper;
-import lombok.extern.slf4j.Slf4j;
-
-import org.springframework.stereotype.Service;
-
-import java.io.Serializable;
-import java.sql.SQLException;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
- */
-@Slf4j
-@Service
-public class TwitterAccountServiceImpl extends AbstractBaseService<TwitterAccountMapper, TwitterAccount>
-    implements ITwitterAccountRPC, ITwitterAccountService {
-
-    public TwitterAccountServiceImpl() {
-        super(twitterAccount -> {
-            twitterAccount.setInsertDatetime(LocalDateTime.now());
-            twitterAccount.setUpdateDatetime(LocalDateTime.now());
-            twitterAccount.setIsValid(1);
-        });
-    }
-
-    @Override
-    public TwitterAccount queryByIdRPC(Serializable id) {
-        return super.queryById(id);
-    }
-
-    @Override
-    public PageResult<TwitterAccount> conditionPageQueryRPC(int page, int limit, Map<String, Object> filterMap)
-        throws SQLException {
-        return super.conditionPageQuery(page, limit, filterMap);
-    }
-
-    @Override
-    public Result saveTwitters(List<Map<String, Object>> rawLines) {
-        if (rawLines == null || rawLines.isEmpty()) {
-            return Result.fail("导入数据不能为空");
-        }
-
-        try {
-            importFromRaw(rawLines);
-            return Result.ok();
-        } catch (Exception e) {
-            return Result.fail("导入twitter 账号失败," + e.getMessage());
-        }
-    }
-
-    @Override
-    public Integer importFromExcel(String fileBotConfigPath) throws SQLException {
-        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_BOT_PATH, fileBotConfigPath);
+        String proxyFilePath = FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_APP_PATH, fileBotConfigPath);
 
         try {
             List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(proxyFilePath);
@@ -848,1592 +2308,210 @@ public class TwitterAccountServiceImpl extends AbstractBaseService<TwitterAccoun
 
     @Override
     public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
-        List<TwitterAccount> twitterAccounts = rawLines.stream().map(map -> TwitterAccount.builder()
-            .username(autoCast(map.remove("username")))
-            .password(autoCast(map.remove("password")))
-            .email(autoCast(map.remove("email")))
-            .emailPassword(autoCast(map.remove("email_password")))
-            .token(autoCast(map.remove("token")))
-            .f2aKey(autoCast(map.remove("f2a_key")))
-            .params(map)
-            .build()).toList();
+        List<AccountContext> accountContexts = rawLines.stream().map(map -> AccountContext.builder()
+                .botId(AutoBotConfig.BOT_ID)
+                .botKey(botConfig.getBotKey())
+                .accountBaseInfoId(toInteger(map.remove("account_base_info_id")))
+                .twitterId(toInteger(map.remove("twitter_id")))
+                .discordId(toInteger(map.remove("discord_id")))
+                .proxyId(toInteger((map.remove("proxy_id"))))
+                .browserEnvId(toInteger(map.remove("browser_env_id")))
+                .telegramId(toInteger(map.remove("telegram_id")))
+                .walletId(toInteger(map.remove("wallet_id")))
+                .params(map)
+                .build()
+        ).toList();
 
-        return insertOrUpdateBatch(twitterAccounts);
-    }
-}
-package cn.com.vortexa.bot_platform.service.rpc;
+        // 没设置代理的根据配置填充代理
+//            tryFillProxy(accountContexts, proxyRepeat, proxyType);
 
-import org.springframework.stereotype.Service;
+        // 没设置浏览器环境的根据设置填充环境
+        tryFillBrowserEnv(accountContexts);
 
-@Service
-public class BotAccountContextServiceRPC{
-
-}
-package cn.com.vortexa.bot_platform.service.rpc;
-
-import org.springframework.stereotype.Service;
-
-@Service
-public class RewordInfoServiceRPC  {
-
-}
-
-spring:
-  datasource:
-    url: "jdbc:sqlite://Users/helei/develop/ideaworkspace/BotFramework/botData/db/plantfrom.db"
-
-dubbo:
-  application:
-    name: bot-platform
-    logger: slf4j
-  registry:
-#    id: zk-registry
-#    address: zookeeper://127.0.0.1:2181
-    id: nacos-registry
-    address: nacos://localhost:8848
-
-mybatis-plus:
-  configuration:
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
-    cache-enabled: true
-    map-underscore-to-camel-case: false
-  global-config:
-    db-config:
-      logic-delete-field: isValid  # 全局逻辑删除的实体字段名(since 3.3.0,配置后可以忽略不配置步骤2)
-      logic-delete-value: 0    # 设置 1 为未删除
-      logic-not-delete-value: 1 # 设置 0 为已删除
-  mapper-locations: classpath:/mapper/*.xml
-
-logging:
-  level:
-    org:
-      apache:
-        dubbo: WARN
-        zookeeper: WARN
-server:
-  port: 10010
-
-
-vortexa:
-  nameserver:
-    server: # 命名服务 配置
-      nio-thread-count: 1 # netty nio 线程数
-      service-offline-ttl: 120  # 服务下线时间
-      service-instance:
-        host: localhost # 命名服务host
-        port: 18848 # 命名服务port
-        group: test1
-        service-id: nameserver
-        instance-id: nameserver-1
-
-package cn.com.vortexa.common.util;
-
-import cn.com.vortexa.common.config.SystemConfig;
-import org.yaml.snakeyaml.Yaml;
-
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
-public class YamlConfigLoadUtil {
-
-    private static final ConcurrentHashMap<String, Object> LOADED_CONFIG_MAP = new ConcurrentHashMap<>();
-
-    public static <T> T load(
-            String path,
-            String fileName,
-            String prefix,
-            Class<T> clazz
-    ) {
-        return load(
-                Arrays.asList(path.split("\\.")),
-                fileName,
-                Arrays.asList(prefix.split("\\.")),
-                clazz
-        );
-    }
-
-
-    public static <T> T load(
-            List<String> path,
-            String fileName,
-            List<String> prefixList,
-            Class<T> clazz
-    ) {
-        String dirResourcePath = FileUtil.getConfigDirResourcePath(path, fileName);
-
-        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
-            if (config == null) {
-                Yaml yaml = new Yaml();
-                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
-                    Map<String, Object> yamlData = yaml.load(inputStream);
-
-                    if (prefixList != null) {
-                        for (String prefix : prefixList) {
-                            yamlData = (Map<String, Object>) yamlData.get(prefix);
-                            Map<String, Object> target = new HashMap<>();
-                            for (Map.Entry<String, Object> entry : yamlData.entrySet()) {
-                                target.put(toCamelCase(entry.getKey()), entry.getValue());
-                            }
-                            yamlData = target;
-                        }
-                    }
-
-                    config = yaml.loadAs(yaml.dump(yamlData), clazz);
-                } catch (IOException e) {
-                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
-                }
-            }
-
-            return config;
-        });
-
-        return (T) compute;
-    }
-
-    public static List<Object> load(List<String> configDirBotPath, String fileName, String prefix) {
-        return load(configDirBotPath, fileName, List.of(prefix.split("\\.")));
-    }
-
-    public static List<Object> load(
-            List<String> path,
-            String fileName,
-            List<String> prefixList
-    ) {
-        String dirResourcePath = FileUtil.getConfigDirResourcePath(path, fileName);
-
-        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
-            if (config == null) {
-                Yaml yaml = new Yaml();
-                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
-                    Map<String, Object> yamlData = yaml.load(inputStream);
-
-                    if (prefixList != null) {
-                        for (String prefix : prefixList) {
-                            yamlData = (Map<String, Object>) yamlData.get(prefix);
-                            Map<String, Object> target = new HashMap<>();
-                            for (Map.Entry<String, Object> entry : yamlData.entrySet()) {
-                                target.put(toCamelCase(entry.getKey()), entry.getValue());
-                            }
-                            yamlData = target;
-                        }
-                    }
-                    return yamlData.get("list");
-                } catch (IOException e) {
-                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
-                }
-            }
-
-            return config;
-        });
-
-        return (List<Object>) compute;
-    }
-
-
-    public static <T> T load(File path, List<String> prefixList, Class<T> tClass) {
-        Object compute = LOADED_CONFIG_MAP.compute(path.getAbsolutePath(), (k, config) -> {
-            if (config == null) {
-                Yaml yaml = new Yaml();
-                try (InputStream inputStream = new FileInputStream(path)) {
-                    Map<String, Object> yamlData = yaml.load(inputStream);
-
-                    if (prefixList != null) {
-                        for (String prefix : prefixList) {
-                            yamlData = (Map<String, Object>) yamlData.get(prefix);
-                            Map<String, Object> target = new HashMap<>();
-                            for (Map.Entry<String, Object> entry : yamlData.entrySet()) {
-                                target.put(toCamelCase(entry.getKey()), entry.getValue());
-                            }
-                            yamlData = target;
-                        }
-                    }
-
-                    return yaml.loadAs(yaml.dump(yamlData), tClass);
-                } catch (IOException e) {
-                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", path), e);
-                }
-            }
-            return config;
-        });
-
-        return (T) compute;
-    }
-
-    private static String toCamelCase(String name) {
-        String[] parts = name.split("-");
-        StringBuilder camelCase = new StringBuilder(parts[0]);
-        for (int i = 1; i < parts.length; i++) {
-            camelCase.append(parts[i].substring(0, 1).toUpperCase()).append(parts[i].substring(1));
-        }
-        return camelCase.toString();
-    }
-
-    public static void main(String[] args) {
-        System.out.println(YamlConfigLoadUtil.load(SystemConfig.CONFIG_DIR_BOT_PATH, "browser-env.yaml", List.of("bot", "browser")));
-    }
-
-}
-package cn.com.vortexa.db_layer.service;
-
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.common.util.ConditionBuildUtil;
-import cn.com.vortexa.db_layer.mapper.IBaseMapper;
-import cn.com.vortexa.db_layer.util.ConditionQueryUtil;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.github.pagehelper.PageInfo;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.transaction.annotation.Transactional;
-
-import java.io.Serializable;
-import java.lang.reflect.InvocationTargetException;
-import java.sql.SQLException;
-import java.util.List;
-import java.util.Map;
-import java.util.function.Consumer;
-
-@Slf4j
-public abstract class AbstractBaseService<M extends IBaseMapper<T>, T> extends ServiceImpl<M, T> implements IBaseService<T> {
-
-    private final Consumer<T> fillFunction;
-
-    protected AbstractBaseService(Consumer<T> fillFunction) {
-        this.fillFunction = fillFunction;
-    }
-
-    @Override
-    public T queryById(Serializable id) {
-        return getById(id);
+        return insertOrUpdateBatch(accountContexts);
     }
 
     /**
-     * 插入或更新
+     * 填充浏览器环境
      *
-     * @param t t
-     * @return Integer
+     * @param accountContexts accountContexts
      */
-    @Override
-    public Integer insertOrUpdate(T t) throws SQLException {
-        fillFunction.accept(t);
-        return getBaseMapper().insertOrUpdate(t);
-    }
-
-
-    /**
-     * 批量插入或更新
-     *
-     * @param tList tList
-     * @return Integer
-     */
-    @Override
-    public Integer insertOrUpdateBatch(List<T> tList) throws SQLException {
-        int successCount = 0;
-        for (T t : tList) {
-            try {
-                Integer count = insertOrUpdate(t);
-                successCount += count == null ? 0 : count;
-            } catch (Exception e) {
-                throw new SQLException("insert or update error", e);
-            }
-        }
-
-        return successCount;
-    }
-
-    /**
-     * 条件分页查询
-     *
-     * @param page      page
-     * @param limit     limit
-     * @param filterMap filterMap
-     * @return PageInfo<T>
-     * @throws SQLException SQLException
-     */
-    @Override
-    public PageResult<T> conditionPageQuery(
-            int page,
-            int limit,
-            Map<String, Object> filterMap
-    ) throws SQLException {
-        return conditionPageQuery(page, limit, "params", filterMap);
-    }
-
-
-    /**
-     * 条件分页查询
-     *
-     * @param page      page
-     * @param limit     limit
-     * @param paramsKey paramsKey
-     * @param filterMap filterMap
-     * @return PageInfo<T>
-     * @throws SQLException SQLException
-     */
-    @Override
-    public PageResult<T> conditionPageQuery(
-            int page,
-            int limit,
-            String paramsKey,
-            Map<String, Object> filterMap
-    ) throws SQLException {
+    private void tryFillBrowserEnv(List<AccountContext> accountContexts) {
+        // Step 1 RPC 请求获取浏览器环境
+        List<BrowserEnv> allBrowser = null;
         try {
-            PageInfo<T> pageInfo = ConditionQueryUtil.conditionQuery(
-                    page,
-                    limit,
-                    filterMap,
-                    paramsKey,
-                    condition -> getBaseMapper().multipleConditionQuery(condition),
-                    entityClass
-            );
-            List<T> list = pageInfo.getList();
-            PageResult<T> pageResult = new PageResult<>();
-            pageResult.setPages(pageInfo.getPages());
-            pageResult.setPageNum(pageInfo.getPageNum());
-            pageResult.setPageSize(pageInfo.getPageSize());
-            pageResult.setTotal(pageInfo.getTotal());
-            pageResult.setList(list);
-            return pageResult;
-        } catch (InvocationTargetException | NoSuchMethodException | InstantiationException |
-                 IllegalAccessException e
-        ) {
-            throw new SQLException("condition query error", e);
-        }
-    }
-
-    @Override
-    public List<T> conditionQuery(Map<String, Object> filterMap) throws SQLException {
-        return conditionQuery("params", filterMap);
-    }
-
-    @Override
-    public List<T> conditionQuery(String paramsKey, Map<String, Object> filterMap) throws SQLException {
-        T condition = null;
-        try {
-            condition = ConditionBuildUtil.getMapContainsCondition(
-                    filterMap,
-                    paramsKey,
-                    entityClass
-            );
-        } catch (NoSuchMethodException | InvocationTargetException | InstantiationException |
-                 IllegalAccessException e) {
-            throw new SQLException(e);
-        }
-
-        return getBaseMapper().multipleConditionQuery(condition);
-    }
-
-    /**
-     * 删除
-     *
-     * @param ids ids
-     * @return Result
-     */
-    @Transactional
-    public Boolean delete(List<Integer> ids) {
-        return removeBatchByIds(ids);
-    }
-
-
-    protected <T> T autoCast(Object obj) {
-        return obj == null ? null : (T) obj;
-    }
-
-    protected Integer toInteger(Object obj) {
-        return obj == null ? null : Integer.valueOf(obj.toString());
-    }
-}
-package cn.com.vortexa.db_layer.service;
-
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.AccountBaseInfo;
-
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- *  服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
- */
-public interface IAccountBaseInfoService extends IBaseService<AccountBaseInfo>, ImportService {
-
-    Result saveAccountBaseInfos(List<Map<String, Object>> rawLines);
-
-    Result queryTypedInfo();
-}
-package cn.com.vortexa.db_layer.service;
-
-
-import cn.com.vortexa.common.dto.PageResult;
-
-import java.io.Serializable;
-import java.sql.SQLException;
-import java.util.List;
-import java.util.Map;
-
-public interface IBaseService<T> {
-    Integer insertOrUpdate(T t) throws SQLException;
-
-    Integer insertOrUpdateBatch(List<T> tList) throws SQLException;
-
-    PageResult<T> conditionPageQuery(int page, int limit, String params, Map<String, Object> filterMap) throws SQLException;
-
-    PageResult<T> conditionPageQuery(int page, int limit, Map<String, Object> filterMap) throws SQLException;
-
-    List<T> conditionQuery(Map<String, Object> filterMap) throws SQLException;
-
-    List<T> conditionQuery(String params, Map<String, Object> filterMap) throws SQLException;
-
-    T queryById(Serializable id);
-
-    Boolean delete(List<Integer> ids);
-}
-package cn.com.vortexa.db_layer.service;
-
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.BotInfo;
-
-import java.util.List;
-
-/**
- * <p>
- * 服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-07
- */
-public interface IBotInfoService extends IBaseService<BotInfo> {
-
-    Result bindBotAccountBaseInfo(Integer botId, String botKey, List<Integer> bindAccountBaseInfoList);
-
-}
-package cn.com.vortexa.db_layer.service;
-
-import cn.com.vortexa.common.entity.BotInstance;
-
-/**
- * <p>
- * 服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-18
- */
-public interface IBotInstanceService extends IBaseService<BotInstance> {
-
-    Boolean existsBotInstance(BotInstance query);
-}
-package cn.com.vortexa.db_layer.service;
-
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.BrowserEnv;
-
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- * 服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
- */
-public interface IBrowserEnvService extends IBaseService<BrowserEnv>, ImportService {
-
-    Result saveBrowserEnvs(List<Map<String, Object>> rawLines);
-
-    List<BrowserEnv> getUselessBrowserEnv(int count);
-}
-package cn.com.vortexa.db_layer.service;
-
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.DiscordAccount;
-
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- *  服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
- */
-public interface IDiscordAccountService extends IBaseService<DiscordAccount>, ImportService {
-
-    Result saveDiscordAccounts(List<Map<String, Object>> rawLines);
-
-}
-package cn.com.vortexa.db_layer.service;
-
-import cn.com.vortexa.common.entity.ProjectInfo;
-
-/**
- * <p>
- * 服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-07
- */
-public interface IProjectInfoService extends IBaseService<ProjectInfo> {
-
-}
-package cn.com.vortexa.db_layer.service;
-
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.ProxyInfo;
-
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- * 服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
- */
-public interface IProxyInfoService extends IBaseService<ProxyInfo>, ImportService {
-
-    Result saveProxyInfos(List<Map<String, Object>> rawLines);
-
-}
-package cn.com.vortexa.db_layer.service;
-
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.TelegramAccount;
-
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- * 服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-06
- */
-public interface ITelegramAccountService extends IBaseService<TelegramAccount>, ImportService {
-
-    Result saveTelegrams(List<Map<String, Object>> rawLines);
-}
-package cn.com.vortexa.db_layer.service;
-
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.TwitterAccount;
-
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- *  服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
- */
-public interface ITwitterAccountService extends IBaseService<TwitterAccount>, ImportService {
-
-    Result saveTwitters(List<Map<String, Object>> rawLines);
-
-}
-package cn.com.vortexa.nameserver.constant;
-
-public class RemotingCommandFlagConstants {
-
-    public static final String REQUEST_ERROR = "request_error";
-
-    /**
-     * 超时异常
-     */
-    public static final int TIME_OUT_EXCEPTION = 501;
-
-    /**
-     * 参数解析异常
-     */
-    public static final int PARAMS_ERROR = 502;
-
-    /**
-     * ping
-     */
-    public static final int PING = 100;
-
-    /**
-     * pong
-     */
-    public static final int PONG = -100;
-
-    /**
-     *  客户端服务注册的消息
-     */
-    public static final int CLIENT_REGISTRY_SERVICE = 200;
-
-    /**
-     *  客户端服务注册的响应
-     */
-    public static final int CLIENT_REGISTRY_SERVICE_RESPONSE = -200;
-
-    /**
-     * 客户端服务发现的消息
-     */
-    public static final int CLIENT_DISCOVER_SERVICE = 201;
-
-    /**
-     * 客户端服务发现的响应
-     */
-    public static final int CLIENT_DISCOVER_SERVICE_RESPONSE = -201;
-
-
-    public static final int CUSTOM_COMMAND = 300;   // 自定义命令
-    public static final int CUSTOM_COMMAND_RESPONSE = -300;  // 自定义命令响应
-
-}
-package cn.com.vortexa.nameserver.dto;
-
-import lombok.Data;
-
-import java.lang.reflect.Type;
-import java.util.List;
-
-/**
- * @author h30069248
- * @since 2025/3/21 11:25
- */
-@Data
-public class RPCMethod {
-
-    private String interfaceClassReference;
-
-    private String methodName;
-
-    private List<String> typeName;
-}
-package cn.com.vortexa.nameserver.processor;
-
-import cn.com.vortexa.nameserver.constant.RemotingCommandCodeConstants;
-import cn.com.vortexa.nameserver.dto.RemotingCommand;
-import cn.com.vortexa.nameserver.dto.RequestHandleResult;
-import cn.com.vortexa.nameserver.exception.CustomCommandException;
-import cn.com.vortexa.nameserver.handler.CustomRequestHandler;
-import cn.com.vortexa.nameserver.protocol.Serializer;
-import cn.hutool.core.util.StrUtil;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-
-/**
- * @author helei
- * @since 2025/3/20 11:02
- */
-@Slf4j
-public class CustomCommandProcessor {
-
-    private final ConcurrentMap<String, CustomRequestHandler> customCMDHandlerMap = new ConcurrentHashMap<>();
-
-    /**
-     * 添加自定义命令处理器
-     *
-     * @param commandKey commandKey
-     * @param customRequestHandler customRequestHandler
-     * @throws CustomCommandException CustomCommandException
-     */
-    public void addCustomCommandHandler(String commandKey, CustomRequestHandler customRequestHandler)
-            throws CustomCommandException {
-        if (!checkCommandKey(commandKey)) {
-            throw new CustomCommandException("illegal command key " + commandKey);
-        }
-
-        if (customCMDHandlerMap.putIfAbsent(commandKey, customRequestHandler) != null) {
-            throw new CustomCommandException("command [%s] exist".formatted(commandKey));
-        } else {
-            log.info("custom command [{}] added", commandKey);
-        }
-    }
-
-    /**
-     * 运行自定义命令处理器
-     *
-     * @param request request
-     * @return RemotingCommand
-     */
-    public RemotingCommand tryInvokeCustomCommandHandler(RemotingCommand request) throws CustomCommandException {
-        CustomRequestHandler handler = customCMDHandlerMap.get(request.getFlag());
-
-        if (handler == null) {
-            throw new CustomCommandException("custom request[%s] didn't exist".formatted(request.getFlag()));
-        }
-
-        RemotingCommand response = new RemotingCommand();
-        response.setTransactionId(request.getTransactionId());
-        response.setFlag(-1 * request.getFlag());
-
-        // 执行注册的回调方法
-        RequestHandleResult result = handler.handlerRequest(request);
-
-        if (result == null || !result.getSuccess()) {
-            response.setCode(RemotingCommandCodeConstants.FAIL);
-        } else {
-            response.setCode(RemotingCommandCodeConstants.SUCCESS);
-            response.setBody(
-                    Serializer.Algorithm.Protostuff.serialize(result.getData())
-            );
-        }
-
-        return response;
-    }
-
-    /**
-     * 检查命令flag
-     *
-     * @param commandKey commandKey
-     * @return boolean
-     */
-    private static boolean checkCommandKey(String commandKey) {
-        return StrUtil.isBlank(commandKey);
-    }
-}
-package cn.com.vortexa.nameserver.config;
-
-
-import cn.com.vortexa.common.util.YamlConfigLoadUtil;
-import cn.com.vortexa.nameserver.dto.ServiceInstance;
-import lombok.Data;
-
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.net.URL;
-import java.util.List;
-
-/**
- * @author helei
- * @since 2025-03-15
- */
-@Data
-public class NameserverClientConfig {
-
-    private static final String RESOURCE_PATH = "nameserver-client-config.yaml";
-
-    private static final String PREFIX_PATH = "cn.com.vortexa.nameserver.client";
-
-    private volatile static NameserverClientConfig INSTANCE;
-
-    public static NameserverClientConfig defaultConfig() throws FileNotFoundException {
-        return loadConfig("nameserver-client-config.yaml", PREFIX_PATH);
-    }
-
-    public static NameserverClientConfig loadConfig(String fileName, String prefix) throws FileNotFoundException {
-        if (INSTANCE == null) {
-            synchronized (NameserverClientConfig.class) {
-                if (INSTANCE == null) {
-                    URL resource = NameserverClientConfig.class.getClassLoader().getResource(fileName);
-                    if (resource != null) {
-                        String file = resource.getFile();
-                        INSTANCE = YamlConfigLoadUtil.load(
-                            new File(file),
-                            List.of(prefix.split("\\.")),
-                            NameserverClientConfig.class
-                        );
-                    } else {
-                        throw new FileNotFoundException("config file not found");
-                    }
-                }
+            PageResult<BrowserEnv> pageResult = browserEnvRPC.conditionPageQueryRPC(1, accountContexts.size(), null);
+            if (pageResult != null) {
+                allBrowser = pageResult.getList();
             }
-        }
-        return INSTANCE;
-    }
-
-
-    /**
-     * 注册中心地址
-     */
-    private String registryCenterUrl;
-
-    /**
-     * netty nio 线程数
-     */
-    private Integer nioThreadCount = 1;
-
-    /**
-     * 服务地址
-     */
-    private ServiceInstance serviceInstance;
-
-    /**
-     * 下线时间
-     */
-    private Integer serviceOfflineTtl;
-
-    private static String toCamelCase(String name) {
-        String[] parts = name.split("-");
-        StringBuilder camelCase = new StringBuilder(parts[0]);
-        for (int i = 1; i < parts.length; i++) {
-            camelCase.append(parts[i].substring(0, 1).toUpperCase()).append(parts[i].substring(1));
-        }
-        return camelCase.toString();
-    }
-}
-package cn.com.vortexa.nameserver.processor;
-
-import cn.com.vortexa.nameserver.NameserverClient;
-import cn.com.vortexa.nameserver.config.NameserverClientConfig;
-import cn.com.vortexa.nameserver.constant.RemotingCommandFlagConstants;
-import cn.com.vortexa.nameserver.dto.RemotingCommand;
-import cn.com.vortexa.nameserver.exception.CustomCommandException;
-import cn.com.vortexa.nameserver.util.DistributeIdMaker;
-import cn.com.vortexa.websocket.netty.handler.AbstractWebSocketClientHandler;
-import cn.com.vortexa.websocket.netty.constants.NettyConstants;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandlerContext;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.concurrent.CompletableFuture;
-
-/**
- * @author helei
- * @since 2025-03-13
- */
-@Slf4j
-public class NameClientProcessorAdaptor extends AbstractWebSocketClientHandler<RemotingCommand> {
-
-    @Setter
-    private NameserverClient nameserverClient;
-
-    @Getter
-    private final NameserverClientConfig clientConfig;
-
-    public NameClientProcessorAdaptor(NameserverClientConfig clientConfig) {
-        this.clientConfig = clientConfig;
-    }
-
-    @Override
-    protected void handlerMessage(ChannelHandlerContext ctx, RemotingCommand remotingCommand) {
-        Integer opt = remotingCommand.getFlag();
-        String txId = remotingCommand.getTransactionId();
-
-        Channel channel = ctx.channel();
-        String key = channel.attr(NettyConstants.CLIENT_NAME).get();
-        log.debug("receive client[{}] command [{}]", key, remotingCommand);
-
-        CompletableFuture.supplyAsync(() -> switch (opt) {
-                case RemotingCommandFlagConstants.PING -> this.handlerPing(remotingCommand);
-                case RemotingCommandFlagConstants.PONG -> this.handlerPong(remotingCommand);
-                case RemotingCommandFlagConstants.CUSTOM_COMMAND -> this.handlerCustomCommand(remotingCommand);
-                case RemotingCommandFlagConstants.CUSTOM_COMMAND_RESPONSE ->
-                    this.handlerCustomCommandResponse(remotingCommand);
-                default -> {
-                    try {
-                        yield nameserverClient.tryResolveCustomRequest(remotingCommand);
-                    } catch (Exception e) {
-                        throw new RuntimeException("resolve custom request[%s] error ".formatted(
-                            remotingCommand
-                        ));
-                    }
-                }
-            }, nameserverClient.getCallbackInvoker())
-            .whenCompleteAsync((response, throwable) -> {
-                if (throwable != null) {
-                    log.error("remote command[{}} resolve error", remotingCommand, throwable);
-                    return;
-                }
-                if (response != null) {
-                    response.setTransactionId(txId);
-                    nameserverClient.sendRequest(response);
-                }
-            });
-    }
-
-    @Override
-    protected Object getMessageId(RemotingCommand message) {
-        return message.getTransactionId();
-    }
-
-    @Override
-    protected void handleAllIdle(ChannelHandlerContext ctx) {
-        super.handleAllIdle(ctx);
-        RemotingCommand ping = RemotingCommand.generatePingCommand(nameserverClient.getName());
-        ping.setTransactionId(
-            DistributeIdMaker.DEFAULT.nextId(nameserverClient.getName())
-        );
-        log.info("send ping to remote");
-        nameserverClient.sendRequest(ping).whenComplete((response, throwable) -> {
-            if (throwable != null) {
-                log.error("send ping to remote server[{}] error", clientConfig.getRegistryCenterUrl());
-                return;
-            }
-            log.debug("receive remote server pong [{}]", response);
-        });
-    }
-
-    /**
-     * 处理Ping
-     *
-     * @param ping ping
-     * @return RemotingCommand
-     */
-    private RemotingCommand handlerPing(RemotingCommand ping) {
-        log.debug("receive pint[{}] from server", ping);
-        RemotingCommand pong = RemotingCommand.generatePongCommand(nameserverClient.getName());
-        pong.setTransactionId(ping.getTransactionId());
-        return pong;
-    }
-
-    /**
-     * 处理Pong
-     *
-     * @param pong pong
-     * @return RemotingCommand
-     */
-    private RemotingCommand handlerPong(RemotingCommand pong) {
-        log.debug("receive pong[{}] from server", pong);
-        return null;
-    }
-
-
-    private RemotingCommand handlerCustomCommand(RemotingCommand remotingCommand) {
-        return nameserverClient.tryResolveCustomRequest(remotingCommand);
-    }
-
-    private RemotingCommand handlerCustomCommandResponse(RemotingCommand remotingCommand) {
-        return null;
-    }
-}
-package cn.com.vortexa.nameserver;
-
-
-import cn.com.vortexa.nameserver.config.NameserverClientConfig;
-import cn.com.vortexa.nameserver.constant.*;
-import cn.com.vortexa.nameserver.dto.RemoteNameserverStatus;
-import cn.com.vortexa.nameserver.dto.RemotingCommand;
-import cn.com.vortexa.nameserver.dto.ServiceInstance;
-import cn.com.vortexa.nameserver.exception.CustomCommandException;
-import cn.com.vortexa.nameserver.handler.CustomRequestHandler;
-import cn.com.vortexa.nameserver.processor.CustomCommandProcessor;
-import cn.com.vortexa.nameserver.processor.NameClientProcessorAdaptor;
-import cn.com.vortexa.nameserver.protocol.Serializer;
-import cn.com.vortexa.nameserver.util.DistributeIdMaker;
-import cn.com.vortexa.nameserver.util.RemotingCommandDecoder;
-import cn.com.vortexa.nameserver.util.RemotingCommandEncoder;
-import cn.com.vortexa.websocket.netty.base.AbstractWebsocketClient;
-import cn.com.vortexa.websocket.netty.constants.NettyConstants;
-import cn.hutool.core.util.StrUtil;
-import io.netty.channel.*;
-import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
-import io.netty.handler.codec.LengthFieldPrepender;
-import io.netty.handler.timeout.IdleStateHandler;
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.HashMap;
-import java.util.Optional;
-import java.util.function.Consumer;
-
-/**
- * @author helei
- * @since 2025-03-13
- */
-@Slf4j
-public class NameserverClient extends AbstractWebsocketClient<RemotingCommand> {
-
-    private final NameserverClientConfig clientConfig;  // 配置
-    private final String clientName;    // 客户端name
-    private final RemoteNameserverStatus remoteStatus; // 远程服务命名中心状态
-    private final CustomCommandProcessor customCommandProcessor;
-
-    @Setter
-    private Consumer<RemotingCommand> afterRegistryHandler = null;  // 注册成功后回调
-
-
-    public NameserverClient(NameserverClientConfig clientConfig) {
-        this(clientConfig, new NameClientProcessorAdaptor(clientConfig));
-    }
-
-    @Override
-    protected void afterBoostrapConnected(Channel channel) {
-        // 每次连接成功，都发送注册消息
-        channel.attr(NettyConstants.CLIENT_NAME).set(getName());
-        sendRegistryCommand();
-    }
-
-    public NameserverClient(NameserverClientConfig clientConfig, NameClientProcessorAdaptor nameClientProcessorAdaptor) {
-        super(clientConfig.getRegistryCenterUrl(), clientConfig.getServiceInstance().toString(), nameClientProcessorAdaptor);
-        super.setHandshake(false);
-        this.clientConfig = clientConfig;
-        this.clientName = clientConfig.getServiceInstance().toString();
-        this.remoteStatus = new RemoteNameserverStatus();
-        this.customCommandProcessor = new CustomCommandProcessor();
-
-        ((NameClientProcessorAdaptor) getHandler()).setNameserverClient(this);
-    }
-
-    @Override
-    public void addPipeline(ChannelPipeline p) {
-        p.addLast(new IdleStateHandler(0,
-                0, clientConfig.getServiceOfflineTtl()));
-
-        p.addLast(new LengthFieldBasedFrameDecoder(NameserverSystemConstants.MAX_FRAME_LENGTH,
-                0, 4, 0, 4));
-        p.addLast(new LengthFieldPrepender(4));
-
-        p.addLast(new RemotingCommandDecoder());
-        p.addLast(new RemotingCommandEncoder());
-        p.addLast(getHandler());
-    }
-
-
-    @Override
-    protected void doSendMessage(RemotingCommand message, boolean b) {
-        log.debug("send message to nameserver: {}", message);
-
-        ServiceInstance serviceInstance = clientConfig.getServiceInstance();
-
-        if (b && StrUtil.isBlank(message.getTransactionId())) {
-            message.setTransactionId(clientName);
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
         }
 
-        message.setGroup(serviceInstance.getGroup());
-        message.setServiceId(serviceInstance.getServiceId());
-        message.setClientId(serviceInstance.getInstanceId());
-
-        Optional.of(getChannel()).ifPresent(channel -> channel.writeAndFlush(message));
-    }
-
-    /**
-     * 发送服务注册命令
-     */
-    public void sendRegistryCommand() {
-        RemotingCommand remotingCommand = new RemotingCommand();
-        remotingCommand.setFlag(RemotingCommandFlagConstants.CLIENT_REGISTRY_SERVICE);
-        remotingCommand.setTransactionId(
-                DistributeIdMaker.DEFAULT.nextId(clientConfig.getServiceInstance().getServiceId())
-        );
-
-        remotingCommand.setBodyFromObject(new HashMap<>());
-
-        sendRequest(remotingCommand).whenComplete((response, throwable) -> {
-            if (throwable != null) {
-                log.error("{} -> [{}] channel active error",
-                        clientConfig.getServiceInstance(), clientConfig.getRegistryCenterUrl(), throwable);
-            }
-
-            // 注册成功
-            if (response.getCode() == RemotingCommandCodeConstants.SUCCESS) {
-                log.info("{} client registry success", clientConfig.getServiceInstance());
-                if (afterRegistryHandler != null) {
-                    afterRegistryHandler.accept(response);
-                }
-
-                ServiceInstance nameserviceInstance = Serializer.Algorithm.Protostuff
-                        .deserialize(response.getBody(), ServiceInstance.class);
-
-                remoteStatus.setNameserverInstance(nameserviceInstance);
-            } else {
-                // 注册失败
-                log.error("{} client registry failed, response: {}", clientConfig.getServiceInstance(), response);
-                close();
-            }
-
-            remoteStatus.setLastUpdateTimestamp(System.currentTimeMillis());
-            remoteStatus.setNameserverState(NameserverState.valueOf(
-                    response.getExtFieldsValue(ExtFieldsConstants.NAMESERVER_STATUS)
-            ));
-        });
-    }
-
-    /**
-     * 添加自定义命令处理器
-     *
-     * @param commandFlag          commandFlag 命令标识
-     * @param customRequestHandler customRequestHandler    处理器
-     */
-    public void addCustomCommandHandler(Integer commandFlag, CustomRequestHandler customRequestHandler)
-            throws CustomCommandException {
-        customCommandProcessor.addCustomCommandHandler(commandFlag, customRequestHandler);
-    }
-
-    /**
-     * 处理自定义请求
-     *
-     * @param remotingCommand request
-     * @return response
-     */
-    public RemotingCommand tryResolveCustomRequest(RemotingCommand remotingCommand) {
-        RemotingCommand response = null;
-        try {
-            response = customCommandProcessor.tryInvokeCustomCommandHandler(remotingCommand);
-        } catch (Exception e) {
-            log.error("custom request[{}] execute error, ", remotingCommand, e);
-            response = new RemotingCommand();
-            response.setTransactionId(remotingCommand.getTransactionId());
-            response.setCode(RemotingCommandCodeConstants.FAIL);
-            response.setBody(
-                Serializer.Algorithm.Protostuff.serialize(e)
-            );
-        }
-        return response;
-    }
-}
-cn:
-  com:
-    vortexa:
-      nameserver:
-        client:
-          registryCenterUrl: ws://localhost:18848
-          nio-thread-count: 1
-          service-offline-ttl: 60
-          service-instance:
-            host: localhost
-            port: 20001
-            group: test1
-            serviceId: client
-            instanceId: client-1
-package cn.com.vortexa.nameserver.config;
-
-
-import cn.com.vortexa.common.util.YamlConfigLoadUtil;
-import cn.com.vortexa.nameserver.dto.ServiceInstance;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.net.URL;
-import java.util.List;
-
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
-public class NameserverServerConfig {
-
-    private static final String RESOURCE_PATH = "nameserver-server-config.yaml";
-
-    private static final String PREFIX_PATH = "cn.com.vortexa.nameserver";
-
-    private volatile static NameserverServerConfig INSTANCE;
-
-    public static NameserverServerConfig defaultConfig() throws FileNotFoundException {
-        return loadConfig("nameserver-server-config.yaml", PREFIX_PATH);
-    }
-
-    public static NameserverServerConfig loadConfig(String fileName, String prefix) throws FileNotFoundException {
-        if (INSTANCE == null) {
-            synchronized (NameserverServerConfig.class) {
-                if (INSTANCE == null) {
-                    URL resource = NameserverServerConfig.class.getClassLoader().getResource(fileName);
-                    if (resource != null) {
-                        String file = resource.getFile();
-                        INSTANCE = YamlConfigLoadUtil.load(
-                            new File(file),
-                            List.of(prefix.split("\\.")),
-                            NameserverServerConfig.class
-                        );
-                    } else {
-                        throw new FileNotFoundException("config file not found");
-                    }
-                }
-            }
-        }
-        return INSTANCE;
-    }
-
-
-    /**
-     * netty nio 线程数
-     */
-    private Integer nioThreadCount = 1;
-
-    /**
-     * 服务地址
-     */
-    private ServiceInstance serviceInstance;
-
-    /**
-     * 下线时间
-     */
-    private Integer serviceOfflineTtl;
-
-
-}
-package cn.com.vortexa.nameserver.server;
-
-import cn.com.vortexa.common.util.NamedThreadFactory;
-import cn.com.vortexa.nameserver.config.NameserverServerConfig;
-import cn.com.vortexa.nameserver.constant.NameserverState;
-import cn.com.vortexa.nameserver.constant.NameserverSystemConstants;
-import cn.com.vortexa.nameserver.dto.ConnectEntry;
-import cn.com.vortexa.nameserver.dto.RemotingCommand;
-import cn.com.vortexa.nameserver.exception.CustomCommandException;
-import cn.com.vortexa.nameserver.exception.NameserverException;
-import cn.com.vortexa.nameserver.handler.CustomRequestHandler;
-import cn.com.vortexa.nameserver.processor.NameserverProcessorAdaptor;
-import cn.com.vortexa.nameserver.service.IConnectionService;
-import cn.com.vortexa.nameserver.service.IRegistryService;
-import cn.com.vortexa.nameserver.processor.CustomCommandProcessor;
-import cn.com.vortexa.nameserver.util.NameserverUtil;
-import cn.com.vortexa.nameserver.util.RemotingCommandDecoder;
-import cn.com.vortexa.nameserver.util.RemotingCommandEncoder;
-import cn.com.vortexa.websocket.netty.constants.NettyConstants;
-import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.*;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.channel.socket.nio.NioSocketChannel;
-import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
-import io.netty.handler.codec.LengthFieldPrepender;
-import io.netty.handler.timeout.IdleStateHandler;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-
-import static cn.com.vortexa.nameserver.constant.NameserverState.*;
-
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicReference;
-
-@Slf4j
-@Getter
-public class NameserverService {
-    private final NameserverServerConfig nameserverServerConfig;    // nameServerConfig
-    private final CustomCommandProcessor customCommandProcessor;   // 自定义命令处理服务
-    private final ExecutorService executorService;
-    private final long startTime;   //启动时间
-
-    private volatile NameserverState state; // name server state
-    private ServerBootstrap serverBootstrap;    //serverBootstrap
-    private ChannelFuture nameserverChannelFuture;  //nameserverChannelFuture
-
-    private NameserverProcessorAdaptor processorAdaptor;  // 消息处理器
-    private IRegistryService registryService;   // 注册服务
-    private IConnectionService connectionService;   // 连接服务
-
-    public NameserverService(NameserverServerConfig nameserverServerConfig) throws NameserverException {
-        this.nameserverServerConfig = nameserverServerConfig;
-        updateNameServerState(JUST_START);
-        this.startTime = System.currentTimeMillis();
-        this.executorService = Executors.newThreadPerTaskExecutor(
-                new NamedThreadFactory(nameserverServerConfig.getServiceInstance().toString())
-        );
-
-        this.customCommandProcessor = new CustomCommandProcessor();
-    }
-
-    /**
-     * 初始化
-     *
-     * @param registryService registryService
-     */
-    public void init(
-            IRegistryService registryService,
-            IConnectionService connectionService
-    ) throws NameserverException {
-        this.registryService = registryService;
-        this.connectionService = connectionService;
-        this.processorAdaptor = new NameserverProcessorAdaptor(
-                this,
-                registryService
-        );
-
-        serverBootstrap = new ServerBootstrap()
-                .group(new NioEventLoopGroup(nameserverServerConfig.getNioThreadCount()), new NioEventLoopGroup())
-                .channel(NioServerSocketChannel.class)
-                .option(ChannelOption.SO_BACKLOG, 1024)
-                .option(ChannelOption.SO_REUSEADDR, true)
-                .childOption(ChannelOption.SO_KEEPALIVE, false)
-                .childOption(ChannelOption.TCP_NODELAY, true)
-                .childOption(ChannelOption.SO_SNDBUF, 65535)
-                .childOption(ChannelOption.SO_RCVBUF, 65535)
-                .childHandler(new ChannelInitializer<NioSocketChannel>() {
-                    @Override
-                    protected void initChannel(NioSocketChannel ch) throws Exception {
-                        ch.pipeline().addLast(new IdleStateHandler(
-                                0, 0, nameserverServerConfig.getServiceOfflineTtl()));
-
-                        ch.pipeline().addLast(new LengthFieldBasedFrameDecoder(
-                                NameserverSystemConstants.MAX_FRAME_LENGTH, 0,
-                                4, 0, 4));
-
-                        ch.pipeline().addLast(new LengthFieldPrepender(4));
-
-                        ch.pipeline().addLast(new RemotingCommandDecoder());
-                        ch.pipeline().addLast(new RemotingCommandEncoder());
-                        ch.pipeline().addLast(processorAdaptor);
-                    }
-                });
-
-        updateNameServerState(INIT_FINISH);
-    }
-
-    /**
-     * 启动
-     *
-     * @throws NameserverException NameserverStartException
-     */
-    public ChannelFuture start() throws NameserverException {
-        log.info("start nameserver [{}], configuration:\n {}",
-                nameserverServerConfig.getServiceInstance(), nameserverServerConfig);
-
-        try {
-            nameserverChannelFuture = serverBootstrap.bind(
-                    nameserverServerConfig.getServiceInstance().getHost(),
-                    nameserverServerConfig.getServiceInstance().getPort()
-            );
-
-            nameserverChannelFuture.addListener(new ChannelFutureListener() {
-                @Override
-                public void operationComplete(ChannelFuture channelFuture) throws Exception {
-                    updateNameServerState(RUNNING);
-                }
-            });
-
-            return nameserverChannelFuture;
-        } catch (Exception e) {
-            updateNameServerState(SHUT_DOWN);
-            throw new NameserverException("start error", e);
-        }
-    }
-
-    /**
-     * 添加自定义命令处理器
-     *
-     * @param commandKey          commandKey 命令标识
-     * @param customRequestHandler customRequestHandler    处理器
-     */
-    public void addCustomCommandHandler(String commandKey, CustomRequestHandler customRequestHandler)
-            throws CustomCommandException {
-        customCommandProcessor.addCustomCommandHandler(commandKey, customRequestHandler);
-    }
-
-    /**
-     * 调用自定义命令handler
-     *
-     * @param channel channel
-     * @param request request
-     * @return response
-     */
-    public RemotingCommand tryInvokeCustomCommand(Channel channel, RemotingCommand request)
-            throws CustomCommandException {
-        // Step 1 校验是否注册服务
-        String key = channel.attr(NettyConstants.CLIENT_NAME).get();
-
-        if (!registryService.existServiceInstance(key)) {
-            log.debug("channel[{}] didn't registry, drop request [{}]", key, request);
-            closeChannel(channel);
-            return null;
-        }
-
-        // Step 2 运行自定义命令
-        RemotingCommand response = customCommandProcessor.tryInvokeCustomCommandHandler(request);
-        if (response.getTransactionId() == null) {
-            response.setTransactionId(request.getTransactionId());
-        }
-
-        return response;
-    }
-
-    /**
-     * 给服务实例发送命令
-     *
-     * @param group           group
-     * @param serviceId       serviceId
-     * @param instanceId      instanceId
-     * @param remotingCommand remotingCommand
-     * @return CompletableFuture<RemotingCommand>
-     */
-    public CompletableFuture<RemotingCommand> sendCommandToServiceInstance(
-            String group,
-            String serviceId,
-            String instanceId,
-            RemotingCommand remotingCommand
-    ) {
-        // Step 1 获取连接
-        String key = NameserverUtil.generateServiceInstanceKey(group, serviceId, instanceId);
-        ConnectEntry connectEntry = connectionService.getServiceInstanceChannel(key);
-
-        if (connectEntry == null || !connectEntry.isUsable()) {
-            log.error("[{}] channel is unusable", key);
-            return CompletableFuture.completedFuture(null);
-        }
-
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                CountDownLatch latch = new CountDownLatch(1);
-                AtomicReference<RemotingCommand> result = new AtomicReference<>();
-
-                // Step 2 注册请求
-                boolean registry = processorAdaptor.registryRequest(remotingCommand, response -> {
-                    result.set(response);
-                    latch.countDown();
-                });
-
-                if (registry) {
-                    connectEntry.getChannel().writeAndFlush(remotingCommand);
-                }
-
-                latch.await();
-                return result.get();
-            } catch (InterruptedException e) {
-                throw new RuntimeException("send command %s error".formatted(remotingCommand), e);
-            }
-        }, executorService);
-    }
-
-    /**
-     * 关闭连接某客户端的channel连接
-     *
-     * @param channel channel
-     */
-    public void closeChannel(Channel channel) {
-        if (channel == null) {
+        if (allBrowser == null) {
+            log.warn("no browser env, please check it");
             return;
         }
 
-        String key = channel.attr(NettyConstants.CLIENT_NAME).get();
+        // Step 2 按次数分配
+        Map<Integer, Integer> useCount = new HashMap<>();
+        Map<Integer, BrowserEnv> idMapEnv = allBrowser.stream().collect(Collectors.toMap(BrowserEnv::getId, p -> {
+            useCount.put(p.getId(), 0);
+            return p;
+        }));
 
-        if (registryService.existServiceInstance(key)) {
-            connectionService.closeServiceChannel(channel, key);
-        } else if (channel.isActive()) {
-            channel.close();
+
+        Set<AccountContext> noUseAccounts = new HashSet<>();
+
+        accountContexts.forEach(accountContext -> {
+            Integer browserEnvId = accountContext.getBrowserEnvId();
+
+            if (browserEnvId == null || !idMapEnv.containsKey(browserEnvId)) {
+                // 配置无效，给他添上
+                noUseAccounts.add(accountContext);
+            } else {
+                useCount.put(browserEnvId, useCount.getOrDefault(browserEnvId, 0) + 1);
+            }
+        });
+
+        // 填充浏览器环境
+        List<Integer> ids = getLessUsedItem(useCount, noUseAccounts.size());
+        ArrayList<AccountContext> list = new ArrayList<>(noUseAccounts);
+        for (int i = 0; i < ids.size(); i++) {
+            list.get(i).setBrowserEnvId(ids.get(i));
         }
     }
 
     /**
-     * 更新状态
+     * 获取最少使用的
      *
-     * @param newState newState
-     * @throws NameserverException NameserverException
+     * @param count 数量
+     * @return List<T>
      */
-    private void updateNameServerState(NameserverState newState) throws NameserverException {
-        synchronized (this) {
-            boolean isUpdate = switch (newState) {
-                case JUST_START: {
-                    yield state == null || state == JUST_START;
-                }
-                case INIT_FINISH:
-                    yield state == JUST_START || state == INIT_FINISH;
-                case RUNNING:
-                    yield state == INIT_FINISH;
-                case SHUT_DOWN:
-                    yield state != SHUT_DOWN;
-            };
+    private List<Integer> getLessUsedItem(Map<Integer, Integer> useCountMap, int count) {
+        if (useCountMap == null || useCountMap.isEmpty()) return Collections.emptyList();
+        int batchSize = Math.min(count, useCountMap.size());
 
-            if (isUpdate) {
-                log.info("nameserver[{}] status updated [{}]->[{}]", nameserverServerConfig.getServiceInstance(), state,
-                        newState);
-                state = newState;
-            } else {
-                throw new NameserverException("state cannot from [%s] to [%s]".formatted(state, newState));
-            }
+        List<Integer> res = new ArrayList<>(count);
+
+        int needCount = count;
+        while (needCount > 0) {
+            int currentSize = Math.min(needCount, batchSize);
+
+            List<Integer> batch = useCountMap.entrySet().stream()
+                    .sorted((e1, e2) -> e1.getValue().compareTo(e2.getValue()))
+                    .limit(currentSize)
+                    .map(e -> {
+                        useCountMap.compute(e.getKey(), (k, v) -> v == null ? 0 : v + 1);
+                        return e.getKey();
+                    }).toList();
+            res.addAll(batch);
+
+            needCount -= batch.size();
         }
+
+        return res;
     }
 }
-package cn.com.vortexa.nameserver.server;
+package cn.com.vortexa.bot_father.service.impl;
 
-import cn.com.vortexa.nameserver.config.NameserverServerConfig;
-import cn.com.vortexa.nameserver.dto.RemotingCommand;
-import cn.com.vortexa.nameserver.dto.RequestHandleResult;
-import cn.com.vortexa.nameserver.dto.ServiceInstance;
-import cn.com.vortexa.nameserver.exception.CustomCommandException;
-import cn.com.vortexa.nameserver.exception.NameserverException;
-import cn.com.vortexa.nameserver.handler.CustomRequestHandler;
-import cn.com.vortexa.nameserver.protocol.Serializer;
-import cn.com.vortexa.nameserver.service.impl.FileRegistryService;
-import cn.com.vortexa.nameserver.service.impl.MemoryConnectionService;
+import cn.com.vortexa.bot_father.service.BotApi;
+import cn.com.vortexa.bot_father.service.IBotAccountContextService;
+import cn.com.vortexa.bot_father.service.IRewordInfoService;
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
+import cn.com.vortexa.rpc.api.bot.IScriptAgentRPC;
+import cn.com.vortexa.rpc.api.platform.IAccountBaseInfoRPC;
+import cn.com.vortexa.rpc.api.platform.IBotInfoRPC;
+import cn.com.vortexa.job.service.BotJobService;
+import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
+import cn.com.vortexa.rpc.api.platform.IBrowserEnvRPC;
+import cn.com.vortexa.rpc.api.platform.IDiscordAccountRPC;
+import cn.com.vortexa.rpc.api.platform.IProxyInfoRPC;
+import cn.com.vortexa.rpc.api.platform.ITelegramAccountRPC;
+import cn.com.vortexa.rpc.api.platform.ITwitterAccountRPC;
+import cn.com.vortexa.control.anno.RPCReference;
+import lombok.Getter;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
 
-import cn.com.vortexa.nameserver.util.DistributeIdMaker;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
-import java.io.FileNotFoundException;
-import java.util.Random;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
+@Getter
+@Component
+public class DBBotApi implements BotApi {
 
-class NameserverServiceTest {
+    @Autowired
+    private BotJobService botJobService;
 
-    private static final Logger log = LoggerFactory.getLogger(NameserverServiceTest.class);
-    static NameserverServerConfig nameserverServerConfig;
-    static NameserverService nameserverService;
-    static Random random = new Random();
-    static ServiceInstance clientInstance = ServiceInstance
-            .builder()
-            .group("test1")
-            .serviceId("client")
-            .instanceId("client-1")
-            .build();
-    static int command_client = 3001;
-    static int command_service = 3002;
+    @Autowired
+    private IBotAccountContextService botAccountService;
 
-    @BeforeAll
-    public static void setUp() throws NameserverException, FileNotFoundException {
-        nameserverServerConfig = new NameserverServerConfig();
+    @Autowired
+    private IRewordInfoService rewordInfoService;
 
-        ServiceInstance address = ServiceInstance.builder()
-                .group("default")
-                .serviceId("sahara")
-                .instanceId("sahara_test")
-                .host("127.0.0.1")
-                .port(8080)
-                .build();
 
-        nameserverServerConfig.setServiceInstance(address);
-        nameserverService = new NameserverService(NameserverServerConfig.defaultConfig());
-        nameserverService.init(new FileRegistryService(), new MemoryConnectionService());
+    @RPCReference
+    private IBotInfoRPC botInfoRPC;
+
+    @RPCReference
+    private IBotInstanceRPC botInstanceRPC;
+
+    @RPCReference
+    private IAccountBaseInfoRPC accountBaseInfoRPC;
+
+    @RPCReference
+    private ITwitterAccountRPC twitterAccountRPC;
+
+    @RPCReference
+    private ITelegramAccountRPC telegramAccountRPC;
+
+    @RPCReference
+    private IProxyInfoRPC proxyInfoRPC;
+
+    @RPCReference
+    private IBrowserEnvRPC browserEnvRPC;
+
+    @RPCReference
+    private IDiscordAccountRPC discordAccountRPC;
+
+    @Autowired
+    private IScriptAgentRPC scriptAgentRPC;
+
+    @Autowired
+    private ITableShardStrategy tableShardStrategy;
+}
+package cn.com.vortexa.bot_father.service.impl;
+
+
+import cn.com.vortexa.bot_father.bot.AutoLaunchBot;
+import cn.com.vortexa.common.dto.control.ServiceInstance;
+import cn.com.vortexa.common.dto.job.AutoBotJobParam;
+import cn.com.vortexa.rpc.api.bot.IScriptAgentRPC;
+import lombok.Setter;
+
+import org.springframework.stereotype.Service;
+
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * @author helei
+ * @since 2025-03-23
+ */
+@Setter
+@Service
+public class ScriptAgentRPCImpl implements IScriptAgentRPC {
+
+    private AutoLaunchBot<?> bot;
+
+    @Override
+    public String testRPC(ServiceInstance targetServiceInstance, String testParam1) {
+        return "";
     }
 
-    @Test
-    public void test() throws NameserverException, InterruptedException, CustomCommandException, ExecutionException {
-        nameserverService.addCustomCommandHandler(command_client, new CustomRequestHandler() {
-            @Override
-            public RequestHandleResult handlerRequest(RemotingCommand request) {
-                log.warn("收到客户端自定义命令[{}]", request);
-
-                return RequestHandleResult.success("test-" + random.nextInt());
-            }
-        });
-
-        nameserverService.start().get();
-
-        while (true) {
-            RemotingCommand remotingCommand = new RemotingCommand();
-            remotingCommand.setTransactionId(
-                    DistributeIdMaker.DEFAULT.nextId(nameserverServerConfig.getServiceInstance().toString())
-            );
-            remotingCommand.setFlag(command_service);
-            TimeUnit.SECONDS.sleep(5);
-
-            log.info("发送服务端自定义命令.{}", remotingCommand);
-            nameserverService.sendCommandToServiceInstance(
-                    clientInstance.getGroup(),
-                    clientInstance.getServiceId(),
-                    clientInstance.getInstanceId(),
-                    remotingCommand
-            ).thenAccept(response->{
-                String deserialize = Serializer.Algorithm.Protostuff.deserialize(response.getBody(), String.class);
-                log.info("收到服务端自定义命令响应. {}\n{}", response, deserialize);
-            });
-        }
+    @Override
+    public Map<String, AutoBotJobParam> queryScriptAgentJobType() {
+        if (bot == null) return new HashMap<>();
+        return bot.getBotInstance().getJobParams();
     }
+
 }
