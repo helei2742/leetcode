@@ -1,1242 +1,640 @@
-package cn.com.vortexa.example.optimai;
+package cn.com.vortexa.browser_control.deiver;
+
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+
+import cn.com.vortexa.browser_control.dto.QueryEntity;
+import cn.com.vortexa.browser_control.exception.BrowserRequestException;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 /**
  * @author h30069248
- * @since 2025/3/24 17:15
+ * @since 2025/3/26 9:21
  */
-public class OptimAIAPI {
+public class BitBrowserDriver extends FingerprintBrowserDriver {
 
-    private final OptimAIBot optimAIBot;
-
-    public OptimAIAPI(OptimAIBot optimAIBot) {
-        this.optimAIBot = optimAIBot;
+    public BitBrowserDriver(String connectUrl) {
+        super(connectUrl);
     }
 
+    @Override
+    protected QueryEntity<JSON> healthBody() {
+        return QueryEntity.<JSON>builder()
+            .contentPath("/health")
+            .resultStrHandler(JSONArray::parseObject)
+            .build();
+    }
 
+    @Override
+    protected QueryEntity<JSON> buildPageQueryWindowBody(JSONObject params) {
+        if (!params.containsKey("page") || !params.containsKey("pageSize")) {
+            throw new IllegalArgumentException("page and pageSize must be provided");
+        }
+        return QueryEntity.<JSON>builder()
+            .body(params)
+            .contentPath("/browser/list")
+            .resultStrHandler(JSONArray::parseObject)
+            .build();
+    }
+
+    @Override
+    protected QueryEntity<JSON> buildOpenBrowserWindowBody(JSONObject params) {
+        if (!params.containsKey("id")) {
+            throw new IllegalArgumentException("id must be provided");
+        }
+        return QueryEntity.<JSON>builder()
+            .body(params)
+            .contentPath("/browser/open")
+            .resultStrHandler(JSONArray::parseObject)
+            .build();
+    }
+
+    @Override
+    protected QueryEntity<JSON> buildCloseBrowserWindowBody(JSONObject params) {
+        if (!params.containsKey("id")) {
+            throw new IllegalArgumentException("id must be provided");
+        }
+        return QueryEntity.<JSON>builder()
+            .body(params)
+            .contentPath("/browser/close")
+            .resultStrHandler(JSONArray::parseObject)
+            .build();
+    }
+
+    @Override
+    protected QueryEntity<JSON> closeAllBrowserWindowBody() {
+        return QueryEntity.<JSON>builder()
+            .contentPath("/browser/close/all")
+            .resultStrHandler(JSONArray::parseObject)
+            .build();
+    }
+
+    @Override
+    protected QueryEntity<JSON> deleteCloseBrowserWindowBody(JSONObject params) {
+        if (!params.containsKey("id")) {
+            throw new IllegalArgumentException("id must be provided");
+        }
+        return QueryEntity.<JSON>builder()
+            .body(params)
+            .contentPath("/browser/delete")
+            .resultStrHandler(JSONArray::parseObject)
+            .build();
+    }
+
+    @Override
+    protected QueryEntity<JSON> deleteBrowserWindowBatchBody(JSONObject params) {
+        if (!params.containsKey("ids")) {
+            throw new IllegalArgumentException("id must be provided");
+        }
+        return QueryEntity.<JSON>builder()
+            .body(params)
+            .contentPath("/browser/delete")
+            .resultStrHandler(JSONArray::parseObject)
+            .build();
+    }
+
+    @Override
+    protected QueryEntity<JSON> browserWindowDetailBody(JSONObject params) {
+        if (!params.containsKey("id")) {
+            throw new IllegalArgumentException("id must be provided");
+        }
+        return QueryEntity.<JSON>builder()
+            .body(params)
+            .contentPath("/browser/detail")
+            .resultStrHandler(JSONArray::parseObject)
+            .build();
+    }
+
+    @Override
+    protected QueryEntity<JSON> boundsBrowserWindowBody(JSONObject params) {
+        return QueryEntity.<JSON>builder()
+            .body(params)
+            .contentPath("/windowbounds")
+            .resultStrHandler(JSONArray::parseObject)
+            .build();
+    }
+
+    @Override
+    protected QueryEntity<JSON> autoFlexWindowBody() {
+        return QueryEntity.<JSON>builder()
+            .contentPath("/windowbounds/flexable")
+            .resultStrHandler(JSONArray::parseObject)
+            .build();
+    }
+
+    @Override
+    protected QueryEntity<JSON> updateWindowGroupBody(JSONObject params) {
+        if (!params.containsKey("groupId")) {
+            throw new IllegalArgumentException("groupId must be provided");
+        }
+        if (!params.containsKey("browserIds")) {
+            throw new IllegalArgumentException("browserIds must be provided");
+        }
+        return QueryEntity.<JSON>builder()
+            .body(params)
+            .contentPath("/browser/group/update")
+            .resultStrHandler(JSONArray::parseObject)
+            .build();
+    }
+
+    @Override
+    protected QueryEntity<JSON> updateWindowRemarkBody(JSONObject params) {
+        if (!params.containsKey("remark")) {
+            throw new IllegalArgumentException("remark must be provided");
+        }
+        if (!params.containsKey("browserIds")) {
+            throw new IllegalArgumentException("browserIds must be provided");
+        }
+        return QueryEntity.<JSON>builder()
+            .body(params)
+            .contentPath("/browser/remark/update")
+            .resultStrHandler(JSONArray::parseObject)
+            .build();
+    }
+
+    @Override
+    protected QueryEntity<JSON> proxyCheckOutBody(JSONObject params) {
+        if (!params.containsKey("host")) {
+            throw new IllegalArgumentException("host must be provided");
+        }
+        if (!params.containsKey("port")) {
+            throw new IllegalArgumentException("port must be provided");
+        }
+        return QueryEntity.<JSON>builder()
+            .body(params)
+            .contentPath("/checkagent")
+            .resultStrHandler(JSONArray::parseObject)
+            .build();
+    }
+
+    @Override
+    protected QueryEntity<JSON> displayListQueryBody() {
+        return QueryEntity.<JSON>builder().contentPath("/checkagent").resultStrHandler(JSONArray::parseObject).build();
+    }
+
+    /**
+     * 重置浏览器关闭状态
+     *
+     * @param id id
+     * @return JSON
+     */
+    public JSON resetCloseStatus(String id) {
+        try {
+            JSONObject params = new JSONObject();
+            params.put("id", id);
+            QueryEntity<JSON> queryEntity = QueryEntity.<JSON>builder()
+                .body(params).contentPath("/browser/closing/reset")
+                .resultStrHandler(JSONArray::parseArray)
+                .build();
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("reset closing status error", e);
+        }
+    }
+
+    /**
+     * 仿真输入，将剪切板内容输入到已聚焦的输入框
+     *
+     * @param browserId browserId
+     * @param url url
+     * @return JSON
+     */
+    public JSON autoPaste(String browserId, String url) {
+        try {
+            JSONObject params = new JSONObject();
+            params.put("browserId", browserId);
+            params.put("url", url);
+            QueryEntity<JSON> queryEntity = QueryEntity.<JSON>builder()
+                .body(params).contentPath("/autopaste")
+                .resultStrHandler(JSONArray::parseArray)
+                .build();
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("autopaste error", e);
+        }
+    }
 }
-package cn.com.vortexa.example.optimai;
+package cn.com.vortexa.browser_control.deiver;
 
-import cn.com.vortexa.bot_father.anno.BotMethod;
-import cn.com.vortexa.bot_father.anno.BotWSMethodConfig;
-import cn.com.vortexa.bot_father.bot.AutoLaunchBot;
-import cn.com.vortexa.bot_father.config.AutoBotConfig;
-import cn.com.vortexa.bot_father.service.BotApi;
-import cn.com.vortexa.common.constants.BotJobType;
-import cn.com.vortexa.common.entity.AccountContext;
+import com.alibaba.fastjson.JSON;
+import com.alibaba.fastjson.JSONObject;
+
+import cn.com.vortexa.browser_control.exception.BrowserRequestException;
+import cn.com.vortexa.browser_control.dto.QueryEntity;
+import cn.com.vortexa.common.constants.HttpMethod;
+import cn.com.vortexa.common.util.http.RestApiClientFactory;
+
+import java.util.HashMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 /**
  * @author h30069248
- * @since 2025/3/24 17:14
+ * @since 2025/3/26 9:25
  */
-public class OptimAIBot extends AutoLaunchBot<OptimAIBot> {
+public abstract class FingerprintBrowserDriver {
 
-    private static final String WS_CONNECT_URL = "wss://ws.optimai.network";
+    private final String connectUrl;
 
-    private final int WS_RECONNECT_INTERVAL_SECOND = 60 * 60 * 24;
-
-    private OptimAIAPI optimAIAPI;
-
-    @Override
-    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
-        this.optimAIAPI = new OptimAIAPI(this);
+    public FingerprintBrowserDriver(String connectUrl) {
+        this.connectUrl = connectUrl;
     }
 
-    @Override
-    protected OptimAIBot getInstance() {
-        return this;
+    /**
+     * 检查健康状态
+     *
+     */
+    public JSON health() {
+        try {
+            QueryEntity<JSON> queryEntity = healthBody();
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("page query window error", e);
+        }
     }
 
-    @BotMethod(
-        jobType = BotJobType.WEB_SOCKET_CONNECT,
-        intervalInSecond = WS_RECONNECT_INTERVAL_SECOND,
-        bowWsConfig = @BotWSMethodConfig(
-            isRefreshWSConnection = true,
-            reconnectLimit = 4,
-            heartBeatIntervalSecond = 15 * 60,
-            wsConnectCount = 20
-        )
-    )
-    public OptimAIWSClient buildKeepAliveWSClient(AccountContext accountContext) {
-        OptimAIWSClient client = new OptimAIWSClient(accountContext, WS_CONNECT_URL);
+    /**
+     * 构建分页查询窗口的请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> healthBody();
 
-        return client;
+    /**
+     * 分页查询窗口
+     *
+     * @param params params
+     */
+    public JSON pageQueryWindow(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = buildPageQueryWindowBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("page query window error", e);
+        }
+    }
+
+    /**
+     * 构建分页查询窗口的请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> buildPageQueryWindowBody(JSONObject params);
+
+    /**
+     * 打开浏览器窗口
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON openBrowserWindow(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = buildOpenBrowserWindowBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("open browser window error", e);
+        }
+    }
+
+    /**
+     * 构建打开窗口窗口的请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> buildOpenBrowserWindowBody(JSONObject params);
+
+    /**
+     * 关闭浏览器窗口
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON closeBrowserWindow(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = buildCloseBrowserWindowBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("close browser window error", e);
+        }
+    }
+
+    /**
+     * 构建关闭窗口的请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> buildCloseBrowserWindowBody(JSONObject params);
+
+    /**
+     * 关闭所有浏览器窗口
+     *
+     * @return JSON
+     */
+    public JSON closeAllBrowserWindow() {
+        try {
+            QueryEntity<JSON> queryEntity = closeAllBrowserWindowBody();
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("close all browser window error", e);
+        }
+    }
+
+    /**
+     * 构建关闭所有浏览器窗口的请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> closeAllBrowserWindowBody();
+
+    /**
+     * 删除浏览器窗口
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON deleteBrowserWindow(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = deleteCloseBrowserWindowBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("delete browser window error", e);
+        }
+    }
+
+    /**
+     * 构建删除窗口的请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> deleteCloseBrowserWindowBody(JSONObject params);
+
+    /**
+     * 删除批量浏览器窗口
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON deleteBrowserWindowBatch(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = deleteBrowserWindowBatchBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("batch delete browser window error", e);
+        }
+    }
+
+    /**
+     * 构建批量删除窗口的请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> deleteBrowserWindowBatchBody(JSONObject params);
+
+    /**
+     * 浏览器窗口详情查询
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON browserWindowDetail(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = browserWindowDetailBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("query browser window detail error", e);
+        }
+    }
+
+    /**
+     * 构建窗口详情查询请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> browserWindowDetailBody(JSONObject params);
+
+    /**
+     * 排列已打开窗口
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON boundsBrowserWindow(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = boundsBrowserWindowBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("bounds browser window error", e);
+        }
+    }
+
+    /**
+     * 构建排列已打开窗口请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> boundsBrowserWindowBody(JSONObject params);
+
+    /**
+     * 自适应排列窗口
+     *
+     * @return JSON
+     */
+    public JSON autoFlexWindow() {
+        try {
+            QueryEntity<JSON> queryEntity = autoFlexWindowBody();
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("auto flex browser window error", e);
+        }
+    }
+
+    /**
+     * 构建自适应排列窗口窗口请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> autoFlexWindowBody();
+
+    /**
+     * 修改浏览器窗口分组
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON updateWindowGroup(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = updateWindowGroupBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("update browser window group error", e);
+        }
+    }
+
+    /**
+     * 修改浏览器窗口分组请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> updateWindowGroupBody(JSONObject params);
+
+    /**
+     * 修改窗口备注
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON updateWindowRemark(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = updateWindowRemarkBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("update browser window remark error", e);
+        }
+    }
+
+    /**
+     * 修改窗口备注请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> updateWindowRemarkBody(JSONObject params);
+
+    /**
+     * 检查代理
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON proxyCheckOut(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = proxyCheckOutBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("update browser window remark error", e);
+        }
+    }
+
+    /**
+     * 检查代理请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> proxyCheckOutBody(JSONObject params);
+
+    /**
+     * 查询显示器列表
+     *
+     * @return JSON
+     */
+    public JSON displayListQuery() {
+        try {
+            QueryEntity<JSON> queryEntity = displayListQueryBody();
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("query display list error", e);
+        }
+    }
+
+    /**
+     * 查询显示器列表
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> displayListQueryBody();
+
+    protected CompletableFuture<String> request(QueryEntity<JSON> queryEntity) {
+        return RestApiClientFactory.getClient(null).request(
+            connectUrl + queryEntity.getContentPath(),
+            queryEntity.getMethod(),
+            new HashMap<>(),
+            queryEntity.getMethod() == HttpMethod.POST ? null : queryEntity.getBody(),
+            queryEntity.getMethod() == HttpMethod.POST ? queryEntity.getBody() : null
+        );
     }
 }
-package cn.com.vortexa.example.optimai;
+package cn.com.vortexa.browser_control.dto;
+
 
 import com.alibaba.fastjson.JSONObject;
 
-import cn.com.vortexa.bot_father.websocket.BotJsonWSClient;
-import cn.com.vortexa.common.entity.AccountContext;
-
-/**
- * @author h30069248
- * @since 2025/3/24 17:04
- */
-public class OptimAIWSClient extends BotJsonWSClient {
-
-    public OptimAIWSClient(AccountContext accountContext, String connectUrl) {
-        super(accountContext, connectUrl);
-    }
-
-    @Override
-    public JSONObject getHeartbeatMessage() {
-        return new JSONObject();
-    }
-
-    @Override
-    public void whenAccountReceiveResponse(Object id, JSONObject response) {
-
-    }
-
-    @Override
-    public void whenAccountReceiveMessage(JSONObject message) {
-
-    }
-}
-package cn.com.vortexa.control.constant;
-
-public class ExtFieldsConstants {
-
-    public static final String NAMESERVER_STATUS = "nameserver_status"; //  nameserver 服务状态
-    public static final String NAMESERVER_REGISTRY_STATUS = "nameserver_registry_status";   // 服务注册的注册状态
-    public static final String NAMESERVER_DISCOVER_SERVICE_NAME = "nameserver_discover_service_name";   // 服务发现的service name
-    public static final String NAMESERVER_DISCOVER_LOAD_BALANCE_POLICY = "nameserver_load_balance_policy";  // 服务发现负载均衡策略
-    public static final String CUSTOM_COMMAND_HANDLER_KEY = "custom_command_handler_key"; // 自定义命令处理器的key
-    public static final String REQUEST_ERROR_MSG = "request_error_msg"; // 请求错误消息
-}
-package cn.com.vortexa.control.constant;
-
-public class RemotingCommandFlagConstants {
-
-    public static final String REQUEST_ERROR = "request_error";
-
-    public static final int TIME_OUT_EXCEPTION = 501;   // 超时异常
-
-    public static final int PARAMS_ERROR = 502; // 参数解析异常
-
-    public static final int PING = 100; // ping
-    public static final int PONG = -100;    // pong
-
-    public static final int SCRIPT_AGENT_METRICS_UPLOAD = 101; // 指标上传
-    public static final int SCRIPT_AGENT_METRICS_UPLOAD_RESPONSE = -101; // 指标擅闯的响应
-
-    public static final int CLIENT_REGISTRY_SERVICE = 200; // 客户端服务注册的消息
-    public static final int CLIENT_REGISTRY_SERVICE_RESPONSE = -200; // 客户端服务注册的响应
-
-    public static final int CLIENT_DISCOVER_SERVICE = 201; // 客户端服务发现的消息
-    public static final int CLIENT_DISCOVER_SERVICE_RESPONSE = -201; // 客户端服务发现的响应
-
-    public static final int CUSTOM_COMMAND = 300;   // 自定义命令
-    public static final int CUSTOM_COMMAND_RESPONSE = -300;  // 自定义命令响应
-
-
-}
-package cn.com.vortexa.control.dto;
-
-import cn.com.vortexa.control.constant.LanguageCode;
-import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
-import cn.com.vortexa.control.constant.RemotingCommandFlagConstants;
-import cn.com.vortexa.control.protocol.Serializer;
-import cn.com.vortexa.control.util.DistributeIdMaker;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import org.apache.commons.compress.archivers.sevenz.CLI;
-
-import java.io.Serializable;
-import java.util.HashMap;
-
-
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
-public class RemotingCommand {
-
-    public static final RemotingCommand TIME_OUT_COMMAND;
-    public static final RemotingCommand PARAMS_ERROR;
-
-    public static final String TRANSACTION_ID_KEY = "transaction_id";
-    public static final String GROUP_KEY = "group";
-    public static final String SERVICE_ID_KEY = "service_id";
-    public static final String CLIENT_ID_KEY = "client_id";
-
-    static {
-        TIME_OUT_COMMAND = new RemotingCommand();
-        TIME_OUT_COMMAND.setFlag(RemotingCommandFlagConstants.TIME_OUT_EXCEPTION);
-        TIME_OUT_COMMAND.setCode(RemotingCommandCodeConstants.FAIL);
-
-        PARAMS_ERROR = new RemotingCommand();
-        PARAMS_ERROR.setFlag(RemotingCommandFlagConstants.PARAMS_ERROR);
-        PARAMS_ERROR.setCode(RemotingCommandCodeConstants.FAIL);
-    }
-
-    private Integer flag;
-    private Integer code;
-    private LanguageCode language = LanguageCode.JAVA;
-    private Integer version = 0;
-    private String remark;
-    private HashMap<String, String> extFields;
-
-    private byte[] body;
-
-    private Object payLoad;
-
-    @Override
-    public RemotingCommand clone() {
-        RemotingCommand remotingCommand = new RemotingCommand();
-        remotingCommand.setFlag(this.flag);
-        remotingCommand.setCode(this.code);
-        remotingCommand.setLanguage(this.language);
-        remotingCommand.setVersion(this.version);
-        remotingCommand.setRemark(this.remark);
-        remotingCommand.setExtFields(this.extFields);
-        remotingCommand.setBody(this.body);
-        remotingCommand.setPayLoad(this.payLoad);
-        return remotingCommand;
-    }
-
-    public String getTransactionId() {
-        return getExtFieldsValue(TRANSACTION_ID_KEY);
-    }
-
-    public void setTransactionId(String tsId) {
-        addExtField(TRANSACTION_ID_KEY, tsId);
-    }
-
-    public String getGroup() {
-        String value = getExtFieldsValue(GROUP_KEY);
-        return (value == null || value.isEmpty()) ? "default" : value;
-    }
-
-    public void setGroup(String group) {
-        addExtField(GROUP_KEY, group);
-    }
-
-    public String getServiceId() {
-        return getExtFieldsValue(SERVICE_ID_KEY);
-    }
-
-    public void setServiceId(String serviceId) {
-        addExtField(SERVICE_ID_KEY, serviceId);
-    }
-
-    public String getClientId() {
-        return getExtFieldsValue(CLIENT_ID_KEY);
-    }
-
-    public void setClientId(String clientId) {
-        addExtField(CLIENT_ID_KEY, clientId);
-    }
-
-    public String getExtFieldsValue(String extFieldsKey) {
-        if (extFields == null) return null;
-        return extFields.get(extFieldsKey);
-    }
-
-    public Integer getExtFieldsInt(String extFieldsKey) {
-        String value = getExtFieldsValue(extFieldsKey);
-        if (value == null || value.isEmpty()) return null;
-        return Integer.parseInt(value);
-    }
-
-    public Long getExtFieldsLong(String extFieldsKey) {
-        String value = getExtFieldsValue(extFieldsKey);
-        if (value == null || value.isEmpty()) return null;
-        return Long.parseLong(value);
-    }
-
-    public void addExtField(String key, String value) {
-        if (this.extFields == null) {
-            this.extFields = new HashMap<>();
-        }
-        this.extFields.put(key, value);
-    }
-
-    public void setBodyFromObject(Object body) {
-        this.body = Serializer.Algorithm.Protostuff.serialize(body);
-    }
-
-    public void release() {
-    }
-
-    protected void clear() {
-        this.flag = null;
-        this.code = null;
-        this.language = null;
-        this.version = null;
-        this.remark = null;
-        if (extFields == null) extFields = new HashMap<>();
-        else this.extFields.clear();
-        this.body = null;
-    }
-
-    public static RemotingCommand generatePingCommand(String key) {
-        String txId = DistributeIdMaker.DEFAULT.nextId(key);
-        RemotingCommand ping = new RemotingCommand();
-        ping.setFlag(RemotingCommandFlagConstants.PING);
-        ping.setTransactionId(txId);
-        ping.setCode(RemotingCommandCodeConstants.SUCCESS);
-        return ping;
-    }
-    public static RemotingCommand generatePongCommand(String key) {
-        String txId = DistributeIdMaker.DEFAULT.nextId(key);
-        RemotingCommand pong = new RemotingCommand();
-        pong.setFlag(RemotingCommandFlagConstants.PONG);
-        pong.setTransactionId(txId);
-        pong.setCode(RemotingCommandCodeConstants.SUCCESS);
-        return pong;
-    }
-
-    public void setObjBody(Serializable objBody) {
-        this.body = Serializer.Algorithm.JDK.serialize(objBody);
-    }
-
-    public <T> T getObjBodY(Class<T> tClass) {
-        return Serializer.Algorithm.JDK.deserialize(this.body, tClass);
-    }
-
-    @Override
-    public String toString() {
-        return "RemotingCommand{" +
-                "flag=" + flag +
-                ", code=" + code +
-                ", language=" + language +
-                ", version=" + version +
-                ", remark='" + remark + '\'' +
-                ", extFields=" + extFields +
-                ", body=" + ((body == null || body.length == 0) ? "empty" : "not empty") +
-                '}';
-    }
-}
-package cn.com.vortexa.control.dto;
-
+import cn.com.vortexa.common.constants.HttpMethod;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.io.Serial;
-import java.io.Serializable;
+import java.util.function.Function;
 
 /**
  * @author h30069248
- * @since 2025/3/24 16:03
+ * @since 2025/3/26 9:30
  */
 @Data
 @Builder
 @AllArgsConstructor
 @NoArgsConstructor
-public class ScriptAgentMetrics implements Serializable {
-    @Serial
-    private static final long serialVersionUID = -984579834902383215L;
-
-    private long totalMemory;   // 总内存
-    private long freeMemory;    // 可用内存
-    private long maxMemory; // 最大可用内存
-    private double processCpuLoad;   // 当前进程cpu利用率
-    private double systemCpuLoad;   // 系统cpu利用率
-
+public class QueryEntity<T> {
+    private String contentPath;
+    private HttpMethod method;
+    private JSONObject body;
+    private Function<String, T> resultStrHandler;
 }
-package cn.com.vortexa.control.config;
+package cn.com.vortexa.browser_control.exception;
 
+public class BrowserRequestException extends RuntimeException{
 
-import cn.com.vortexa.common.util.YamlConfigLoadUtil;
-import cn.com.vortexa.common.dto.control.ServiceInstance;
-import lombok.Data;
-
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.net.URL;
-import java.util.List;
-
-/**
- * @author helei
- * @since 2025-03-15
- */
-@Data
-public class ScriptAgentConfig {
-
-    private static final String RESOURCE_PATH = "nameserver-client-config.yaml";
-
-    private static final String PREFIX_PATH = "cn.com.vortexa.nameserver.client";
-
-    private volatile static ScriptAgentConfig INSTANCE;
-
-    public static ScriptAgentConfig defaultConfig() throws FileNotFoundException {
-        return loadConfig("nameserver-client-config.yaml", PREFIX_PATH);
+    // 默认构造函数
+    public BrowserRequestException() {
+        super("request browser error.");
     }
 
-    public static ScriptAgentConfig loadConfig(String fileName, String prefix) throws FileNotFoundException {
-        if (INSTANCE == null) {
-            synchronized (ScriptAgentConfig.class) {
-                if (INSTANCE == null) {
-                    URL resource = ScriptAgentConfig.class.getClassLoader().getResource(fileName);
-                    if (resource != null) {
-                        String file = resource.getFile();
-                        INSTANCE = YamlConfigLoadUtil.load(
-                                new File(file),
-                                List.of(prefix.split("\\.")),
-                                ScriptAgentConfig.class
-                        );
-                    } else {
-                        throw new FileNotFoundException("config file not found");
-                    }
-                }
-            }
-        }
-        return INSTANCE;
+    // 传入错误信息的构造函数
+    public BrowserRequestException(String message) {
+        super(message);
     }
 
-    private String registryCenterUrl;   // 注册中心地址
-    private Integer nioThreadCount = 1; // netty nio 线程数
-    private ServiceInstance serviceInstance;    // 服务地址
-    private Integer serviceOfflineTtl; // 服务被判断为下线时间（ping interval）
-
-    private int metricUploadIntervalSeconds = 15 * 60;  //  指标上报间隔（秒）
-
-    private static String toCamelCase(String name) {
-        String[] parts = name.split("-");
-        StringBuilder camelCase = new StringBuilder(parts[0]);
-        for (int i = 1; i < parts.length; i++) {
-            camelCase.append(parts[i].substring(0, 1).toUpperCase()).append(parts[i].substring(1));
-        }
-        return camelCase.toString();
-    }
-}
-package cn.com.vortexa.control.service;
-
-import com.sun.management.OperatingSystemMXBean;
-
-import cn.com.vortexa.control.ScriptAgent;
-import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
-import cn.com.vortexa.control.constant.RemotingCommandFlagConstants;
-import cn.com.vortexa.control.dto.RemotingCommand;
-import cn.com.vortexa.control.dto.ScriptAgentMetrics;
-import lombok.extern.slf4j.Slf4j;
-
-import java.lang.management.ManagementFactory;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Function;
-
-/**
- * Script agent 指标上传服务
- *
- * @author h30069248
- * @since 2025/3/24 15:09
- */
-@Slf4j
-public class ScriptAgentMetricsUploadService {
-    private static final OperatingSystemMXBean osBean = (OperatingSystemMXBean)ManagementFactory.getOperatingSystemMXBean();
-    private static final Runtime runtime = Runtime.getRuntime();
-
-    private final ScriptAgent scriptAgent;
-    private final ExecutorService executorService;
-
-    public ScriptAgentMetricsUploadService(
-        ScriptAgent scriptAgent
-    ) {
-        this(scriptAgent, Executors.newFixedThreadPool(1));
+    // 传入错误信息和异常原因的构造函数
+    public BrowserRequestException(String message, Throwable cause) {
+        super(message, cause);
     }
 
-    public ScriptAgentMetricsUploadService(
-        ScriptAgent scriptAgent,
-        ExecutorService executorService
-    ) {
-        this.scriptAgent = scriptAgent;
-        this.executorService = executorService;
-    }
-
-    public void start() {
-        executorService.execute(new MetricsUploadTask(
-            scriptAgent.getClientConfig().getMetricUploadIntervalSeconds(),
-            this::uploadMetricsLogic
-        ));
-    }
-
-    /**
-     * 上传指标逻辑
-     *
-     * @param times times
-     */
-    private CompletableFuture<RemotingCommand> uploadMetricsLogic(Long times) {
-        // Step 1 构建请求
-        RemotingCommand request = scriptAgent.buildRequestCommand(
-            RemotingCommandFlagConstants.SCRIPT_AGENT_METRICS_UPLOAD
-        );
-
-        // Step 2 设置指标数据 TODO
-        ScriptAgentMetrics metrics = ScriptAgentMetrics.builder()
-            .totalMemory(runtime.totalMemory())
-            .freeMemory(runtime.freeMemory())
-            .maxMemory(runtime.maxMemory())
-            .processCpuLoad(osBean.getProcessCpuLoad())
-            .processCpuLoad(osBean.getCpuLoad())
-            .build();
-
-        request.setObjBody(metrics);
-
-        // Step 3 发送请求
-        return scriptAgent.sendRequest(request);
-    }
-
-    private static class MetricsUploadTask implements Runnable {
-
-        private final int intervalSeconds; // 间隔
-        private final Function<Long, CompletableFuture<RemotingCommand>> uploadLogic;
-        private final AtomicLong uploadTimes;
-        private volatile boolean running = true;
-
-        private MetricsUploadTask(int intervalSeconds, Function<Long, CompletableFuture<RemotingCommand>> uploadLogic) {
-            this.intervalSeconds = intervalSeconds;
-            this.uploadLogic = uploadLogic;
-            this.uploadTimes = new AtomicLong(0);
-        }
-
-        @Override
-        public void run() {
-            while (running) {
-                try {
-                    TimeUnit.SECONDS.sleep(intervalSeconds);
-                } catch (InterruptedException e) {
-                    log.warn("script agent metrics upload task interrupted");
-                    running = false;
-                    continue;
-                }
-                try {
-                    if (uploadLogic != null) {
-                        RemotingCommand response = uploadLogic.apply(uploadTimes.incrementAndGet()).get();
-                        if (response.getCode() == RemotingCommandCodeConstants.FAIL) {
-                            log.error("script agent metrics upload fail, [{}]", response);
-                        }
-                    }
-                } catch (Exception e) {
-                    log.error("script agent metrics upload error", e);
-                }
-            }
-        }
-    }
-}
-package cn.com.vortexa.control;
-
-import cn.com.vortexa.control.config.ScriptAgentConfig;
-import cn.com.vortexa.control.constant.*;
-import cn.com.vortexa.control.dto.RemoteControlServerStatus;
-import cn.com.vortexa.control.dto.RemotingCommand;
-import cn.com.vortexa.common.dto.control.ServiceInstance;
-import cn.com.vortexa.control.exception.CustomCommandException;
-import cn.com.vortexa.control.handler.CustomRequestHandler;
-import cn.com.vortexa.control.processor.CustomCommandProcessor;
-import cn.com.vortexa.control.processor.ScriptAgentProcessorAdaptor;
-import cn.com.vortexa.control.protocol.Serializer;
-import cn.com.vortexa.control.service.ScriptAgentMetricsUploadService;
-import cn.com.vortexa.control.util.DistributeIdMaker;
-import cn.com.vortexa.control.util.RemotingCommandDecoder;
-import cn.com.vortexa.control.util.RemotingCommandEncoder;
-import cn.com.vortexa.websocket.netty.base.AbstractWebsocketClient;
-import cn.com.vortexa.websocket.netty.constants.NettyConstants;
-import cn.hutool.core.util.StrUtil;
-import io.netty.channel.*;
-import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
-import io.netty.handler.codec.LengthFieldPrepender;
-import io.netty.handler.timeout.IdleStateHandler;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.HashMap;
-import java.util.function.Consumer;
-
-/**
- * @author helei
- * @since 2025-03-13
- */
-@Slf4j
-@Getter
-public class ScriptAgent extends AbstractWebsocketClient<RemotingCommand> {
-
-    private final ScriptAgentConfig clientConfig;  // 配置
-    private final ServiceInstance serviceInstance;
-    private final String clientName;    // 客户端name
-    private final RemoteControlServerStatus remoteStatus; // 远程服务命名中心状态
-    private final CustomCommandProcessor customCommandProcessor;
-
-    private final ScriptAgentMetricsUploadService metricsUploadService;
-
-    @Setter
-    private Consumer<RemotingCommand> afterRegistryHandler = null;  // 注册成功后回调
-
-    public ScriptAgent(ScriptAgentConfig clientConfig) {
-        this(clientConfig, new ScriptAgentProcessorAdaptor(clientConfig));
-    }
-
-    public ScriptAgent(ScriptAgentConfig clientConfig, ScriptAgentProcessorAdaptor scriptAgentProcessorAdaptor) {
-        super(clientConfig.getRegistryCenterUrl(), clientConfig.getServiceInstance().toString(),
-            scriptAgentProcessorAdaptor);
-        super.setHandshake(false);
-        this.clientConfig = clientConfig;
-        this.serviceInstance = clientConfig.getServiceInstance();
-        this.clientName = this.serviceInstance.toString();
-        this.remoteStatus = new RemoteControlServerStatus();
-        this.customCommandProcessor = new CustomCommandProcessor();
-
-        this.metricsUploadService = new ScriptAgentMetricsUploadService(this, this.getCallbackInvoker());
-        ((ScriptAgentProcessorAdaptor) getHandler()).setScriptAgent(this);
-    }
-
-    @Override
-    protected void afterBoostrapConnected(Channel channel) {
-        // 每次连接成功，都发送注册消息
-        channel.attr(NettyConstants.CLIENT_NAME).set(getName());
-        sendRegistryCommand();
-    }
-
-    @Override
-    public void addPipeline(ChannelPipeline p) {
-        p.addLast(new IdleStateHandler(0,
-            0, clientConfig.getServiceOfflineTtl()));
-
-        p.addLast(new LengthFieldBasedFrameDecoder(NameserverSystemConstants.MAX_FRAME_LENGTH,
-            0, 4, 0, 4));
-        p.addLast(new LengthFieldPrepender(4));
-
-        p.addLast(new RemotingCommandDecoder());
-        p.addLast(new RemotingCommandEncoder());
-        p.addLast(getHandler());
-    }
-
-    @Override
-    protected void doSendMessage(RemotingCommand message, boolean b) {
-        log.debug("send message to nameserver: {}", message);
-
-        ServiceInstance serviceInstance = clientConfig.getServiceInstance();
-
-        if (b && StrUtil.isBlank(message.getTransactionId())) {
-            message.setTransactionId(nextTxId());
-        }
-
-        message.setGroup(serviceInstance.getGroup());
-        message.setServiceId(serviceInstance.getServiceId());
-        message.setClientId(serviceInstance.getInstanceId());
-
-        Channel channel;
-        if ((channel = getChannel()) != null) {
-            channel.writeAndFlush(message);
-        } else {
-            throw new RuntimeException("channel is null");
-        }
-    }
-
-    /**
-     * 发送服务注册命令
-     */
-    public void sendRegistryCommand() {
-        RemotingCommand remotingCommand = buildRequestCommand(RemotingCommandFlagConstants.CLIENT_REGISTRY_SERVICE);
-
-        remotingCommand.setBodyFromObject(new HashMap<>());
-
-        sendRequest(remotingCommand).whenComplete((response, throwable) -> {
-            if (throwable != null) {
-                log.error("{} -> [{}] channel active error",
-                    clientConfig.getServiceInstance(), clientConfig.getRegistryCenterUrl(), throwable);
-            }
-
-            // 注册成功
-            if (response.getCode() == RemotingCommandCodeConstants.SUCCESS) {
-                log.info("{} client registry success", clientConfig.getServiceInstance());
-                if (afterRegistryHandler != null) {
-                    afterRegistryHandler.accept(response);
-                }
-
-                ServiceInstance nameserviceInstance = Serializer.Algorithm.Protostuff
-                    .deserialize(response.getBody(), ServiceInstance.class);
-
-                remoteStatus.setNameserverInstance(nameserviceInstance);
-            } else {
-                // 注册失败
-                log.error("{} client registry failed, response: {}", clientConfig.getServiceInstance(), response);
-                close();
-            }
-
-            remoteStatus.setLastUpdateTimestamp(System.currentTimeMillis());
-            remoteStatus.setNameserverState(NameserverState.valueOf(
-                response.getExtFieldsValue(ExtFieldsConstants.NAMESERVER_STATUS)
-            ));
-        });
-    }
-
-    /**
-     * 添加自定义命令处理器
-     *
-     * @param commandFlag commandFlag 命令标识
-     * @param customRequestHandler customRequestHandler    处理器
-     */
-    public void addCustomCommandHandler(String commandFlag, CustomRequestHandler customRequestHandler)
-        throws CustomCommandException {
-        customCommandProcessor.addCustomCommandHandler(commandFlag, customRequestHandler);
-    }
-
-    /**
-     * 处理自定义请求
-     *
-     * @param remotingCommand request
-     * @return response
-     */
-    public RemotingCommand tryResolveCustomRequest(RemotingCommand remotingCommand) {
-        RemotingCommand response = null;
-        try {
-            response = customCommandProcessor.tryInvokeCustomCommandHandler(getChannel(), remotingCommand);
-        } catch (Exception e) {
-            log.error("custom request[{}] execute error, ", remotingCommand, e);
-            response = new RemotingCommand();
-            response.setTransactionId(remotingCommand.getTransactionId());
-            response.setCode(RemotingCommandCodeConstants.FAIL);
-            response.setBody(
-                Serializer.Algorithm.Protostuff.serialize(e)
-            );
-        }
-        return response;
-    }
-
-    /**
-     * 构建命令
-     *
-     * @param commandFlag commandFlag
-     * @return RemotingCommand
-     */
-    public RemotingCommand buildRequestCommand(int commandFlag) {
-        RemotingCommand command = new RemotingCommand();
-        command.setGroup(serviceInstance.getGroup());
-        command.setServiceId(serviceInstance.getServiceId());
-        command.setClientId(serviceInstance.getInstanceId());
-        command.setTransactionId(nextTxId());
-
-        command.setFlag(commandFlag);
-        return command;
-    }
-
-    /**
-     * 获取下一个事务id
-     *
-     * @return String
-     */
-    public String nextTxId() {
-        return DistributeIdMaker.DEFAULT.nextId(clientName);
-    }
-}
-package cn.com.vortexa.control.processor;
-
-import cn.com.vortexa.control.constant.*;
-import cn.com.vortexa.control.dto.RemotingCommand;
-import cn.com.vortexa.control.BotControlServer;
-import cn.com.vortexa.control.service.IRegistryService;
-import cn.com.vortexa.control.util.NameserverUtil;
-import cn.com.vortexa.websocket.netty.handler.BaseWebSocketInboundHandler;
-import cn.com.vortexa.websocket.netty.constants.NettyConstants;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandler;
-import io.netty.channel.ChannelHandlerContext;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.concurrent.CompletableFuture;
-
-/**
- * @author helei
- * @since 2025/03/11
- */
-@Slf4j
-@ChannelHandler.Sharable
-public class ControlServerProcessorAdaptor extends BaseWebSocketInboundHandler<RemotingCommand> {
-
-    @Getter
-    private final BotControlServer botControlServer;
-    private final PingCommandProcessor pingCommandProcessor;
-    private final PongCommandProcessor pongCommandProcessor;
-    private final ServiceRegistryProcessor serviceRegistryProcessor;
-    private final ServiceDiscoverProcessor serviceDiscoverProcessor;
-    private final ScriptAgentMetricsCommandProcessor scriptAgentMetricsCommandProcessor;
-
-    public ControlServerProcessorAdaptor(
-        BotControlServer nameServerService,
-        IRegistryService registryService
-    ) {
-        super();
-        this.botControlServer = nameServerService;
-        this.pingCommandProcessor = new PingCommandProcessor(botControlServer);
-        this.pongCommandProcessor = new PongCommandProcessor(botControlServer);
-        this.serviceRegistryProcessor = new ServiceRegistryProcessor(registryService);
-        this.serviceDiscoverProcessor = new ServiceDiscoverProcessor(registryService);
-        this.scriptAgentMetricsCommandProcessor = new ScriptAgentMetricsCommandProcessor(botControlServer);
-
-        init(this.botControlServer.getExecutorService());
-    }
-
-    @Override
-    protected void handlerMessage(ChannelHandlerContext ctx, RemotingCommand remotingCommand) {
-        Integer opt = remotingCommand.getFlag();
-        String txId = remotingCommand.getTransactionId();
-
-        Channel channel = ctx.channel();
-        String key = channel.attr(NettyConstants.CLIENT_NAME).get();
-        log.debug("receive client[{}] command [{}]", key, remotingCommand);
-
-        CompletableFuture.supplyAsync(() -> switch (opt) {
-                case RemotingCommandFlagConstants.PING -> pingCommandProcessor.handlerPing(key, channel, remotingCommand);
-                case RemotingCommandFlagConstants.PONG -> pongCommandProcessor.handlerPong(key, channel, remotingCommand);
-                case RemotingCommandFlagConstants.CLIENT_REGISTRY_SERVICE -> {
-                    RemotingCommand registryResult = serviceRegistryProcessor.handlerClientServiceRegistry(
-                        channel, remotingCommand);
-                    if (registryResult.getCode() == RemotingCommandCodeConstants.SUCCESS) {
-                        // 给channel设置名字
-                        String group = remotingCommand.getGroup();
-                        String serviceId = remotingCommand.getServiceId();
-                        String clientId = remotingCommand.getClientId();
-                        String newKey = NameserverUtil.generateServiceInstanceKey(group, serviceId, clientId);
-
-                        channel.attr(NettyConstants.CLIENT_NAME).set(newKey);
-
-                        // 注册成功，添加channel连接
-                        botControlServer.getConnectionService().addServiceChannel(newKey, channel);
-                    }
-
-                    // 返回状态
-                    registryResult.addExtField(
-                        ExtFieldsConstants.NAMESERVER_STATUS,
-                        botControlServer.getState().name()
-                    );
-                    yield registryResult;
-                }
-                case RemotingCommandFlagConstants.CLIENT_DISCOVER_SERVICE ->
-                    serviceDiscoverProcessor.handlerDiscoverService(channel, remotingCommand);
-                case RemotingCommandFlagConstants.CUSTOM_COMMAND ->
-                    botControlServer.tryInvokeCustomCommand(channel, remotingCommand);
-                case RemotingCommandFlagConstants.SCRIPT_AGENT_METRICS_UPLOAD ->
-                    scriptAgentMetricsCommandProcessor.handlerScriptAgentMetricsUpload(key, remotingCommand);
-                default -> throw new IllegalStateException("Unexpected value: " + opt);
-            }, getCallbackInvoker())
-            .whenCompleteAsync((response, ex) -> {
-                if (ex != null) {
-                    log.error("client[{}] command process failed", key, ex);
-
-                    RemotingCommand errorResponse = new RemotingCommand();
-                    errorResponse.setFlag(-1 * opt);
-                    errorResponse.setCode(RemotingCommandCodeConstants.FAIL);
-                    errorResponse.addExtField(
-                        ExtFieldsConstants.REQUEST_ERROR_MSG,
-                        ex.getMessage()
-                    );
-
-                    ctx.channel().writeAndFlush(errorResponse);
-                } else if (response != null) {
-                    response.setTransactionId(txId);
-
-                    log.debug("send response[{}]", response);
-                    ctx.channel().writeAndFlush(response);
-                }
-            });
-    }
-
-    @Override
-    protected void handleAllIdle(ChannelHandlerContext ctx) {
-        Channel channel = ctx.channel();
-        log.debug("channel[{}][{}] not active long time, will close it",
-            channel.id(), channel.attr(NettyConstants.CLIENT_NAME));
-
-        botControlServer.closeChannel(channel);
-    }
-
-    @Override
-    protected Object getMessageId(RemotingCommand message) {
-        return message.getTransactionId();
-    }
-}
-package cn.com.vortexa.control.processor;
-
-import cn.com.vortexa.control.BotControlServer;
-import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
-import cn.com.vortexa.control.constant.RemotingCommandFlagConstants;
-import cn.com.vortexa.control.dto.RemotingCommand;
-import cn.com.vortexa.control.dto.ScriptAgentMetrics;
-
-/**
- * Script Agent 指标上传命令处理器
- *
- * @author h30069248
- * @since 2025/3/24 15:47
- */
-public class ScriptAgentMetricsCommandProcessor {
-    private final BotControlServer botControlServer;
-
-    public ScriptAgentMetricsCommandProcessor(BotControlServer botControlServer) {
-        this.botControlServer = botControlServer;
-    }
-
-    /**
-     * 处理script agent指标上传
-     *
-     * @param key key
-     * @param command command
-     * @return RemotingCommand
-     */
-    public RemotingCommand handlerScriptAgentMetricsUpload(String key, RemotingCommand command) {
-        // Step 1 提取数据
-        ScriptAgentMetrics agentMetrics = command.getObjBodY(ScriptAgentMetrics.class);
-
-        int insert =  botControlServer.getMetricsService().saveAgentMetrics(agentMetrics);
-
-        if (insert > 0) {
-            throw new RuntimeException("save script agent metrics error");
-        }
-
-        RemotingCommand response = new RemotingCommand();
-        response.setTransactionId(command.getTransactionId());
-        response.setFlag(RemotingCommandFlagConstants.SCRIPT_AGENT_METRICS_UPLOAD_RESPONSE);
-        response.setCode(RemotingCommandCodeConstants.SUCCESS);
-        return response;
-    }
-}
-package cn.com.vortexa.control.service.impl;
-
-import cn.com.vortexa.control.dto.ScriptAgentMetrics;
-import cn.com.vortexa.control.service.IMetricsService;
-
-/**
- * @author h30069248
- * @since 2025/3/24 15:59
- */
-public class InfluxDBMetricsService implements IMetricsService {
-    @Override
-    public int saveAgentMetrics(ScriptAgentMetrics agentMetrics) {
-        return 1;
-    }
-}
-package cn.com.vortexa.control.service;
-
-import cn.com.vortexa.control.dto.ScriptAgentMetrics;
-
-/**
- * @author h30069248
- * @since 2025/3/24 15:53
- */
-public interface IMetricsService {
-
-    /**
-     * 保存指标
-     *
-     * @param agentMetrics agentMetrics
-     * @return int
-     */
-    int saveAgentMetrics(ScriptAgentMetrics agentMetrics);
-}
-package cn.com.vortexa.control;
-
-import cn.com.vortexa.common.util.NamedThreadFactory;
-import cn.com.vortexa.control.config.ControlServerConfig;
-import cn.com.vortexa.control.constant.NameserverState;
-import cn.com.vortexa.control.constant.NameserverSystemConstants;
-import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
-import cn.com.vortexa.control.constant.RemotingCommandFlagConstants;
-import cn.com.vortexa.control.dto.ConnectEntry;
-import cn.com.vortexa.control.dto.RemotingCommand;
-import cn.com.vortexa.control.dto.RPCResultWrapper;
-import cn.com.vortexa.control.exception.CustomCommandException;
-import cn.com.vortexa.control.exception.ControlServerException;
-import cn.com.vortexa.control.handler.CustomRequestHandler;
-import cn.com.vortexa.control.processor.ControlServerProcessorAdaptor;
-import cn.com.vortexa.control.protocol.Serializer;
-import cn.com.vortexa.control.service.IConnectionService;
-import cn.com.vortexa.control.service.IMetricsService;
-import cn.com.vortexa.control.service.IRegistryService;
-import cn.com.vortexa.control.processor.CustomCommandProcessor;
-import cn.com.vortexa.control.service.impl.InfluxDBMetricsService;
-import cn.com.vortexa.control.util.DistributeIdMaker;
-import cn.com.vortexa.control.util.NameserverUtil;
-import cn.com.vortexa.control.util.RemotingCommandDecoder;
-import cn.com.vortexa.control.util.RemotingCommandEncoder;
-import cn.com.vortexa.websocket.netty.constants.NettyConstants;
-import io.netty.bootstrap.ServerBootstrap;
-import io.netty.channel.*;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.channel.socket.nio.NioSocketChannel;
-import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
-import io.netty.handler.codec.LengthFieldPrepender;
-import io.netty.handler.timeout.IdleStateHandler;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-
-import static cn.com.vortexa.control.constant.NameserverState.*;
-
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicReference;
-
-@Slf4j
-@Getter
-public class BotControlServer {
-    private final ControlServerConfig controlServerConfig;    // nameServerConfig
-    private final CustomCommandProcessor customCommandProcessor;   // 自定义命令处理服务
-    private final ExecutorService executorService;
-    private final long startTime;   //启动时间
-
-    private volatile NameserverState state; // name server state
-    private ServerBootstrap serverBootstrap;    //serverBootstrap
-    private ChannelFuture nameserverChannelFuture;  //nameserverChannelFuture
-
-    private ControlServerProcessorAdaptor processorAdaptor;  // 消息处理器
-    private IRegistryService registryService;   // 注册服务
-    private IConnectionService connectionService;   // 连接服务
-    private IMetricsService metricsService; // 指标服务
-
-    public BotControlServer(ControlServerConfig controlServerConfig) throws ControlServerException {
-        this(controlServerConfig, Executors.newThreadPerTaskExecutor(
-                new NamedThreadFactory(controlServerConfig.getServiceInstance().toString())
-        ));
-    }
-
-    public BotControlServer(
-            ControlServerConfig controlServerConfig,
-            ExecutorService executorService
-    ) throws ControlServerException {
-        this.controlServerConfig = controlServerConfig;
-        updateNameServerState(JUST_START);
-        this.startTime = System.currentTimeMillis();
-        this.executorService = executorService;
-
-        this.customCommandProcessor = new CustomCommandProcessor();
-    }
-
-    /**
-     * 初始化
-     *
-     * @param registryService registryService
-     */
-    public void init(
-            IRegistryService registryService,
-            IConnectionService connectionService
-    ) throws ControlServerException {
-        this.registryService = registryService;
-        this.connectionService = connectionService;
-        this.processorAdaptor = new ControlServerProcessorAdaptor(
-                this,
-                registryService
-        );
-        this.metricsService = new InfluxDBMetricsService();
-
-        serverBootstrap = new ServerBootstrap()
-                .group(new NioEventLoopGroup(controlServerConfig.getNioThreadCount()), new NioEventLoopGroup())
-                .channel(NioServerSocketChannel.class)
-                .option(ChannelOption.SO_BACKLOG, 1024)
-                .option(ChannelOption.SO_REUSEADDR, true)
-                .childOption(ChannelOption.SO_KEEPALIVE, false)
-                .childOption(ChannelOption.TCP_NODELAY, true)
-                .childOption(ChannelOption.SO_SNDBUF, 65535)
-                .childOption(ChannelOption.SO_RCVBUF, 65535)
-                .childHandler(new ChannelInitializer<NioSocketChannel>() {
-                    @Override
-                    protected void initChannel(NioSocketChannel ch) throws Exception {
-                        ch.pipeline().addLast(new IdleStateHandler(
-                                0, 0, controlServerConfig.getServiceOfflineTtl()));
-
-                        ch.pipeline().addLast(new LengthFieldBasedFrameDecoder(
-                                NameserverSystemConstants.MAX_FRAME_LENGTH, 0,
-                                4, 0, 4));
-
-                        ch.pipeline().addLast(new LengthFieldPrepender(4));
-
-                        ch.pipeline().addLast(new RemotingCommandDecoder());
-                        ch.pipeline().addLast(new RemotingCommandEncoder());
-                        ch.pipeline().addLast(processorAdaptor);
-                    }
-                });
-
-        updateNameServerState(INIT_FINISH);
-    }
-
-    /**
-     * 启动
-     *
-     * @throws ControlServerException NameserverStartException
-     */
-    public ChannelFuture start() throws ControlServerException {
-        log.info("start nameserver [{}], configuration:\n {}",
-                controlServerConfig.getServiceInstance(), controlServerConfig);
-
-        try {
-            nameserverChannelFuture = serverBootstrap.bind(
-                    controlServerConfig.getServiceInstance().getHost(),
-                    controlServerConfig.getServiceInstance().getPort()
-            );
-
-            nameserverChannelFuture.addListener(new ChannelFutureListener() {
-                @Override
-                public void operationComplete(ChannelFuture channelFuture) throws Exception {
-                    updateNameServerState(RUNNING);
-                }
-            });
-
-            return nameserverChannelFuture;
-        } catch (Exception e) {
-            updateNameServerState(SHUT_DOWN);
-            throw new ControlServerException("start error", e);
-        }
-    }
-
-    /**
-     * 添加自定义命令处理器
-     *
-     * @param commandKey           commandKey 命令标识
-     * @param customRequestHandler customRequestHandler    处理器
-     */
-    public void addCustomCommandHandler(String commandKey, CustomRequestHandler customRequestHandler)
-            throws CustomCommandException {
-        customCommandProcessor.addCustomCommandHandler(commandKey, customRequestHandler);
-    }
-
-    /**
-     * 调用自定义命令handler
-     *
-     * @param channel channel
-     * @param request request
-     * @return response
-     */
-    public RemotingCommand tryInvokeCustomCommand(Channel channel, RemotingCommand request) {
-        RemotingCommand response = null;
-
-        try {
-            // Step 1 校验是否注册服务
-            String key = channel.attr(NettyConstants.CLIENT_NAME).get();
-
-            if (!registryService.existServiceInstance(key)) {
-                log.debug("channel[{}] didn't registry, drop request [{}]", key, request);
-                closeChannel(channel);
-                return null;
-            }
-
-            // Step 2 运行自定义命令
-            response = customCommandProcessor.tryInvokeCustomCommandHandler(channel, request);
-
-            if (response.getTransactionId() == null) {
-                response.setTransactionId(request.getTransactionId());
-            }
-        } catch (Exception e) {
-            log.error("client custom command execute error", e);
-
-            response = new RemotingCommand();
-            response.setTransactionId(request.getTransactionId());
-            response.setFlag(RemotingCommandFlagConstants.CUSTOM_COMMAND_RESPONSE);
-            response.setCode(RemotingCommandCodeConstants.FAIL);
-            response.setBody(Serializer.Algorithm.JDK.serialize(new RPCResultWrapper<>(null, e)));
-        }
-
-        return response;
-    }
-
-    /**
-     * 给服务实例发送命令
-     *
-     * @param group           group
-     * @param serviceId       serviceId
-     * @param instanceId      instanceId
-     * @param remotingCommand remotingCommand
-     * @return CompletableFuture<RemotingCommand>
-     */
-    public CompletableFuture<RemotingCommand> sendCommandToServiceInstance(
-            String group,
-            String serviceId,
-            String instanceId,
-            RemotingCommand remotingCommand
-    ) {
-        // Step 1 获取连接
-        String key = NameserverUtil.generateServiceInstanceKey(group, serviceId, instanceId);
-        ConnectEntry connectEntry = connectionService.getServiceInstanceChannel(key);
-
-        if (connectEntry == null || !connectEntry.isUsable()) {
-            log.error("[{}] channel is unusable", key);
-            return CompletableFuture.completedFuture(null);
-        }
-
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                CountDownLatch latch = new CountDownLatch(1);
-                AtomicReference<RemotingCommand> result = new AtomicReference<>();
-
-                // Step 2 注册请求
-                boolean registry = processorAdaptor.registryRequest(remotingCommand, response -> {
-                    result.set(response);
-                    latch.countDown();
-                });
-
-                if (registry) {
-                    connectEntry.getChannel().writeAndFlush(remotingCommand);
-                }
-
-                latch.await();
-                return result.get();
-            } catch (InterruptedException e) {
-                throw new RuntimeException("send command %s error".formatted(remotingCommand), e);
-            }
-        }, executorService);
-    }
-
-    /**
-     * 关闭连接某客户端的channel连接
-     *
-     * @param channel channel
-     */
-    public void closeChannel(Channel channel) {
-        if (channel == null) {
-            return;
-        }
-
-        String key = channel.attr(NettyConstants.CLIENT_NAME).get();
-
-        if (registryService.existServiceInstance(key)) {
-            connectionService.closeServiceChannel(channel, key);
-        } else if (channel.isActive()) {
-            channel.close();
-        }
-    }
-
-    public String nextTxId() {
-        return DistributeIdMaker.DEFAULT.nextId(controlServerConfig.getServiceInstance().toString());
-    }
-
-    /**
-     * 更新状态
-     *
-     * @param newState newState
-     * @throws ControlServerException NameserverException
-     */
-    private void updateNameServerState(NameserverState newState) throws ControlServerException {
-        synchronized (this) {
-            boolean isUpdate = switch (newState) {
-                case JUST_START: {
-                    yield state == null || state == JUST_START;
-                }
-                case INIT_FINISH:
-                    yield state == JUST_START || state == INIT_FINISH;
-                case RUNNING:
-                    yield state == INIT_FINISH;
-                case SHUT_DOWN:
-                    yield state != SHUT_DOWN;
-            };
-
-            if (isUpdate) {
-                log.info("nameserver[{}] status updated [{}]->[{}]", controlServerConfig.getServiceInstance(), state,
-                        newState);
-                state = newState;
-            } else {
-                throw new ControlServerException("state cannot from [%s] to [%s]".formatted(state, newState));
-            }
-        }
+    // 传入异常原因的构造函数
+    public BrowserRequestException(Throwable cause) {
+        super(cause);
     }
 }
