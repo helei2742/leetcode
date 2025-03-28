@@ -1,757 +1,306 @@
 <script setup lang="ts">
+import DynamicAddFieldTable from "@/components/dynamic-add-field-table.vue";
+import {ref} from "vue";
 
+
+
+
+
+const accountBaseInfoList = ref(
+  [
+    {
+      'id': '123123',
+      'email': '123213@qq.com',
+      'name': '123213',
+      'password': '123123123'
+    },
+    {
+      'id': '123123',
+      'email': '123213@qq.com',
+      'name': '123213',
+      'password': '123123123'
+    },
+    {
+      'id': '123123',
+      'email': '123213@qq.com',
+      'name': '123213',
+      'password': '123123123'
+    },
+    {
+      'id': '123123',
+      'email': '123213@qq.com',
+      'name': '123213',
+      'password': '123123123'
+    }
+  ]
+)
 </script>
 
 <template>
-  <div class="content-block">
-    <div v-if="$slots.header" class="content-block-header">
-      <slot name="header"></slot>
-    </div>
-    <slot name="default"></slot>
+  <div>
+    <dynamic-add-field-table
+      :headers="['id', 'name', 'password']"
+      id-field="id"
+      :data="accountBaseInfoList"
+    >
+
+    </dynamic-add-field-table>
   </div>
 </template>
 
 <style scoped>
-.content-block{
-  background-color: #ffffff;
-  border-radius: 6px;
-  border: 1px solid #f8f8f8;
-  padding: 20px 15px;
-  margin-bottom: 8px;
-  box-shadow: 0 0 5px 0 rgba(100, 100, 100, 0.1);
-}
 
-.content-block-header{
-  font-weight: 700;
-}
 </style>
-components、content-block--------------------------------------------------
-
 <script setup lang="ts">
-import {Calendar, DCaret} from '@element-plus/icons-vue'
-import {ref} from 'vue'
+import {ArrowDown, Upload} from '@element-plus/icons-vue'
+import {computed, ref,} from "vue";
+import type {TableColumnCtx, UploadInstance} from "element-plus";
 
-const currentTime = ref(new Date())
+interface Props {
+  headers: string[],
+  idField: string,
+  data: object[]
+}
 
-setInterval(() => {
-  currentTime.value = new Date();
-}, 1000);
+const props = defineProps<Props>();
 
+const extraFieldList = computed(() => {
+  if (props.data.length > 0) {
+    const keys: string[] = Object.keys(props.data[0]);
+    return keys.filter(key => key != '$$edit' && props.headers.indexOf(key) === -1)
+  }
+  return []
+})
+
+const selectFieldList = ref([...props.headers])
+const searchValue = ref('')
+
+function getFieldValueList(field): Array<{ text: string, value: string }> {
+  if (props.data.length > 0) {
+    const unique = [...new Set(props.data.map(item => item[field]))]
+    return unique.map(obj => {
+      return {text: obj, value: obj}
+    })
+  }
+  return []
+}
+
+const filterHandler = (
+  value: string,
+  row: object,
+  column: TableColumnCtx<object>
+) => {
+  const property = column['property']
+  return row[property] === value
+}
+
+
+const multipleSelection = ref([])
+
+function handleSelectionChange(lineData) {
+  multipleSelection.value = lineData
+}
+
+
+// editable table
+const editState = ref({
+  row: -1
+})
+function handleUpdateRaw(raw, index, column) {
+  editState.value.row = -1
+}
+
+function cellClickHandler(scope) {
+  if (editState.value.row == scope.$index) {
+    editState.value.row = -1
+  } else {
+    editState.value.row = scope.$index
+  }
+}
+
+// upload
+const isCanUpdate = ref(false)
+const uploadRef = ref<UploadInstance>()
+const submitUpload = () => {
+  uploadRef.value!.submit()
+}
 </script>
 
 <template>
-  <div class="vortexa-banner">
-    <div class="avatar-wrapper">
-      <el-avatar
-        src="https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png"
-      />
-      <span style="font-weight: 700">Vortexa</span>
-    </div>
-    <el-divider />
-    <el-dropdown class="vortexa-schedule" placement="bottom-start">
-      <span class="el-dropdown-link">
-        <el-icon class="el-icon--left">
-          <Calendar/>
-        </el-icon>
-        Schedule
-        <el-icon style="margin-left: auto;"><DCaret /></el-icon>
-      </span>
-      <template #dropdown>
-        <el-dropdown-menu>
-          <el-dropdown-item>Action 1</el-dropdown-item>
-          <el-dropdown-item>Action 2</el-dropdown-item>
-          <el-dropdown-item>Action 3</el-dropdown-item>
-          <el-dropdown-item>Action 4</el-dropdown-item>
-          <el-dropdown-item>Action 5</el-dropdown-item>
-        </el-dropdown-menu>
-      </template>
-    </el-dropdown>
+  <div class="dynamic-add-field-table">
+    <div class="select-bar-list">
+      <el-dropdown trigger="click">
+        <el-button>
+          <el-icon class="el-icon--left">
+            <arrow-down/>
+          </el-icon>
+          Field
+        </el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item v-for="item in headers" :key="item">
+              <el-checkbox :label="item" disabled/>
+            </el-dropdown-item>
+            <el-dropdown-item v-for="item in extraFieldList" :key="item">
+              <el-checkbox-group v-model="selectFieldList">
+                <el-checkbox :label="item"/>
+              </el-checkbox-group>
+            </el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
 
-    <div class="datetime-printer">
-      <el-date-picker
-        v-model="currentTime"
-        :editable="false"
-        readonly
-        :clearable="false"
-        type="datetime"
-        placeholder="Pick a Date"
-        format="YYYY/MM/DD hh:mm:ss"
-      />
+      <el-upload
+        class="upload-demo"
+        :show-file-list="false"
+        :limit="1"
+        :auto-upload="false"
+      >
+        <el-button v-if="isCanUpdate" type="success" @click="submitUpload" disabled>
+          Upload
+          <el-icon class="el-icon--right">
+            <Upload/>
+          </el-icon>
+        </el-button>
+        <el-button v-else>select file</el-button>
+      </el-upload>
+
+      <slot name="toolbar"></slot>
     </div>
 
-    <el-divider />
+    <div class="add-field-table">
+      <el-table ref="tableRef"
+                :data="data"
+                :height="600"
+                highlight-current-row
+                stripe
+                size="large"
+                @selection-change="handleSelectionChange"
+                style="width: 100%"
+      >
+        <el-table-column type="selection" width="55"/>
+
+        <el-table-column
+          v-for="item in selectFieldList"
+          :key="item"
+          :prop="item"
+          :label="item"
+          show-overflow-tooltip
+          :filters="getFieldValueList(item)"
+          :filter-method="filterHandler"
+        >
+          <template #default="scope">
+            <el-input
+              v-if="editState.row==scope.$index"
+              v-model="scope.row[item]"
+              size="small"
+            />
+            <div
+              v-else
+              @click="cellClickHandler(scope)"
+            >
+              {{ scope.row[item] }}
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column fixed="right" width="180">
+          <template #header>
+            <el-button size="small" type="danger">Delete</el-button>
+          </template>
+          <template #default="scope">
+            <el-button
+              v-if="editState.row==scope.$index"
+              size="small"
+              type="success"
+              @click="handleUpdateRaw(scope.row, scope.$index, scope.column)">
+              Save
+            </el-button>
+            <el-button v-else size="small" @click="editState.row=scope.$index">
+              Edit
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
   </div>
 </template>
 
 <style scoped>
-:deep(.el-input__wrapper){
-  border: none !important;
-  box-shadow: none !important;
+.dynamic-add-field-table {
+}
+
+.select-bar-list {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.add-field-table {
+  position: relative;
+  height: 600px;
+  background-color: #fff;
+  border-radius: 10px;
+}
+
+.add-field-table > .el-table {
+  position: absolute;
+}
+
+
+::v-deep .el-table,
+.el-table__expanded-cell {
+  padding: 20px !important;
   background-color: transparent !important;
 }
 
-.vortexa-banner {
-  padding: 0 12px;
-  font-size: 24px;
-  line-height: 40px;
+::v-deep .el-table th {
+  background-color: transparent !important;
+  border-bottom: 1px solid rgba(100, 100, 100, 0.3) !important;
 }
 
-.avatar-wrapper {
-  display: flex;
-  align-items: baseline; /* 垂直居中 */
-  margin-bottom: 10px;
+::v-deep .el-table tr {
+  background-color: transparent !important;
 }
 
-.vortexa-schedule {
-  width: 184px;
-  height: 36px;
-  padding: 0 12px;
-  font-size: 14px;
-  font-weight: 500;
-  margin-top: 10px;
+::v-deep .el-table--enable-row-transition .el-table__body td,
+::v-deep .el-table .cell {
+  //background-color: transparent !important;
+  border: none !important;
 }
 
-.vortexa-schedule:hover{
-  background-color: #ecebeb;
+:deep(.select-bar-list .el-button:hover) {
+  background-color: azure !important;
 }
 
-.el-dropdown-link{
-  display: flex;
-  width: 100%;
-  line-height: 36px;
-  align-items: center;
+:deep(.select-bar-list .el-button:active) {
+  background-color: azure !important;
 }
 
-.datetime-printer >.el-input__wrapper {
-  background-color: transparent;
-  border: none;
+:deep(.el-table .el-table__cell) {
+  padding: 0 !important;
+  height: 30px;
+}
+
+:deep(.el-table .el-input__inner ) {
+  height: 30px;
+  font-size: 16px;
 }
 </style>
-components/banner---------------
-
-<script setup lang="ts">
-import {useRoute} from "vue-router";
-import {computed, ref, watch} from "vue";
-
-const route = useRoute()
-const breadcrumbs = computed(() => {
-  return route.matched.filter((item) => item.meta && item.meta.title)
-})
-
-
-</script>
-
-<template>
-  <el-page-header icon="">
-    <template #breadcrumb>
-      <el-breadcrumb separator="/">
-        <el-breadcrumb-item v-for="item in breadcrumbs">
-          {{ item.meta.title }}
-        </el-breadcrumb-item>
-      </el-breadcrumb>
-    </template>
-    <template #title>
-      <h1 class="text-large font-600 mr-3"> {{ breadcrumbs[0].meta.title }} </h1>
-    </template>
-    <template #extra>
-      <div class="flex items-center">
-        <el-button>Print</el-button>
-        <el-button type="primary" class="ml-2">Edit</el-button>
-      </div>
-    </template>
-  </el-page-header>
-</template>
-
-<style scoped>
-
-</style>
-compon/header----------------------------------------------------------------
-
-
-<template>
-  <el-menu
-    ellipsis
-    :router="false"
-    default-active="/dashboard"
-    class="vortexa-menu"
-    :mode="isHorizontal ? 'horizontal' : 'vertical'"
-  >
-    <el-menu-item index="/dashboard" :class="verticalMode" @click="goTo('/dashboard')">
-      <el-icon>
-        <House/>
-      </el-icon>
-      <span>Dashboard</span>
-    </el-menu-item>
-
-    <el-menu-item index="/account" :class="verticalMode" @click="goTo('/account')">
-      <el-icon>
-        <User/>
-      </el-icon>
-      <span>Account</span>
-    </el-menu-item>
-
-    <el-menu-item index="/script" :class="verticalMode" @click="goTo('/script')">
-      <el-icon><SwitchButton /></el-icon>
-      <span>Script</span>
-    </el-menu-item>
-  </el-menu>
-</template>
-
-
-menu---------------------------------------
-
-
-
-<script lang="ts" setup>
-import {House, User, SwitchButton} from '@element-plus/icons-vue'
-import {computed} from 'vue'
-import { useRouter } from "vue-router";
-
-const props = defineProps<{
-  isHorizontal: boolean
-}>();
-
-const verticalMode = computed(() => ({
-  verticalMode: props.isHorizontal,
-}))
-
-
-const router = useRouter();
-
-const goTo = (path) => {
-  router.push('/homepage' + path);
-};
-
-</script>
-
-<style>
-.vortexa-menu {
-  font-family: Inter, "Inter Fallback", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
-  font-size: 14px;
-  font-weight: 500;
-  width: 100%;
-}
-
-.el-menu.vortexa-menu {
-  background-color: transparent;
-  border-right: none;
-}
-
-.vortexa-menu > .el-menu-item {
-  line-height: 20px;
-  height: 36px;
-  width: 208px;
-  color: rgb(120, 114, 109) !important;
-  background-color: transparent;
-}
-
-.vortexa-menu > .el-menu-item.verticalMode {
-  display: flex;
-  flex-direction: column;
-  width: fit-content;
-}
-
-.el-menu.vortexa-menu > .el-menu-item.is-active {
-  color: rgb(12, 10, 9) !important;
-}
-
-.el-menu.el-menu--horizontal.vortexa-menu > .el-menu-item.is-active {
-  color: rgb(12, 10, 9) !important;
-  border-bottom-color: rgb(12, 10, 9) !important;
-}
-
-.el-menu.el-menu--horizontal.vortexa-menu {
-  display: flex;
-  justify-content: center; /* 水平居中 */
-}
-
-.vortexa-menu > .el-menu-item:hover{
-  background-color: #ecebeb;
-  color: rgb(12, 10, 9);
-}
-
-.el-menu.el-menu--horizontal.vortexa-menu > .el-menu-item:hover {
-  background-color: #ecebeb !important;
-  color: rgb(12, 10, 9) !important;
-}
-
-</style>
-component/menu-------------------------------------------------
-
-import {createRouter, createWebHistory} from 'vue-router'
-import VortexaHomePage from "@/views/homepage/vortexa-home-page.vue"
-import DashBoard from '../views/dashboard/index.vue'
-
-const routes = [
-  {
-    path: '/',
-    redirect: "/homepage",
-  },
-  {
-    path: '/homepage',
-    component: VortexaHomePage,
-    meta: {title: 'HomePage'},
-    children: [
-      {
-        path: 'dashboard',
-        component: DashBoard,
-        meta: {
-          title: 'DashBoard'
-        }
-      },
-    ]
-  },
-]
-
-const router = createRouter({
-  history: createWebHistory(import.meta.env.BASE_URL),
-  routes: routes,
-})
-
-export default router
-
-router ------------------
-
-
-<script setup lang="ts">
-import ContentBlock from "@/components/content-block/content-block.vue";
-import {computed} from "vue";
-import {Loading, Monitor, Coin, Basketball} from '@element-plus/icons-vue'
-
-interface SampleStatus {
-  runningScriptCount: number,
-  scriptHeathRatio: number,
-  flowUsage: number,
-  memoryUsage: number,
-}
-
-interface Props {
-  sampleStatus: SampleStatus
-}
-
-const props = withDefaults(defineProps<Props>(), {
-  sampleStatus: () => ({
-    runningScriptCount: 3,
-    scriptHeathRatio: 0.90,
-    flowUsage: 129193,
-    memoryUsage: 1231
-  })
-});
-
-const heathRatio = computed(() => {
-  return (props.sampleStatus.scriptHeathRatio * 100).toFixed(2)
-})
-const heathRatioStyle = computed(() => {
-  if (props.sampleStatus.scriptHeathRatio < 0.4) {
-    return {color: '#ff392a'}
-  } else if (props.sampleStatus.scriptHeathRatio < 0.8) {
-    return {color: '#ffd920'}
-  } else {
-    return {color: '#34ff1e'}
-  }
-})
-
-
-</script>
-
-<template>
-  <content-block class="status-card-list">
-    <el-statistic
-      class="status-card-item"
-      :value="sampleStatus.runningScriptCount">
-      <template #title>
-        <div class="statistic-title">
-          <Loading class="statistic-title-icon"/>
-          Running Script
-        </div>
-      </template>
-    </el-statistic>
-
-    <el-statistic
-      class="status-card-item"
-      :value="heathRatio"
-      :value-style="heathRatioStyle"
-    >
-      <template #title>
-        <div class="statistic-title">
-          <Monitor class="statistic-title-icon"/>
-          Script Heath
-        </div>
-      </template>
-      <template #suffix>
-        <div class="statistic-unit">
-          %
-        </div>
-      </template>
-    </el-statistic>
-
-    <el-statistic
-      :value="sampleStatus.flowUsage"
-      class="status-card-item"
-    >
-      <template #title>
-        <div class="statistic-title">
-          <Basketball class="statistic-title-icon"/>
-          Flow Usage
-        </div>
-      </template>
-      <template #suffix>
-        <div class="statistic-unit">
-          MB
-        </div>
-      </template>
-    </el-statistic>
-
-    <el-statistic
-      class="status-card-item"
-      :value="sampleStatus.memoryUsage">
-      <template #title>
-        <div class="statistic-title">
-          <Coin class="statistic-title-icon"/>
-          Memory Usage
-        </div>
-      </template>
-      <template #suffix>
-        <div class="statistic-unit">
-          MB
-        </div>
-      </template>
-    </el-statistic>
-  </content-block>
-</template>
-
-<style scoped>
-.status-card-list {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center; /* 垂直方向上的间隔 */
-  gap: 10px; /* 元素之间的间隔 */
-}
-
-.status-card-item {
-  flex: 1 1 20%;
-}
-
-@media (max-width: 1080px) {
-  .status-card-item {
-    flex: 1 1 46%;
-  }
-}
-
-.statistic-title {
-  display: inline-flex;
-  align-items: center;
-  font-size: 14px;
-  font-weight: 700;
-  min-width: 135px;
-}
-
-.statistic-title-icon {
-  width: 14px;
-  font-weight: 500;
-  margin-right: 5px;
-}
-
-.statistic-unit {
-  font-size: 14px;
-  font-weight: 500;
-  justify-content: left !important;
-}
-</style>
-sample-status-list----------------------------------------------------------
-
-<script setup lang="ts">
-
-import ContentBlock from "@/components/content-block/content-block.vue";
-</script>
-
-<template>
-  <content-block>
-    <div slot="header">
-      <h4>FLow Usage</h4>
-    </div>
-  </content-block>
-</template>
-
-<style scoped>
-
-</style>
-
-script-flow-usage-------------------------------------
--
-<script setup lang="ts">
-
-import ContentBlock from "@/components/content-block/content-block.vue";
-</script>
-
-<template>
-  <content-block>
-    <div slot="header">
-      <h3>Script Heath</h3>
-    </div>
-  </content-block>
-</template>
-
-<style scoped>
-
-</style>
-script-heath-chart-------------------------------------
-
-<script setup lang="ts">
-
-import ContentBlock from "@/components/content-block/content-block.vue";
-</script>
-
-<template>
-  <content-block>
-    <div slot="header">
-      <h3>Memory usage</h3>
-    </div>
-  </content-block>
-</template>
-
-<style scoped>
-
-</style>
-
-memoryusage------------------------------
-
-<script setup lang="ts">
-import ContentBlock from "@/components/content-block/content-block.vue";
-import {Loading} from '@element-plus/icons-vue'
-import * as echarts from 'echarts'
-import {ref, onMounted} from "vue";
-import type {ECBasicOption} from "echarts/types/dist/shared";
-import ScriptStatusChartCard from "@/views/dashboard/component/script-status-chart-card.vue";
-
-interface RunningScriptChartData {
-  total: number,
-  options: ECBasicOption
-}
-
-interface Props {
-  runningScriptChartData: RunningScriptChartData
-}
-
-const props = withDefaults(defineProps<Props>(), {
-  runningScriptChartData: () => ({
-    total: 0,
-    options:   {
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: {
-          type: 'shadow'
-        }
-      },
-      grid: {
-        left: '3%',
-        right: '4%',
-        bottom: '3%',
-        containLabel: true
-      },
-      xAxis: [
-        {
-          type: 'category',
-          data: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-          axisTick: {
-            alignWithLabel: true
-          }
-        }
-      ],
-      yAxis: [
-        {
-          type: 'value'
-        }
-      ],
-      series: [
-        {
-          name: 'Direct',
-          type: 'bar',
-          barWidth: '60%',
-          data: [10, 52, 200, 334, 390, 330, 220]
-        }
-      ]
-    }
-  })
-});
-
-const chart = ref(null)
-
-// onMounted(()=>{
-//   const myChart = echarts.init(chart.value)
-//   myChart.setOption(<ECBasicOption>props.runningScriptChartData.options)
-//   window.onresize = () => myChart.resize()
-// })
-
-</script>
-
-<template>
-<!--  <script-status-chart-card-->
-<!--    height="400px"-->
-<!--    :chart-options="runningScriptChartData.options">-->
-<!--    <template #header>-->
-<!--      <div>Running Script</div>-->
-<!--      <div style="font-size: 14px; font-weight: 400; line-height: 14px;margin-top: 4px">-->
-<!--        <Loading style="width: 14px"/>-->
-<!--        {{ runningScriptChartData.total }} online-->
-<!--      </div>-->
-<!--    </template>-->
-<!--  </script-status-chart-card>-->
-</template>
-
-<style scoped>
-.script-online-chart{
-  width: 100%;
-  height: 400px;
-}
-</style>
-
-
-
-online-chart-------------------------
-
-<script setup lang="ts">
-
-import ContentBlock from "@/components/content-block/content-block.vue";
-</script>
-
-<template>
-  <content-block class="tips-card">
-    <el-text class="tips-card-title" size="large" line-clamp="2">
-      Self element set width 100pxSelf element set width 100pxSelf
-      element set width 100pxSelf element set width 100pxSelf element set width 100pxSelf element
-    </el-text>
-
-    <el-text class="tips-card-content" size="large" line-clamp="3">
-      Self element set width 100px
-    </el-text>
-
-    <div class="tips-buttons">
-      <el-button type="primary">Config Bot</el-button>
-      <el-button>close tips</el-button>
-    </div>
-  </content-block>
-</template>
-
-<style scoped>
-.tips-card {
-  position: relative;
-  height: 150px;
-}
-
-.tips-card-title {
-  width: 100%;
-  font-weight: 900;
-  margin-bottom: 10px;
-}
-
-.tips-buttons {
-  position: absolute;
-  bottom: 20px;
-  left: 20px;
-}
-</style>
-
-tis=card---------------------
-
-<script setup lang="ts">
-  import ContentBlock from "@/components/content-block/content-block.vue";
-  import * as echarts from 'echarts'
-  import {ref, onMounted} from "vue";
-  import type {ECBasicOption} from "echarts/types/dist/shared";
-
-  const props = defineProps<{
-    chartOptions: ECBasicOption,
-    height: string
-  }>()
-
-  const chart = ref(null)
-
-  onMounted(()=>{
-    const myChart = echarts.init(chart.value)
-    myChart.setOption(<ECBasicOption>props.chartOptions)
-    window.onresize = () => myChart.resize()
-  })
-</script>
-
-<template>
-  <content-block>
-    <template #header>
-      <slot name="header"></slot>
-    </template>
-
-    <template #default>
-      <div ref="chart" style="height: 400px; width: 100%"/>
-    </template>
-  </content-block>
-</template>
-
-<style scoped>
-
-</style>
-
-status-chart-card0--------------------------------------------------
-
-<script setup lang="ts">
-
-import TipsCard from "@/views/dashboard/child/tips-card.vue";
-import SampleStatusList from "@/views/dashboard/child/sample-status-list.vue";
-import ScriptOnlineChart from "@/views/dashboard/child/script-online-chart.vue";
-import ScriptHeathChart from "@/views/dashboard/child/script-heath-chart.vue";
-import ScriptFlowUsageChart from "@/views/dashboard/child/script-flow-usage-chart.vue";
-import ScriptMemoryUsageChart from "@/views/dashboard/child/script-memory-usage-chart.vue";
-</script>
-
-<template>
-  <div class="vortexa-dashboard">
-    <tips-card/>
-
-    <sample-status-list/>
-
-    <div class="dashboard-chart-area">
-      <script-online-chart class="dashboard-chart-area-item"/>
-      <script-heath-chart class="dashboard-chart-area-item"/>
-      <script-flow-usage-chart class="dashboard-chart-area-item"/>
-      <script-memory-usage-chart class="dashboard-chart-area-item"/>
-    </div>
-  </div>
-</template>
-
-<style scoped>
-.vortexa-dashboard {
-  padding: 0 10px;
-}
-
-.dashboard-chart-area {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.dashboard-chart-area-item {
-  flex: 1 1 40%;
-  height: 500px;
-}
-
-@media (max-width: 1080px) {
-  .dashboard-chart-area-item {
-    flex: 1 1 100%;
-  }
-}
-</style>
-
-index-------------------------------------------------
-
 <script setup lang="ts">
 import {ref, onMounted, onUnmounted} from 'vue';
-import VortexaMenu from "@/components/vortexa-menu/vortexa-menu.vue";
-import VortexaHeader from "@/components/vortexa-header/vortexa-header.vue";
-import VortexaBanner from "@/components/vortexa-banner-tool/vortexa-banner-tool.vue";
+import VortexaMenu from "@/views/homepage/components/vortexa-menu/vortexa-menu.vue";
+import VortexaHeader from "@/views/homepage/components/vortexa-header/vortexa-header.vue";
+import VortexaBanner from "@/views/homepage/components/vortexa-banner-tool/vortexa-banner-tool.vue";
+import {useWindowSizeStore} from "@/stores/windowSize.ts";
+
+const windowSizeStore = useWindowSizeStore()
 
 const isDesktop = ref(window.innerWidth > 780);
 
 const updateLayout = () => {
   isDesktop.value = window.innerWidth > 780;
+  windowSizeStore.updateWindowSize(window.innerWidth, window.innerHeight)
 };
 
 onMounted(() => {
@@ -772,8 +321,7 @@ onUnmounted(() => {
       </div>
 
       <div class="vortexa-main">
-        <vortexa-header/>
-        <el-divider/>
+        <vortexa-header style="margin-bottom: 14px"/>
         <router-view/>
       </div>
     </div>
@@ -809,41 +357,3 @@ onUnmounted(() => {
   width: 100%;
 }
 </style>
-<template>
-  <div class="APP">
-    <router-view/>
-  </div>
-</template>
-
-homepage--------------------------------------------------------
-
-<script lang="ts" setup>
-
-</script>
-
-<style>
-.APP {
-
-}
-</style>
-import { createApp } from 'vue';
-import App from './App.vue';
-import router from './router';
-import { createPinia } from 'pinia';
-import ElementPlus from 'element-plus';
-import 'element-plus/dist/index.css';
-
-import "echarts"
-import Echarts from 'vue-echarts'
-
-const app = createApp(App);
-
-app.use(router);
-app.use(createPinia());
-app.use(ElementPlus);
-app.component('VueEcharts', Echarts)
-
-app.mount('#app');
-
-
-
