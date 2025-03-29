@@ -1,247 +1,185 @@
-package cn.com.vortexa.example.monadscore;
+<script lang="ts" setup>
+import {SwitchButton,Setting} from '@element-plus/icons-vue'
+import {BotInstanceInfo} from "@/interfaces/VortexaTypes.ts";
+import {computed} from "vue";
+import {ElMessage, ElMessageBox} from "element-plus";
 
-import com.alibaba.fastjson.JSONObject;
+const props = defineProps<{
+  botInstance: BotInstanceInfo
+}>();
 
-import cn.com.vortexa.bot_father.anno.BotApplication;
-import cn.com.vortexa.bot_father.anno.BotMethod;
-import cn.com.vortexa.bot_father.bot.AutoLaunchBot;
-import cn.com.vortexa.bot_father.config.AutoBotConfig;
-import cn.com.vortexa.bot_father.constants.MapConfigKey;
-import cn.com.vortexa.bot_father.service.BotApi;
-import cn.com.vortexa.common.constants.BotJobType;
-import cn.com.vortexa.common.constants.HttpMethod;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.AccountContext;
-import cn.hutool.core.util.StrUtil;
+// 事件
+const emit = defineEmits(['start-script', 'stop-script', 'delete-script', 'start-task', 'stop-task'])
 
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ExecutionException;
-
-/**
- * @author h30069248
- * @since 2025/3/28 9:51
- */
-@BotApplication(
-    name = "monad_score",
-    configParams = {MapConfigKey.INVITE_CODE_KEY},
-    accountParams = {MonadScoreBot.WALLET_ADDRESS}
-)
-public class MonadScoreBot extends AutoLaunchBot<MonadScoreBot> {
-    public static final String WALLET_ADDRESS = "wallet_address";
-
-    public static final String BASE_URL = "https://mscore.onrender.com";
-
-    @Override
-    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
-    }
-
-    @BotMethod(jobType = BotJobType.REGISTER)
-    public Result register(AccountContext uniqueAC, List<AccountContext> sameBIdACList, String inviteCode) {
-        String simpleInfo = uniqueAC.getSimpleInfo();
-
-        if (StrUtil.isBlank(inviteCode)) {
-            logger.warn(simpleInfo + " register cancel, invite code is empty");
-            return Result.fail("invite code is empty");
-        }
-        logger.debug(simpleInfo + " start register, invite code: " + inviteCode);
-
-        String walletAddress = uniqueAC.getParam(WALLET_ADDRESS);
-        JSONObject body = new JSONObject();
-        body.put("wallet", walletAddress);
-        body.put("invite", inviteCode);
-
-        try {
-            String responseStr = syncRequest(
-                uniqueAC.getProxy(),
-                BASE_URL + "/user",
-                HttpMethod.PUT,
-                generateHeader(uniqueAC),
-                null,
-                body
-            ).get();
-            logger.debug("%s active node response: %s".formatted(simpleInfo, responseStr));
-            return Result.ok();
-        } catch (InterruptedException | ExecutionException e) {
-            logger.error("%s active node error, %s".formatted(
-                simpleInfo, e.getCause() == null ? e.getCause().getMessage() : e.getMessage())
-            );
-            return Result.fail(e.getMessage());
-        }
-    }
-
-    @BotMethod(jobType = BotJobType.TIMED_TASK, intervalInSecond = 60 * 60 * 24)
-    public void activeNode(AccountContext accountContext) {
-        String simpleInfo = accountContext.getSimpleInfo();
-        String walletAddress = accountContext.getParam(WALLET_ADDRESS);
-
-        if (StrUtil.isBlank(walletAddress)) {
-            logger.warn("%s didn't have wallet address, skip it".formatted(simpleInfo));
-            return;
-        }
-        logger.debug("%s start active node...".formatted(simpleInfo));
-
-        JSONObject body = new JSONObject();
-        body.put("wallet", walletAddress);
-        body.put("startTime", System.currentTimeMillis());
-
-        try {
-            String responseStr = syncRequest(
-                accountContext.getProxy(),
-                BASE_URL + "/user/update-start-time",
-                HttpMethod.PUT,
-                generateHeader(accountContext),
-                null,
-                body
-            ).get();
-            logger.debug("%s active node response: %s".formatted(simpleInfo, responseStr));
-        } catch (InterruptedException | ExecutionException e) {
-            logger.error("%s active node error, %s".formatted(
-                simpleInfo, e.getCause() == null ? e.getCause().getMessage() : e.getMessage())
-            );
-        }
-    }
-
-    @Override
-    protected MonadScoreBot getInstance() {
-        return this;
-    }
-
-    private Map<String, String> generateHeader(AccountContext accountContext) {
-        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
-        headers.put("origin", "https://monadscore.xyz");
-        headers.put("referer", "https://monadscore.xyz/");
-        return headers;
-    }
+const startScriptHandler = ()=>{
+  emit('start-script', {instanceId: props.botInstance.id})
 }
-package cn.com.vortexa.example.parasail;
 
-import com.alibaba.fastjson.JSONObject;
-
-import cn.com.vortexa.bot_father.anno.BotApplication;
-import cn.com.vortexa.bot_father.anno.BotMethod;
-import cn.com.vortexa.bot_father.bot.AutoLaunchBot;
-import cn.com.vortexa.bot_father.config.AutoBotConfig;
-import cn.com.vortexa.bot_father.constants.MapConfigKey;
-import cn.com.vortexa.bot_father.service.BotApi;
-import cn.com.vortexa.common.constants.BotJobType;
-import cn.com.vortexa.common.constants.HttpMethod;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.AccountContext;
-import cn.com.vortexa.web3.EthWalletUtil;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-
-/**
- * @author h30069248
- * @since 2025/3/28 11:13
- */
-@BotApplication(
-    name = "parasail_bot",
-    configParams = {MapConfigKey.INVITE_CODE_KEY},
-    accountParams = {ParasailBot.PRIMARY_KEY}
-)
-public class ParasailBot extends AutoLaunchBot<ParasailBot> {
-    public static final String BASE_URL = "https://www.parasail.network/api";
-    public static final String PRIMARY_KEY = "primary_key";
-    private static final Logger log = LoggerFactory.getLogger(ParasailBot.class);
-
-    @Override
-    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
-
-    }
-
-    @Override
-    protected ParasailBot getInstance() {
-        return null;
-    }
-
-    @BotMethod(jobType = BotJobType.LOGIN)
-    public Result signIn(AccountContext accountContext) {
-        try {
-            logger.info(accountContext.getSimpleInfo() + " start sign in...");
-            String token = verifyUser(accountContext).get();
-            accountContext.setParam(MapConfigKey.TOKEN_KEY, token);
-
-            logger.info(accountContext.getSimpleInfo() + " sign in success ,token" + token);
-            return Result.ok();
-        } catch (InterruptedException | ExecutionException e) {
-            String errorMsg = accountContext.getSimpleInfo() + " sign in error, "
-                + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
-            logger.error(errorMsg);
-
-            return Result.fail(errorMsg);
-        }
-    }
-
-    public CompletableFuture<String> verifyUser(AccountContext accountContext) {
-        logger.debug("start signature verify message");
-        return generateSignature(accountContext.getParam(PRIMARY_KEY))
-            .thenApply(signatureData -> {
-                logger.debug("signature verify message success, send verify request");
-
-                try {
-                    String verifyResponseStr = syncRequest(
-                        accountContext.getProxy(),
-                        BASE_URL + "/user/verify",
-                        HttpMethod.POST,
-                        accountContext.getBrowserEnv().generateHeaders(),
-                        null,
-                        signatureData
-                    ).get();
-
-                    JSONObject response = JSONObject.parseObject(verifyResponseStr);
-                    return response.getJSONObject("data").getString("token");
-                } catch (InterruptedException | ExecutionException e) {
-                    throw new RuntimeException("verifyUserError", e);
-                }
-            });
-    }
-
-    public CompletableFuture<JSONObject> generateSignature(String primaryKey) {
-        String message = """
-            By signing this message, you confirm that you agree to the Parasail Terms of Service.
-
-            Parasail (including the Website and Parasail Smart Contracts) is not intended for:
-            (a) access and/or use by Excluded Persons;
-            (b) access and/or use by any person or entity in, or accessing or using the Website from, an Excluded Jurisdiction.
-            
-            Excluded Persons are prohibited from accessing and/or using Parasail (including the Website and Parasail Smart Contracts).
-            
-            For full terms, refer to: https://parasail.network/Parasail_User_Terms.pdf
-            """;
-        return CompletableFuture.supplyAsync(
-            () -> EthWalletUtil.signatureMessage(primaryKey, message), getExecutorService()
-        ).thenApply(signatureData -> {
-            JSONObject jsonObject = new JSONObject();
-            jsonObject.put("", signatureData);
-            return jsonObject;
-        });
-    }
+const stopScriptHandler = ()=>{
+  emit('stop-script', {instanceId: props.botInstance.id})
 }
-package cn.com.vortexa.web3;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
-
-import org.web3j.crypto.ECKeyPair;
-import org.web3j.crypto.Hash;
-import org.web3j.crypto.Sign;
-
-import java.math.BigInteger;
-
-/**
- * @author helei
- * @since 2025/3/28 11:16
- */
-public class EthWalletUtil {
-
-    public static Sign.SignatureData signatureMessage(String privateKey, String message) {
-        ECKeyPair ecKeyPair = ECKeyPair.create(new BigInteger(privateKey, 16));
-        byte[] messageBytes = Hash.sha3(message.getBytes(UTF_8));
-        return Sign.signMessage(messageBytes, ecKeyPair, false);
+const deleteInstanceHandler = ()=>{
+  ElMessageBox.confirm(
+    'delete the script instance. Continue?',
+    'Warning',
+    {
+      confirmButtonText: 'OK',
+      cancelButtonText: 'Cancel',
+      type: 'danger',
     }
+  )
+    .then(() => {
+      emit('delete-task', {instanceId: props.botInstance.id})
+    })
+    .catch(() => {
+      ElMessage({
+        type: 'info',
+        message: 'Delete canceled',
+      })
+    })
 }
+
+const startTaskHandler = ()=>{
+  emit('start-task', {instanceId: props.botInstance.id})
+}
+
+const stopTaskHandler = ()=>{
+  emit('stop-task', {instanceId: props.botInstance.id})
+}
+</script>
+
+<template>
+  <div class="bot-runtime-display-card" >
+    <div class="card-header clearfix">
+      <div style="display:flex; align-items: start">
+        <div style="width: 60px;">
+          <el-image class="head-image"/>
+        </div>
+        <div style="flex: 1;overflow: hidden;font-weight: 700">
+          <el-text truncated>{{ botInstance.botKey }}</el-text>
+          <div style="font-weight: 400;">
+            <el-text truncated>
+              {{ botInstance.insertDatetime ? botInstance.insertDatetime : 'unknown start time'}}
+            </el-text>
+          </div>
+        </div>
+
+        <el-dropdown  placement="bottom-end">
+          <el-icon class="setting-button"><Setting/></el-icon>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item>Task params edit</el-dropdown-item>
+              <el-dropdown-item>Account edit</el-dropdown-item>
+              <el-dropdown-item
+                style="color: red"
+                @click="deleteInstanceHandler"
+              >
+                delete
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
+    </div>
+
+    <div class="data-print-line">
+
+    </div>
+
+    <div class="card-detail">
+      <div class="card-detail-content"/>
+
+
+      <el-button v-if="botInstance.botStatus==1" class="opt-button" type="danger" plain>
+        <el-icon>
+          <SwitchButton/>
+        </el-icon>
+        Stop Task
+      </el-button>
+      <el-button
+        v-else
+        class="opt-button"
+        type="success"
+        @click="startScriptHandler"
+        plain
+      >
+        <el-icon>
+          <SwitchButton/>
+        </el-icon>
+        Start Script
+      </el-button>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.bot-runtime-display-card {
+  width: 300px;
+  min-width: 300px;
+  //max-width: 500px;
+  height: 350px;
+  background-color: rgba(110, 110, 110, 0.1);
+  padding: 24px;
+
+  margin-left: 12px;
+
+  color: #9da3ae;
+  border-radius: 10px;
+}
+
+.card-header {
+  height: 48px;
+}
+
+.data-print-line {
+  height: 48px;
+  margin-top: 4px;
+
+}
+
+.card-detail {
+  height: 222px;
+  margin-top: 16px;
+}
+
+.head-image {
+  height: 48px;
+  width: 48px;
+  margin-right: 8px;
+}
+
+.icon-button {
+  width: 24px;
+  height: 24px;
+  color: #9da3ae;
+  font-size: 20px;
+
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  transform: scale(1.2); /* 鼠标悬浮时放大 */
+  color: #007BFF; /* 鼠标悬浮时改变颜色 */
+}
+
+.card-detail-content {
+  height: 184px;
+}
+
+.opt-button {
+  width: 100%;
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.setting-button{
+  font-size: 23px;
+  cursor: pointer;
+}
+
+.setting-button:hover{
+  color: #000000;
+}
+</style>
