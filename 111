@@ -1,359 +1,378 @@
-<script setup lang="ts">
-import DynamicAddFieldTable from "@/components/dynamic-add-field-table.vue";
-import {ref} from "vue";
+<script lang="ts" setup>
+import {SwitchButton} from '@element-plus/icons-vue'
+import {BotInstanceInfo} from "@/interfaces/VortexaTypes.ts";
+import {computed} from "vue";
 
+const props = defineProps<{
+  botInstance: BotInstanceInfo
+}>();
 
+// 事件
+const emit = defineEmits(['start-script', 'stop-script', 'start-task', 'stop-task'])
 
-
-
-const accountBaseInfoList = ref(
-  [
-    {
-      'id': '123123',
-      'email': '123213@qq.com',
-      'name': '123213',
-      'password': '123123123'
-    },
-    {
-      'id': '123123',
-      'email': '123213@qq.com',
-      'name': '123213',
-      'password': '123123123'
-    },
-    {
-      'id': '123123',
-      'email': '123213@qq.com',
-      'name': '123213',
-      'password': '123123123'
-    },
-    {
-      'id': '123123',
-      'email': '123213@qq.com',
-      'name': '123213',
-      'password': '123123123'
-    }
-  ]
-)
-</script>
-
-<template>
-  <div>
-    <dynamic-add-field-table
-      :headers="['id', 'name', 'password']"
-      id-field="id"
-      :data="accountBaseInfoList"
-    >
-
-    </dynamic-add-field-table>
-  </div>
-</template>
-
-<style scoped>
-
-</style>
-<script setup lang="ts">
-import {ArrowDown, Upload} from '@element-plus/icons-vue'
-import {computed, ref,} from "vue";
-import type {TableColumnCtx, UploadInstance} from "element-plus";
-
-interface Props {
-  headers: string[],
-  idField: string,
-  data: object[]
+const startScriptHandler = ()=>{
+  emit('start-script', {instanceId: props.botInstance.id})
 }
 
-const props = defineProps<Props>();
-
-const extraFieldList = computed(() => {
-  if (props.data.length > 0) {
-    const keys: string[] = Object.keys(props.data[0]);
-    return keys.filter(key => key != '$$edit' && props.headers.indexOf(key) === -1)
-  }
-  return []
-})
-
-const selectFieldList = ref([...props.headers])
-const searchValue = ref('')
-
-function getFieldValueList(field): Array<{ text: string, value: string }> {
-  if (props.data.length > 0) {
-    const unique = [...new Set(props.data.map(item => item[field]))]
-    return unique.map(obj => {
-      return {text: obj, value: obj}
-    })
-  }
-  return []
+const stopScriptHandler = ()=>{
+  emit('stop-script', {instanceId: props.botInstance.id})
 }
 
-const filterHandler = (
-  value: string,
-  row: object,
-  column: TableColumnCtx<object>
-) => {
-  const property = column['property']
-  return row[property] === value
+const startTaskHandler = ()=>{
+  emit('start-task', {instanceId: props.botInstance.id})
 }
 
-
-const multipleSelection = ref([])
-
-function handleSelectionChange(lineData) {
-  multipleSelection.value = lineData
-}
-
-
-// editable table
-const editState = ref({
-  row: -1
-})
-function handleUpdateRaw(raw, index, column) {
-  editState.value.row = -1
-}
-
-function cellClickHandler(scope) {
-  if (editState.value.row == scope.$index) {
-    editState.value.row = -1
-  } else {
-    editState.value.row = scope.$index
-  }
-}
-
-// upload
-const isCanUpdate = ref(false)
-const uploadRef = ref<UploadInstance>()
-const submitUpload = () => {
-  uploadRef.value!.submit()
+const stopTaskHandler = ()=>{
+  emit('stop-task', {instanceId: props.botInstance.id})
 }
 </script>
 
 <template>
-  <div class="dynamic-add-field-table">
-    <div class="select-bar-list">
-      <el-dropdown trigger="click">
-        <el-button>
-          <el-icon class="el-icon--left">
-            <arrow-down/>
-          </el-icon>
-          Field
-        </el-button>
-        <template #dropdown>
-          <el-dropdown-menu>
-            <el-dropdown-item v-for="item in headers" :key="item">
-              <el-checkbox :label="item" disabled/>
-            </el-dropdown-item>
-            <el-dropdown-item v-for="item in extraFieldList" :key="item">
-              <el-checkbox-group v-model="selectFieldList">
-                <el-checkbox :label="item"/>
-              </el-checkbox-group>
-            </el-dropdown-item>
-          </el-dropdown-menu>
-        </template>
-      </el-dropdown>
+  <div class="bot-runtime-display-card" >
+    <div class="card-header clearfix">
+      <div style="display:flex; align-items: start">
+        <el-image class="head-image"/>
+        <div style="font-weight: 700;font-size: 16px">
+          {{ botInstance.botKey }}
+        </div>
+      </div>
 
-      <el-upload
-        class="upload-demo"
-        :show-file-list="false"
-        :limit="1"
-        :auto-upload="false"
-      >
-        <el-button v-if="isCanUpdate" type="success" @click="submitUpload" disabled>
-          Upload
-          <el-icon class="el-icon--right">
-            <Upload/>
-          </el-icon>
-        </el-button>
-        <el-button v-else>select file</el-button>
-      </el-upload>
-
-      <slot name="toolbar"></slot>
+      <div style="float: right">
+        <i class="el-icon-setting icon-button"/>
+      </div>
     </div>
 
-    <div class="add-field-table">
-      <el-table ref="tableRef"
-                :data="data"
-                :height="600"
-                highlight-current-row
-                stripe
-                size="large"
-                @selection-change="handleSelectionChange"
-                style="width: 100%"
+    <div class="data-print-line"/>
+
+    <div class="card-detail">
+      <div class="card-detail-content"/>
+
+      <el-button
+        v-if="botInstance.botStatus==0"
+        class="opt-button"
+        type="success"
+        @click="startScriptHandler"
+        plain
       >
-        <el-table-column type="selection" width="55"/>
-
-        <el-table-column
-          v-for="item in selectFieldList"
-          :key="item"
-          :prop="item"
-          :label="item"
-          show-overflow-tooltip
-          :filters="getFieldValueList(item)"
-          :filter-method="filterHandler"
-        >
-          <template #default="scope">
-            <el-input
-              v-if="editState.row==scope.$index"
-              v-model="scope.row[item]"
-              size="small"
-            />
-            <div
-              v-else
-              @click="cellClickHandler(scope)"
-            >
-              {{ scope.row[item] }}
-            </div>
-          </template>
-        </el-table-column>
-
-        <el-table-column fixed="right" width="180">
-          <template #header>
-            <el-button size="small" type="danger">Delete</el-button>
-          </template>
-          <template #default="scope">
-            <el-button
-              v-if="editState.row==scope.$index"
-              size="small"
-              type="success"
-              @click="handleUpdateRaw(scope.row, scope.$index, scope.column)">
-              Save
-            </el-button>
-            <el-button v-else size="small" @click="editState.row=scope.$index">
-              Edit
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+        <el-icon>
+          <SwitchButton/>
+        </el-icon>
+        Start Task
+      </el-button>
+      <el-button v-else-if="botInstance.botStatus==1" class="opt-button" type="danger" plain>
+        <el-icon>
+          <SwitchButton/>
+        </el-icon>
+        Stop Task
+      </el-button>
+      <el-button v-else class="opt-button" type="warning" plain>
+        <el-icon>
+          <SwitchButton/>
+        </el-icon>
+        Unknown Status
+      </el-button>
     </div>
   </div>
 </template>
 
 <style scoped>
-.dynamic-add-field-table {
-}
+.bot-runtime-display-card {
+  width: 300px;
+  min-width: 300px;
+  //max-width: 500px;
+  height: 350px;
+  background-color: rgba(110, 110, 110, 0.1);
+  padding: 24px;
 
-.select-bar-list {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 10px;
-}
+  margin-left: 12px;
 
-.add-field-table {
-  position: relative;
-  height: 600px;
-  background-color: #fff;
+  color: #9da3ae;
   border-radius: 10px;
 }
 
-.add-field-table > .el-table {
-  position: absolute;
+.card-header {
+  height: 48px;
 }
 
+.data-print-line {
+  height: 48px;
+  margin-top: 16px;
 
-::v-deep .el-table,
-.el-table__expanded-cell {
-  padding: 20px !important;
-  background-color: transparent !important;
 }
 
-::v-deep .el-table th {
-  background-color: transparent !important;
-  border-bottom: 1px solid rgba(100, 100, 100, 0.3) !important;
+.card-detail {
+  height: 222px;
+  margin-top: 16px;
 }
 
-::v-deep .el-table tr {
-  background-color: transparent !important;
+.head-image {
+  height: 48px;
+  width: 48px;
+  margin-right: 8px;
 }
 
-::v-deep .el-table--enable-row-transition .el-table__body td,
-::v-deep .el-table .cell {
-  //background-color: transparent !important;
-  border: none !important;
+.icon-button {
+  width: 24px;
+  height: 24px;
+  color: #9da3ae;
+  font-size: 20px;
+
+  cursor: pointer;
 }
 
-:deep(.select-bar-list .el-button:hover) {
-  background-color: azure !important;
+.icon-button:hover {
+  transform: scale(1.2); /* 鼠标悬浮时放大 */
+  color: #007BFF; /* 鼠标悬浮时改变颜色 */
 }
 
-:deep(.select-bar-list .el-button:active) {
-  background-color: azure !important;
+.card-detail-content {
+  height: 184px;
 }
 
-:deep(.el-table .el-table__cell) {
-  padding: 0 !important;
-  height: 30px;
-}
-
-:deep(.el-table .el-input__inner ) {
-  height: 30px;
+.opt-button {
+  width: 100%;
   font-size: 16px;
+  font-weight: 600;
+  text-align: center;
 }
 </style>
+
 <script setup lang="ts">
-import {ref, onMounted, onUnmounted} from 'vue';
-import VortexaMenu from "@/views/homepage/components/vortexa-menu/vortexa-menu.vue";
-import VortexaHeader from "@/views/homepage/components/vortexa-header/vortexa-header.vue";
-import VortexaBanner from "@/views/homepage/components/vortexa-banner-tool/vortexa-banner-tool.vue";
-import {useWindowSizeStore} from "@/stores/windowSize.ts";
+import {Filter, RefreshRight} from '@element-plus/icons-vue'
+import BotRuntimeDisplayCard from "@/views/homepage/script/components/bot-runtime-display-card.vue";
+import {BotInstanceInfo} from "@/interfaces/VortexaTypes.ts";
+import {onMounted, ref, nextTick, computed} from "vue";
+import ContentBlock from "@/components/content-block/content-block.vue";
 
-const windowSizeStore = useWindowSizeStore()
+const botInstanceList = ref<Array<BotInstanceInfo>>([])
 
-const isDesktop = ref(window.innerWidth > 780);
+const filters = ref<{
+  status: number
+}>({ status: -10001})
 
-const updateLayout = () => {
-  isDesktop.value = window.innerWidth > 780;
-  windowSizeStore.updateWindowSize(window.innerWidth, window.innerHeight)
-};
+const displayInstanceList = computed(()=>{
+  return botInstanceList.value.filter(info=>{
+    let filter: boolean = true
+    if (filterValue.value != null) {
+      filter = info.botName.includes(filterValue.value) || info.botKey.includes(filterValue.value)
+    }
+    if (filters.value.status != -10001) {
+      filter = info.botStatus == filters.value.status
+    }
+    console.log(filter)
+    return filter
+  })
+})
 
-onMounted(() => {
-  window.addEventListener('resize', updateLayout);
-});
+// 1. 过滤
+// 过滤下拉框宽度
+const dropdownWidth = ref(0)
+const filterValue = ref('')
 
-onUnmounted(() => {
-  window.removeEventListener('resize', updateLayout);
-});
+const filterByStatus = (status)=>{
+  botInstanceList
+}
+
+// 2.BotInstance
+
+
+// 网络请求获取实例
+const pageQueryBotInstanceNetwork = () => {
+  botInstanceList.value.push(new BotInstanceInfo({ botKey: 'bot', botStatus:0}))
+  botInstanceList.value.push(new BotInstanceInfo({ botKey: 'bot', botStatus:1}))
+  botInstanceList.value.push(new BotInstanceInfo({ botKey: 'bot', botStatus:-1}))
+  for (let i = 0; i < 10; i++) {
+    botInstanceList.value.push(new BotInstanceInfo({ botKey: 'bot' + i}))
+  }
+}
+
+onMounted(async () => {
+  await nextTick()
+  dropdownWidth.value = document.querySelector('.filter-button').offsetWidth
+  pageQueryBotInstanceNetwork()
+})
 </script>
 
 <template>
-  <div class="vortexa-app">
-    <div style="display: flex;">
-      <div v-if="isDesktop" class="sidebar">
-        <vortexa-banner/>
-        <vortexa-menu :is-horizontal="!isDesktop"/>
-      </div>
+  <div class="vortexa-script-view">
 
-      <div class="vortexa-main">
-        <vortexa-header style="margin-bottom: 14px"/>
-        <router-view/>
+    <!--    搜索块-->
+    <content-block class="vortexa-script-viw-block-1">
+      <div>
+        <el-input v-model="filterValue" placeholder="Search by name"/>
+        <div>
+          <el-button style="width: 90px">
+            <el-icon>
+              <RefreshRight/>
+            </el-icon>
+            Fresh
+          </el-button>
+          <el-dropdown
+            trigger="click"
+            placement="bottom"
+            style="width:calc(100% - 90px); "
+            :hide-on-click="false"
+          >
+            <el-button class="filter-button">
+              <el-icon>
+                <Filter/>
+              </el-icon>
+              Filter
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu class="filter-menu" :style="{'width': dropdownWidth + 'px'}">
+                <el-dropdown-item>The Action 1st</el-dropdown-item>
+                <el-dropdown-item>The Action 2st</el-dropdown-item>
+                <el-dropdown-item>The Action 3st</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
       </div>
-    </div>
+    </content-block>
 
-    <div class="bottom-menu">
-      <vortexa-menu v-if="!isDesktop" :is-horizontal="!isDesktop"/>
-    </div>
+    <!--展示块-->
+    <content-block class="vortexa-script-viw-block-2">
+      <template #header>
+        <div style="margin-bottom: 12px">
+          <el-button type="info" @click="filterByStatus(0)">All</el-button>
+          <el-button type="success" @click="filterByStatus(1)">Running</el-button>
+          <el-button type="danger" @click="filterByStatus(-1)">Stopped</el-button>
+          <span style="float: right;font-size: 14px; font-weight: 300">Total:</span>
+        </div>
+      </template>
+      <div class="scroll-bar-wrapper">
+        <div class="vortexa-script-display-content" v-infinite-scroll="pageQueryBotInstanceNetwork">
+          <bot-runtime-display-card
+            v-for="botInstance in displayInstanceList"
+            :bot-instance="<BotInstanceInfo>botInstance"
+            class="vortexa-script-item"
+          />
+        </div>
+        <el-backtop target=".scroll-bar-wrapper" :bottom="100" :right="100">
+        </el-backtop>
+      </div>
+    </content-block>
   </div>
 </template>
 
 <style scoped>
-.vortexa-app {
-  min-height: 100vh;
-  background-color: #fafaf9;
-  max-width: 1980px;
-  padding: 20px;
-  margin: auto;
+
+.vortexa-script-view {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 130px);
 }
 
-.vortexa-app > .sidebar {
-  width: 208px;
-  padding: 24px 16px;
+.vortexa-script-viw-block-1 {
+  max-width: 800px;
+  height: 70px;
 }
 
-.vortexa-main {
-  flex: 1;
+.vortexa-script-viw-block-2 {
+
 }
 
-.bottom-menu {
-  position: fixed;
-  bottom: 0;
-  height: 60px;
+.scroll-bar-wrapper {
+  height: 900px;
+  overflow-y: scroll;
+}
+
+.vortexa-script-display-content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-items: start;
+}
+.scroll-bar-wrapper::-webkit-scrollbar{
+  width: 0;
+  height: 0;
+}
+.scroll-bar-wrapper {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+
+.vortexa-script-item {
+  flex: 1 0 calc((100% - 30px) / 5);
+}
+
+.filter-button {
   width: 100%;
 }
+
+.filter-menu {
+  min-width: 200px;
+}
+
+@media (min-width: 1980px) {
+  .vortexa-script-view {
+    display: flex;
+    flex-direction: row-reverse;
+    height: calc(100vh - 130px);
+    gap: 10px;
+  }
+
+  .vortexa-script-viw-block-2 {
+    width: calc(100% - 250px);
+  }
+}
 </style>
+
+export class BotInstanceInfo {
+  id?:number
+  botId?: number
+  botName: string
+  botKey: string
+  botStatus: number // 0 未运行 1 正在运行 -1 告警
+  runningTask: Array<string>
+  accountTableName?: string
+  jobParams: Map<string, Object>
+  params: Map<string, Object>
+  insertDatetime?: string
+  updateDatetime?: string
+  botInfo?: Object
+
+  public constructor({id, botId, botName, botKey, botStatus, runningTask, accountTableName, jobParams, params, insertDatetime, updateDatetime, botInfo}
+                : { id?:number, botId?:number, botName?:string, botKey?:string, botStatus?:number, runningTask?:Array<string>,accountTableName?:string, jobParams?: Map<string, object>, params?:Map<string, object>, insertDatetime?:string, updateDatetime?:string, botInfo?:BotInfo }
+  ) {
+    this.id = id
+    this.botId = botId
+    this.botName = botName ? botName : 'unknown_bot'
+    this.botKey = botKey ? botKey : 'unknown_instance'
+    this.botStatus = botStatus !== undefined ? botStatus : -1
+    this.runningTask = runningTask ? runningTask : new Array<string>()
+    this.accountTableName = accountTableName
+    this.jobParams = jobParams ?  jobParams: new Map<string, object>()
+    this.params = params ?  params: new Map<string, object>()
+    this.insertDatetime = insertDatetime
+    this.updateDatetime = updateDatetime
+    this.botInfo = botInfo
+  }
+}
+
+
+export class BotInfo {
+  id?:number
+  name: string
+  describe: string
+  image?: string
+  jobParams: Map<string, Object>
+  params: Map<string, Object>
+  insertDatetime?: string
+  updateDatetime?: string
+
+  constructor({id, name, describe, image, jobParams, params, insertDatetime, updateDatetime}
+                : { id?:number, name?:string, describe?:string, image?:string, jobParams?: Map<string, object>, params?:Map<string, object>, insertDatetime?:string, updateDatetime?:string }
+  ) {
+    this.id = id
+    this.name = name ? name : 'unknown_bot'
+    this.describe = describe ? describe : ''
+    this.image = image
+    this.jobParams = jobParams ?  jobParams: new Map<string, object>()
+    this.params = params ?  params: new Map<string, object>()
+    this.insertDatetime = insertDatetime
+    this.updateDatetime = updateDatetime
+  }
+}
