@@ -1,2449 +1,869 @@
-package cn.com.vortexa.bot_father.service;
-
-
-import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
-import cn.com.vortexa.job.service.BotJobService;
-import cn.com.vortexa.rpc.api.bot.IScriptAgentRPC;
-import cn.com.vortexa.rpc.api.platform.IAccountBaseInfoRPC;
-import cn.com.vortexa.rpc.api.platform.IBotInfoRPC;
-import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
-import cn.com.vortexa.rpc.api.platform.IBrowserEnvRPC;
-import cn.com.vortexa.rpc.api.platform.IDiscordAccountRPC;
-import cn.com.vortexa.rpc.api.platform.IProxyInfoRPC;
-import cn.com.vortexa.rpc.api.platform.ITelegramAccountRPC;
-import cn.com.vortexa.rpc.api.platform.ITwitterAccountRPC;
-
-import org.springframework.beans.factory.annotation.Autowired;
-
-public interface BotApi {
-
-    IBotInfoRPC getBotInfoRPC();
-    IBotInstanceRPC getBotInstanceRPC();
-    IAccountBaseInfoRPC getAccountBaseInfoRPC();
-    IBrowserEnvRPC getBrowserEnvRPC();
-    IDiscordAccountRPC getDiscordAccountRPC();
-    IProxyInfoRPC getProxyInfoRPC();
-    ITwitterAccountRPC getTwitterAccountRPC();
-    ITelegramAccountRPC getTelegramAccountRPC();
-
-    ITableShardStrategy getTableShardStrategy();
-
-    IRewordInfoService getRewordInfoService();
-    IBotAccountContextService getBotAccountService();
-    BotJobService getBotJobService();
-
-    IScriptAgentRPC getScriptAgentRPC();
-}
-package cn.com.vortexa.bot_father.view;
-
-import cn.com.vortexa.bot_father.bot.JobInvokeAutoBot;
-import cn.com.vortexa.bot_father.constants.BotStatus;
-import cn.com.vortexa.bot_father.view.commandMenu.CommandMenuNode;
-import cn.com.vortexa.bot_father.config.AutoBotConfig;
-import cn.com.vortexa.common.exception.BotStartException;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-
-import org.jline.reader.LineReader;
-import org.jline.reader.LineReaderBuilder;
-import org.jline.reader.impl.DefaultParser;
-import org.jline.terminal.Terminal;
-import org.jline.terminal.TerminalBuilder;
-
-import java.io.IOException;
-import java.util.List;
-import java.util.Stack;
-import java.util.concurrent.CountDownLatch;
+import request from '@/util/request.ts'
+import type {PageQuery} from "@/types/vortexa-type-common.ts";
 
 /**
- * 命令行交互的depin机器人
+ * 分页查询浏览器环境
+ * @param pageQuery pageQuery
+ * @returns {*}
  */
-@Slf4j
-@Getter
-public abstract class CommandLineAutoBot {
-
-    private final AutoBotConfig botConfig;
-
-    private final JobInvokeAutoBot bot;
-
-    private final CommandMenuNode mainManu;
-
-    public CommandLineAutoBot(JobInvokeAutoBot bot) {
-        this.bot = bot;
-        this.botConfig = bot.getAutoBotConfig();
-
-        this.mainManu = new CommandMenuNode(
-            "主菜单",
-            String.format("欢迎使用[%s][%s]-bot",
-                getBot().getBotInstance().getBotName(), getBot().getBotInstance().getBotKey()),
-            this::printBanner
-        );
-    }
-
-    /**
-     * 构建command菜单
-     */
-    protected abstract void buildMenuNode(CommandMenuNode mainManu);
-
-    /**
-     * 异步启动
-     */
-    private void asyncExecute(CountDownLatch startLatch) {
-        Thread commandInputThread = new Thread(() -> {
-            try {
-                doExecute();
-            } catch (Exception e) {
-                log.error("启动bot发生错误", e);
-            } finally {
-                startLatch.countDown();
-            }
-        }, "depin-bot-main");
-        commandInputThread.setDaemon(true);
-        commandInputThread.start();
-    }
-
-    /**
-     * 启动bot
-     *
-     * @throws BotStartException DepinBotStartException
-     */
-    public void start() throws BotStartException {
-        bot.updateState(BotStatus.STARTING);
-        log.info("{} 正在启动", bot.runtimeBotName());
-        try {
-
-            CountDownLatch startLatch = new CountDownLatch(1);
-            //启动命令行交互的线程
-            asyncExecute(startLatch);
-
-            log.info("{} 启动完毕", bot.runtimeBotName());
-
-            bot.updateState(BotStatus.RUNNING);
-            startLatch.await();
-        } catch (Exception e) {
-            bot.updateState(BotStatus.SHUTDOWN);
-            throw new BotStartException("启动 %s 发生错误".formatted(bot.runtimeBotName()), e);
-        }
-    }
-
-    /**
-     * 运行机器人
-     *
-     * @throws IOException IOException
-     */
-    public void doExecute() throws IOException {
-        //Step 1 获取输入
-        CommandMenuNode mainMenuNode = getMenuNode();
-        Terminal terminal = TerminalBuilder.builder().system(true).build();
-        LineReader reader = LineReaderBuilder.builder().terminal(terminal).parser(new DefaultParser()).build();
-
-        Stack<CommandMenuNode> menuNodeStack = new Stack<>();
-        CommandMenuNode currentMenuNode = mainMenuNode;
-
-        //Step 2 不断监听控制台输入
-        while (true) {
-            boolean inputAccept = true;
-            //Step 2.1 获取输入
-            String choice;
-            try {
-                choice = reader.readLine("\n<\n" + getInvokeActionAndMenuNodePrintStr(currentMenuNode) + "请选择>")
-                    .trim();
-            } catch (Exception e) {
-                log.error("进入菜单节点[{}]发生异常", currentMenuNode.getTittle(), e);
-                currentMenuNode = menuNodeStack.pop();
-                continue;
-            }
-
-            try {
-                //Step 2.2 退出
-                if ("exit".equals(choice)) {
-                    exitHandler();
-                    break;
-                }
-
-                //Step 2.3 选择操作
-                int option = Integer.parseInt(choice.trim());
-                if (option == 0) {
-                    //返回上一级菜单
-                    if (!menuNodeStack.isEmpty()) {
-                        currentMenuNode = menuNodeStack.pop();
-                    }
-                } else if (option > 0 && option <= currentMenuNode.getSubNodeList().size()) {
-                    //进入选择的菜单
-                    menuNodeStack.push(currentMenuNode);
-                    currentMenuNode = currentMenuNode.getSubNodeList().get(option - 1);
-                } else {
-                    inputAccept = false;
-                }
-
-                //终点节点，不进入，直接返回
-                if (currentMenuNode.isEnd()) {
-                    System.out.println(getInvokeActionAndMenuNodePrintStr(currentMenuNode));
-                    currentMenuNode = menuNodeStack.pop();
-                }
-            } catch (Exception e) {
-                inputAccept = false;
-            }
-
-            try {
-                if (!inputAccept && currentMenuNode.getResolveInput() != null) {
-                    currentMenuNode.getResolveInput().accept(choice);
-                }
-            } catch (Exception e) {
-                System.out.println("系统异常");
-            }
-        }
-    }
-
-    /**
-     * 获取菜单， 会放入额外的固定菜单
-     *
-     * @return CommandMenuNode
-     */
-    private CommandMenuNode getMenuNode() {
-
-        buildMenuNode(mainManu);
-
-        return mainManu;
-    }
-
-    private String printBanner() {
-
-        return "" + bot.printBotRuntimeInfo();
-    }
-
-    /**
-     * 退出回调
-     */
-    protected void exitHandler() {
-    }
-
-    /**
-     * 执行Action回调，获取当前菜单打印的字符串
-     *
-     * @param currentMenuNode currentMenuNode
-     * @return String
-     */
-    public String getInvokeActionAndMenuNodePrintStr(CommandMenuNode currentMenuNode) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(currentMenuNode.getDescribe()).append("\n");
-
-        if (currentMenuNode.getAction() != null) {
-            sb.append(currentMenuNode.getAction().get()).append("\n");
-        }
-
-        if (currentMenuNode.isEnd()) {
-            return sb.toString();
-        }
-
-        sb.append("选项:\n");
-        List<CommandMenuNode> menuNodeList = currentMenuNode.getSubNodeList();
-        for (int i = 0; i < menuNodeList.size(); i++) {
-            sb.append(i + 1).append(". ").append(menuNodeList.get(i).getTittle()).append("\n");
-        }
-
-        sb.append("0. 返回上一级菜单\n");
-
-        return sb.toString();
-    }
-
+export function pageQueryBotInfoNetwork(pageQuery: PageQuery) {
+  return request({
+    url: '/bot/pageQuery',
+    method: 'post',
+    data: pageQuery
+  })
 }
-package cn.com.vortexa.bot_father.view;
-
-
-import cn.com.vortexa.bot_father.bot.AnnoDriveAutoBot;
-import cn.com.vortexa.bot_father.util.AccountInfoPrinter;
-import cn.com.vortexa.bot_father.view.commandMenu.CommandMenuNode;
-import cn.com.vortexa.bot_father.view.commandMenu.DefaultMenuType;
-import cn.com.vortexa.bot_father.view.commandMenu.MenuNodeMethod;
-import cn.com.vortexa.bot_father.config.AutoBotConfig;
-import cn.com.vortexa.bot_father.view.commandMenu.PageMenuNode;
-import cn.com.vortexa.common.dto.ACListOptResult;
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.common.entity.AccountContext;
-import cn.com.vortexa.common.entity.BrowserEnv;
-import cn.com.vortexa.common.entity.ProxyInfo;
-import cn.com.vortexa.common.entity.RewordInfo;
-import cn.com.vortexa.job.constants.JobStatus;
-import com.alibaba.fastjson.JSON;
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
-import org.quartz.SchedulerException;
-
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.sql.SQLException;
-import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.function.Consumer;
-
-import static cn.com.vortexa.bot_father.constants.MapConfigKey.*;
-
-
-@Slf4j
-public class MenuCMDLineAutoBot<C extends AutoBotConfig> extends CommandLineAutoBot {
-    /**
-     * 刷新节点
-     */
-    public static final CommandMenuNode REFRESH_NODE = new CommandMenuNode(true, "刷新", "当前数据已刷新", null);
-
-
-    private final List<DefaultMenuType> defaultMenuTypes;
-
-    @Setter
-    private Consumer<CommandMenuNode> addCustomMenuNode;
-
-    public MenuCMDLineAutoBot(AnnoDriveAutoBot<?> bot, List<DefaultMenuType> defaultMenuTypes) {
-        super(bot);
-        this.defaultMenuTypes = new ArrayList<>(defaultMenuTypes);
-
-        this.defaultMenuTypes.add(DefaultMenuType.IMPORT);
-        this.defaultMenuTypes.add(DefaultMenuType.ACCOUNT_LIST);
-        this.defaultMenuTypes.add(DefaultMenuType.PROXY_LIST);
-        this.defaultMenuTypes.add(DefaultMenuType.BROWSER_ENV_LIST);
-
-        if (bot.getRegisterMethod() != null) {
-            this.defaultMenuTypes.add(DefaultMenuType.REGISTER);
-        }
-        if (bot.getLoginMethod() != null) {
-            this.defaultMenuTypes.add(DefaultMenuType.LOGIN);
-        }
-        if (bot.botJobNameList() != null) {
-            this.defaultMenuTypes.add(DefaultMenuType.START_ACCOUNT_CLAIM);
-        }
-
-        // 解析MenuNodeMethod注解添加菜单节点
-        for (Method method : bot.getClass().getDeclaredMethods()) {
-            method.setAccessible(true);
-
-            if (method.isAnnotationPresent(MenuNodeMethod.class)) {
-                if (method.getParameterCount() > 0) {
-                    throw new IllegalArgumentException("菜单方法参数数量必须为0");
-                }
-
-                MenuNodeMethod anno = method.getAnnotation(MenuNodeMethod.class);
-                String title = anno.title();
-                String description = anno.description();
-
-                CommandMenuNode menuNode = new CommandMenuNode(title, description, () -> {
-                    try {
-                        return method.invoke(bot).toString();
-                    } catch (IllegalAccessException | InvocationTargetException e) {
-                        throw new RuntimeException(e);
-                    }
-                });
-
-                getMainManu().addSubMenu(menuNode);
-            }
-        }
-    }
-
-
-    @Override
-    public final void buildMenuNode(CommandMenuNode mainManu) {
-        if (addCustomMenuNode != null) {
-            addCustomMenuNode.accept(mainManu);
-        }
-
-        for (DefaultMenuType menuType : defaultMenuTypes) {
-            mainManu.addSubMenu(switch (menuType) {
-                case REGISTER -> buildRegisterMenuNode();
-                case VERIFIER -> buildVerifierMenuNode();
-                case LOGIN -> buildQueryTokenMenuNode();
-                case ACCOUNT_LIST -> buildAccountListMenuNode();
-                case PROXY_LIST -> buildProxyListMenuNode();
-                case BROWSER_ENV_LIST -> buildBrowserListMenuNode();
-                case START_ACCOUNT_CLAIM -> buildStartAccountConnectMenuNode();
-                case IMPORT -> buildImportMenuNode();
-            });
-        }
-    }
-
-
-    /**
-     * 构建注册菜单节点
-     *
-     * @return CommandMenuNode
-     */
-    private CommandMenuNode buildRegisterMenuNode() {
-        CommandMenuNode registerMenu = new CommandMenuNode("注册",
-                "请确认设置后运行", this::printCurrentRegisterConfig);
-
-        CommandMenuNode interInvite = new CommandMenuNode(
-                "填入邀请码",
-                "请输入邀请码：",
-                this::printCurrentRegisterConfig
-        );
-        interInvite.setResolveInput(input -> {
-            log.info("邀请码修改[{}]->[{}]", getBotConfig().getConfig(INVITE_CODE_KEY), input);
-            getBotConfig().setConfig(INVITE_CODE_KEY, input);
-        });
-
-        return registerMenu
-                .addSubMenu(interInvite)
-                .addSubMenu(new CommandMenuNode(
-                        true,
-                        "开始注册",
-                        "开始注册所有账号...",
-                        () -> getBot().registerAccount().toString()
-                ));
-    }
-
-    private CommandMenuNode buildVerifierMenuNode() {
-
-        return new CommandMenuNode("验证邮箱", "请选择验证的账户类型",
-                () -> "当前的邮箱类型：" + getBotConfig().getConfig(EMAIL_VERIFIER_TYPE));
-    }
-
-
-    /**
-     * 获取token
-     *
-     * @return CommandMenuNode
-     */
-    private CommandMenuNode buildQueryTokenMenuNode() {
-        return new CommandMenuNode("获取token", "开始获取token", () -> {
-            CompletableFuture<ACListOptResult> getToken = getBot().loginAndTakeTokenAccount();
-            try {
-                ACListOptResult acListOptResult = getToken.get();
-
-                return acListOptResult.printStr();
-            } catch (InterruptedException | ExecutionException e) {
-                getBot().logger.error("获取token异常, " +
-                        (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()), e);
-                return "";
-            }
-        });
-    }
-
-    /**
-     * 构建查看代理列表的菜单节点
-     *
-     * @return 查看代理列表菜单节点
-     */
-    private CommandMenuNode buildProxyListMenuNode() {
-        return new PageMenuNode<>("查看代理列表", "当前代理列表:", (pageNum, pageSize) -> {
-            try {
-                return getBot().getBotApi().getProxyInfoRPC().conditionPageQueryRPC(pageNum, pageSize, new HashMap<>());
-            } catch (SQLException e) {
-                getBot().logger.error("查询代理列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
-                return null;
-            }
-        }, ProxyInfo.class);
-    }
-
-
-    /**
-     * 构建查看浏览器环境列表的菜单节点
-     *
-     * @return 查看浏览器环境列表菜单节点
-     */
-    private CommandMenuNode buildBrowserListMenuNode() {
-        return new PageMenuNode<>("查看浏览器环境列表", "当前浏览器环境:", (pageNum, pageSize) -> {
-            try {
-                return getBot().getBotApi().getBrowserEnvRPC().conditionPageQueryRPC(pageNum, pageSize, new HashMap<>());
-            } catch (SQLException e) {
-                getBot().logger.error("查询浏览器环境列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
-                return null;
-            }
-        }, BrowserEnv.class);
-    }
-
-    /**
-     * 账户列表菜单节点
-     *
-     * @return 账户列表节点
-     */
-    private CommandMenuNode buildAccountListMenuNode() {
-        CommandMenuNode accountListMenuNode = new PageMenuNode<>("查看账号", "当前账户详情列表:", (pageNum, pageSize) -> {
-            try {
-                HashMap<String, Object> filter = new HashMap<>();
-                filter.put("botId", getBot().getBotInstance().getBotId());
-                filter.put("botKey", getBot().getAutoBotConfig().getBotKey());
-
-                PageResult<AccountContext> pageResult = getBot().getBotApi().getBotAccountService().conditionPageQuery(pageNum, pageSize, filter);
-                pageResult.getList().forEach(getBot().getPersistenceManager()::fillAccountInfo);
-
-                return pageResult;
-            } catch (SQLException e) {
-                getBot().logger.error("查询账号列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
-                return null;
-            }
-        }, AccountContext.class);
-
-        return accountListMenuNode
-                .addSubMenu(buildAccountRewardMenuNode())
-                .addSubMenu(buildAccountConnectStatusMenuNode())
-                .addSubMenu(REFRESH_NODE);
-    }
-
-    /**
-     * 查看账户收益菜单节点
-     *
-     * @return 账户收益节点
-     */
-    private CommandMenuNode buildAccountRewardMenuNode() {
-        return new PageMenuNode<>("查看账号收益", "账号收益详情列表:", (pageNum, pageSize) -> {
-            try {
-                return getBot().getBotApi().getRewordInfoService().conditionPageQuery(pageNum, pageSize, new HashMap<>());
-            } catch (SQLException e) {
-                getBot().logger.error("查询账号收益列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
-                return null;
-            }
-        }, RewordInfo.class);
-    }
-
-    /**
-     * 查看账户连接情况菜单节点
-     *
-     * @return 账户收益节点
-     */
-    private CommandMenuNode buildAccountConnectStatusMenuNode() {
-        return new CommandMenuNode(
-                "查看账号连接情况",
-                "账号连接情况列表:",
-                () -> AccountInfoPrinter.printAccountConnectStatusList(getBot().getAccountContexts())
-        ).addSubMenu(REFRESH_NODE);
-    }
-
-
-    /**
-     * 开始账户连接菜单节点
-     *
-     * @return 连接账户菜单节点
-     */
-    private CommandMenuNode buildStartAccountConnectMenuNode() {
-        CommandMenuNode menuNode = new CommandMenuNode(
-                "启动任务",
-                "选择任务类型",
-                null
-        );
-
-        Set<String> jobNameSet = getBot().botJobNameList();
-        for (String jobName : jobNameSet) {
-
-            CommandMenuNode typeInput = new CommandMenuNode(true, null, "type",
-                    () -> JSON.toJSONString(getBot().startBotJob(jobName))
-            );
-
-            typeInput.setTittleBuilder(() -> {
-                JobStatus status = null;
-                try {
-                    status = getBot().getBotApi().getBotJobService().queryJobStatus(getBotConfig().getBotKey(), jobName);
-                    return "%s 任务 (%s)".formatted(jobName, status);
-                } catch (SchedulerException e) {
-                    throw new RuntimeException(e);
-                }
-            });
-
-            menuNode.addSubMenu(typeInput);
-        }
-
-        return menuNode;
-    }
-
-    /**
-     * 导入菜单节点
-     *
-     * @return CommandMenuNode
-     */
-    private CommandMenuNode buildImportMenuNode() {
-
-        return new CommandMenuNode("导入", "请选择要导入的数据", null)
-                .addSubMenu(buildImportBotAccountContextMenuNode())
-                // .addSubMenu(buildImportBaseAccountMenuNode())
-                // .addSubMenu(buildImportProxyMenuNode())
-                // .addSubMenu(buildImportBrowserEnvMenuNode())
-                // .addSubMenu(buildImportTwitterMenuNode())
-                // .addSubMenu(buildImportDiscordMenuNode())
-                // .addSubMenu(buildImportTelegramMenuNode())
-                ;
-    }
-
-    // /**
-    //  * 导入浏览器环境菜单节点
-    //  *
-    //  * @return CommandMenuNode
-    //  */
-    // private CommandMenuNode buildImportBrowserEnvMenuNode() {
-    //
-    //     return new CommandMenuNode(true, "导入浏览器环境", null, () -> {
-    //         String filePath = getBotConfig().getFilePathConfig().getBrowserEnvFileBotConfigPath();
-    //
-    //         try {
-    //             getBot().getBotApi().getBrowserEnvRPC().importFromExcel(filePath);
-    //         } catch (SQLException e) {
-    //             throw new RuntimeException(e);
-    //         }
-    //
-    //         return "浏览器环境导入完成";
-    //     });
-    // }
-    //
-    // /**
-    //  * 导入代理信息
-    //  *
-    //  * @return CommandMenuNode
-    //  */
-    // private CommandMenuNode buildImportProxyMenuNode() {
-    //     return new CommandMenuNode(true, "导入代理", null, () -> {
-    //
-    //         try {
-    //             getBot().getBotApi().getProxyInfoRPC()
-    //                     .importFromExcel(getBotConfig().getFilePathConfig().getProxyFileBotConfigPath());
-    //         } catch (SQLException e) {
-    //             throw new RuntimeException(e);
-    //         }
-    //
-    //         return "代理导入完成";
-    //     });
-    // }
-    //
-    // /**
-    //  * 导入账号基本信息
-    //  *
-    //  * @return CommandMenuNode
-    //  */
-    // private CommandMenuNode buildImportBaseAccountMenuNode() {
-    //     return new CommandMenuNode(true, "导入账号基本信息", null, () -> {
-    //
-    //         try {
-    //             Integer integer = getBot().getBotApi().getAccountBaseInfoRPC()
-    //                     .importFromExcel(getBotConfig().getFilePathConfig().getBaseAccountFileBotConfigPath());
-    //             return "账号基本信息导入完成，" + integer;
-    //         } catch (SQLException e) {
-    //             throw new RuntimeException(e);
-    //         }
-    //     });
-    // }
-    //
-    //
-    // /**
-    //  * 导入twitter账号基本信息
-    //  *
-    //  * @return CommandMenuNode
-    //  */
-    // private CommandMenuNode buildImportTwitterMenuNode() {
-    //     return new CommandMenuNode(true, "导入twitter账号", null, () -> {
-    //         try {
-    //             Integer i = getBot().getBotApi().getTwitterAccountRPC()
-    //                     .importFromExcel(getBotConfig().getFilePathConfig().getTwitterFileBotConfigPath());
-    //             return "twitter导入完成, " + i;
-    //         } catch (SQLException e) {
-    //             throw new RuntimeException(e);
-    //         }
-    //     });
-    // }
-    //
-    //
-    // /**
-    //  * 导入discord账号基本信息
-    //  *
-    //  * @return CommandMenuNode
-    //  */
-    // private CommandMenuNode buildImportDiscordMenuNode() {
-    //     return new CommandMenuNode(true, "导入discord账号", null, () -> {
-    //
-    //         try {
-    //             Integer i = getBot().getBotApi().getDiscordAccountRPC().importFromExcel(getBotConfig().getFilePathConfig().getDiscordFileBotConfigPath());
-    //             return "discord导入完成," + i;
-    //         } catch (SQLException e) {
-    //             throw new RuntimeException(e);
-    //         }
-    //     });
-    // }
-    //
-    // /**
-    //  * 导入Telegram账号基本信息
-    //  *
-    //  * @return CommandMenuNode
-    //  */
-    // private CommandMenuNode buildImportTelegramMenuNode() {
-    //     return new CommandMenuNode(true, "导入Telegram账号", null, () -> {
-    //
-    //         try {
-    //             Integer i = getBot().getBotApi().getTelegramAccountRPC().importFromExcel(getBotConfig().getFilePathConfig().getTelegramFileBotConfigPath());
-    //
-    //             return "Telegram导入完成" + i;
-    //         } catch (SQLException e) {
-    //             throw new RuntimeException(e);
-    //         }
-    //     });
-    // }
-
-
-    /**
-     * 导入bot使用的账号菜单节点
-     *
-     * @return CommandMenuNode
-     */
-    private CommandMenuNode buildImportBotAccountContextMenuNode() {
-        return new CommandMenuNode(true, "导入bot运行账号", null, () -> {
-
-            try {
-                Integer i = getBot().getBotApi().getBotAccountService().importFromExcel(
-                        getBotConfig().getAccountConfig().getConfigFilePath()
-                );
-                return "bot运行账号导入完成," + i;
-            } catch (SQLException e) {
-                throw new RuntimeException(e);
-            }
-        });
-    }
-
-
-    /**
-     * 打印当前的邀请码
-     *
-     * @return 邀请码
-     */
-    private String printCurrentRegisterConfig() {
-        String inviteCode = (String) getBotConfig().getCustomConfig().get(INVITE_CODE_KEY);
-        String registerType = (String) getBotConfig().getCustomConfig().get(REGISTER_TYPE_KEY);
-
-        return "(当前邀请码为:" + inviteCode + ")\n"
-                + "(当前注册类型为:" + registerType + ")\n";
-    }
-}
-package cn.com.vortexa.bot_father.websocket;
-
-import cn.com.vortexa.bot_father.bot.AnnoDriveAutoBot;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.job.AutoBotJobParam;
-import cn.com.vortexa.common.dto.job.AutoBotJobWSParam;
-import cn.com.vortexa.common.entity.AccountContext;
-import cn.com.vortexa.common.util.NamedThreadFactory;
-import cn.com.vortexa.websocket.netty.constants.WebsocketClientStatus;
-import lombok.extern.slf4j.Slf4j;
-import org.jetbrains.annotations.NotNull;
-
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.util.Map;
-import java.util.concurrent.*;
-
-
-@Slf4j
-public class WebSocketClientLauncher {
-
-    public static final Method lanuchMethod;
-
-    static {
-        try {
-            lanuchMethod = WebSocketClientLauncher.class.getMethod("launchWSClient",
-                    Object.class, Object.class, Object.class);
-        } catch (NoSuchMethodException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    /**
-     * 线程池
-     */
-    private final ExecutorService executorService;
-
-    /**
-     * bot 对象
-     */
-    private final AnnoDriveAutoBot<?> bot;
-
-    /**
-     * 控制并发数量的信号量
-     */
-    private final Map<String, Semaphore> wsCCSemapthoreMap = new ConcurrentHashMap<>();
-
-    /**
-     * 已启动的ws客户端
-     */
-    private final Map<String, BaseBotWSClient<?>> launchedWSClientMap = new ConcurrentHashMap<>();
-
-    public WebSocketClientLauncher(
-            AnnoDriveAutoBot<?> bot
-    ) {
-        this.bot = bot;
-        this.executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("ws-client-launcher"));
-    }
-
-    /**
-     * 构建ws客户端
-     *
-     * @param accountContextObj accountContextObj
-     * @param jobParamObj       jobParamObj
-     * @return BaseBotWSClient < Req, Resp>
-     */
-    public final CompletableFuture<Result> launchWSClient(
-            Object accountContextObj,
-            Object jobParamObj,
-            Object wsClientBuilderObj
-    ) {
-        // 参数处理
-        AccountContext accountContext = (AccountContext) accountContextObj;
-        AutoBotJobParam jobParam = (AutoBotJobParam) jobParamObj;
-        AccountWSClientBuilder wsClientBuilder = (AccountWSClientBuilder) wsClientBuilderObj;
-
-        String key = generateAccountKey(accountContext, jobParam.getJobName());
-
-        String prefix = String.format("bot[%s]-job[%s]-account[%s]-[%s]",
-                bot.getBotInstance().getBotKey(), jobParam.getJobName(), accountContext.getId(), accountContext.getName());
-
-        AutoBotJobWSParam autoBotJobWSParam = jobParam.getAutoBotJobWSParam();
-
-
-        // 已经启动的，不再创建
-        if (launchedWSClientMap.containsKey(key)) {
-            if (!autoBotJobWSParam.getIsRefreshWSConnection()) {
-                log.warn("{} ws client already created", prefix);
-                return CompletableFuture.completedFuture(Result.fail(prefix + "ws client already created"));
-            } else {
-                log.warn(prefix + " 移除旧ws客户端");
-                launchedWSClientMap.remove(key).shutdown();
-            }
-        }
-
-        return buildAndConnectWebSocket(accountContext, autoBotJobWSParam, key, wsClientBuilder, prefix);
-    }
-
-
-    /**
-     * 构建并连接ws客户端
-     *
-     * @param accountContext    accountContext
-     * @param autoBotJobWSParam autoBotJobWSParam
-     * @param key               key
-     * @param wsClientBuilder   wsClientBuilder
-     * @param prefix            prefix
-     * @return CompletableFuture<Result>
-     */
-    private @NotNull CompletableFuture<Result> buildAndConnectWebSocket(
-            AccountContext accountContext,
-            AutoBotJobWSParam autoBotJobWSParam,
-            String key,
-            AccountWSClientBuilder wsClientBuilder,
-            String prefix
-    ) {
-
-        // Step 1 ws 连接数量控制
-        Semaphore wsConnectSemaphore;
-        try {
-            wsConnectSemaphore = wsCCSemapthoreMap.computeIfAbsent(key, k -> new Semaphore(autoBotJobWSParam.getWsConnectCount()));
-            wsConnectSemaphore.acquire();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
-
-        //  Step 2 启动
-        BaseBotWSClient<?> wsClient = null;
-
-        // Step 3 创建ws client
-        try {
-            wsClient = wsClientBuilder.build(accountContext);
-
-            if (wsClient == null) {
-                return CompletableFuture.completedFuture(Result.fail("ws client create failed"));
-            }
-            launchedWSClientMap.put(key, wsClient);
-        } catch (InvocationTargetException | IllegalAccessException e) {
-            log.error("build account ws client error", e);
-            return CompletableFuture.completedFuture(Result.fail(prefix + "build account ws client error"));
-        }
-
-        // Step 4 设置handler
-        init(wsClient, autoBotJobWSParam, wsConnectSemaphore);
-
-        // Step 5 检查当前状态，如果为new或stop才进行启动
-        WebsocketClientStatus currentStatus = wsClient.getClientStatus();
-
-
-        return switch (currentStatus) {
-            // 新创建，停止状态，需要建立连接
-            case WebsocketClientStatus.NEW, WebsocketClientStatus.STOP -> wsClient
-                    .connect() // 异步连接
-                    .thenApplyAsync(connectResult -> {
-                        if (connectResult) {
-                            // 连接成功
-                            return Result.ok(prefix + "connect success");
-                        } else if (autoBotJobWSParam.getWsUnlimitedRetry()) {
-                            // TODO ws需要加入shutdown后的恢复机制
-                            // 连接失败，且允许无限重连, 返回ok，ws内部会自动重连
-                            return Result.ok(prefix + "connect fail, restarting...");
-                        } else {
-                            return Result.fail(prefix + "ws client can not connect");
-                        }
-                    }, executorService)
-                    .exceptionallyAsync(throwable -> {
-                        log.error("ws client connect error", throwable);
-                        return Result.fail(prefix + "connect error, " + throwable.getMessage());
-                    }, executorService);
-            case WebsocketClientStatus.STARTING, WebsocketClientStatus.RUNNING -> CompletableFuture.completedFuture(Result.ok());
-            // 被禁止使用，抛出异常
-            case WebsocketClientStatus.SHUTDOWN -> CompletableFuture.completedFuture(Result.fail(prefix + " ws client can not connect"));
-        };
-    }
-
-    /**
-     * 生成账户key
-     *
-     * @param accountContext accountContext
-     * @param jobName        jobName
-     * @return String
-     */
-    private static @NotNull String generateAccountKey(AccountContext accountContext, String jobName) {
-        return jobName + accountContext.getName();
-    }
-
-
-    /**
-     * 添加ws状态改变的handler
-     *
-     * @param <T>             t
-     * @param wsClient          wsClient
-     * @param autoBotJobWSParam autoBotJobWSParam
-     */
-    private <T> void init(cn.com.vortexa.bot_father.websocket.BaseBotWSClient<T> wsClient, AutoBotJobWSParam autoBotJobWSParam, Semaphore wsConnectSemaphore) {
-        // 设置参数
-        wsClient.setAllIdleTimeSecond(autoBotJobWSParam.getHeartBeatIntervalSecond());
-        wsClient.setReconnectCountDownSecond(autoBotJobWSParam.getReconnectCountDownSecond());
-        wsClient.setReconnectLimit(autoBotJobWSParam.getReconnectLimit());
-        wsClient.setEventLoopGroupThreads(autoBotJobWSParam.getNioEventLoopGroupThreads());
-
-        //设置相关回调
-        wsClient.setClientStatusChangeHandler(newStatus -> {
-            wsClient.whenClientStatusChange(newStatus);
-            // 释放资源
-            if (newStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
-                // 记录完成的ws数量
-                wsConnectSemaphore.release();
-            }
-        });
-    }
-}
-package cn.com.vortexa.bot_father;
-
-import cn.com.vortexa.bot_father.anno.BotApplication;
-import cn.com.vortexa.bot_father.bot.AutoLaunchBot;
-import cn.com.vortexa.bot_father.config.AutoBotConfig;
-import cn.com.vortexa.bot_father.constants.BotStatus;
-import cn.com.vortexa.bot_father.service.BotApi;
-import cn.com.vortexa.bot_father.service.impl.ScriptAgentRPCImpl;
-import cn.com.vortexa.common.dto.control.ServiceInstance;
-import cn.com.vortexa.common.exception.BotInitException;
-import cn.com.vortexa.common.exception.BotStartException;
-import cn.com.vortexa.common.util.BannerUtil;
-import cn.com.vortexa.control.ScriptAgent;
-import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
-import cn.com.vortexa.control.dto.RemotingCommand;
-import cn.hutool.core.util.BooleanUtil;
-import cn.hutool.core.util.StrUtil;
-
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.autoconfigure.web.servlet.ServletWebServerFactoryAutoConfiguration;
-import org.springframework.context.ApplicationContext;
-import org.springframework.context.ConfigurableApplicationContext;
-
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
-import java.util.Arrays;
-import java.util.Optional;
-
-@SpringBootApplication(exclude = ServletWebServerFactoryAutoConfiguration.class)
-@ImportAutoConfiguration({BotFatherAutoConfig.class})
-public class BotLauncher {
-
-    private static final String BOT_KEY_PARAM_KEY = "--bot.botKey=";
-
-    public static AutoLaunchBot<?> LAUNCHED_BOT = null;
-
-    /**
-     * 启动bot
-     *
-     * @param botClass botClass
-     * @param args args
-     * @param <T> T
-     * @return ApplicationContext
-     * @throws BotStartException BotStartException
-     * @throws BotInitException BotInitException
-     */
-    public static <T extends AutoLaunchBot<T>> ApplicationContext launch(Class<T> botClass, String[] args)
-        throws BotStartException, BotInitException {
-        BannerUtil.printBanner("");
-
-        // 命令行参数设置app name
-        Optional<String> botKeyOp = Arrays.stream(args).filter(arg -> arg.startsWith("--bot.botKey=")).findFirst();
-        if (botKeyOp.isEmpty()) {
-            throw new BotStartException("bot key is empty");
-        }
-        String botKey = botKeyOp.get().replace(BOT_KEY_PARAM_KEY, "");
-        System.setProperty("spring.application.name", botKey);
-
-        // 解析注解上的bot name
-        BotApplication annotation = botClass.getAnnotation(BotApplication.class);
-        String botName = null;
-        if (annotation == null || StrUtil.isBlank((botName = annotation.name()))) {
-            throw new BotStartException("bot must have @BotApplication annotation and must have name");
-        }
-        AutoBotConfig.BOT_NAME = botName;
-
-        // Step 1 创建容器
-        ConfigurableApplicationContext applicationContext = SpringApplication.run(BotLauncher.class, args);
-
-        // Step 2 获取配置Bean
-        AutoBotConfig botConfig = applicationContext.getBean(AutoBotConfig.class);
-        BotApi botApi = applicationContext.getBean(BotApi.class);
-        ScriptAgent scriptAgent = applicationContext.getBean(ScriptAgent.class);
-
-        // Step 3 创建bot实例
-        Constructor<T> constructor = null;
-        try {
-            constructor = botClass.getConstructor();
-            LAUNCHED_BOT = constructor.newInstance();
-        } catch (NoSuchMethodException | InstantiationException | IllegalAccessException |
-                 InvocationTargetException e) {
-            throw new BotInitException(e);
-        }
-
-        ScriptAgentRPCImpl scriptAgentRPC = (ScriptAgentRPCImpl) botApi.getScriptAgentRPC();
-        scriptAgentRPC.setBot(LAUNCHED_BOT);
-
-        // Step 4 启动script agent
-        // Step 4.1 替换ScriptAgent的配置，设置为botName和botKey
-        ServiceInstance scriptAgentConfig = scriptAgent.getClientConfig().getServiceInstance();
-        scriptAgentConfig.setGroup(scriptAgentConfig.getGroup() == null ? "default" : scriptAgentConfig.getGroup());
-        scriptAgentConfig.setServiceId(botName);
-        scriptAgentConfig.setInstanceId(botKey);
-        scriptAgent.setName(scriptAgentConfig.toString());
-
-        // Step 4.2 设置注册完成后的回调，回调中启动bot
-        scriptAgent.setAfterRegistryHandler(response->{
-            try {
-                startLaunch(response, botConfig, botApi);
-            } catch (BotStartException | BotInitException e) {
-                LAUNCHED_BOT.logger.error("launch bot error", e);
-                throw new RuntimeException(e);
-            }
-        });
-
-        try {
-            Boolean success = scriptAgent.connect().get();
-            if (BooleanUtil.isTrue(success)) {
-                LAUNCHED_BOT.logger.info("script agent connect to ControlServer success");
-            } else {
-                LAUNCHED_BOT.logger.error("script agent connect to ControlServer fail");
-            }
-        } catch (Exception e) {
-            LAUNCHED_BOT.logger.error("script agent connect to ControlServer error", e);
-        }
-
-        return applicationContext;
-    }
-
-    private static void startLaunch(RemotingCommand response, AutoBotConfig botConfig, BotApi botApi)
-        throws BotStartException, BotInitException {
-        if (response.getCode() == RemotingCommandCodeConstants.SUCCESS) {
-            if (LAUNCHED_BOT.getStatus() == BotStatus.NEW) {
-                // Step 4 启动bot
-                LAUNCHED_BOT.launch(botConfig, botApi, () -> true);
-            }
-        } else {
-            LAUNCHED_BOT.logger.error("registry fail, response:" + response);
-        }
-    }
-}
-mybatis-plus:
-  mapper-locations: classpath:/mapper/*.xml
-  configuration:
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
-logging:
-  level:
-    org:
-      apache:
-        dubbo: WARN
-        zookeeper: WARN
-
-vortexa:
-  botKey: ''
-  filePathConfig:
-    proxyFileBotConfigPath: "proxy.xlsx"
-    browserEnvFileBotConfigPath: "browser_env.xlsx"
-    twitterFileBotConfigPath: "twitter_account.xlsx"
-    discordFileBotConfigPathL: "discord_account.xlsx"
-    telegramFileBotConfigPath: "telegram_account.xlsx"
-    baseAccountFileBotConfigPath: "base_account.xlsx"
-  accountConfig:
-    configFilePath: ""
-  script-agent:
-    registryCenterUrl: ws://localhost:18848
-    nio-thread-count: 1
-    service-offline-ttl: 60
-    service-instance:
-      host: localhost
-      port: 20001
-      group: test1
-      serviceId: client
-      instanceId: client-1
-
-spring:
-  main:
-    banner-mode: OFF
-
-package cn.com.vortexa.bot_platform.controller;
-
-import cn.com.vortexa.common.dto.control.RegisteredService;
-import cn.com.vortexa.common.vo.PageQuery;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.control.anno.RPCReference;
-import cn.com.vortexa.db_layer.service.IBotInstanceService;
-import cn.com.vortexa.rpc.api.bot.IScriptAgentRPC;
-
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-import java.sql.SQLException;
-import java.util.List;
 
 /**
- * <p>
- * 前端控制器
- * </p>
- *
- * @author com.helei
- * @since 2025-02-18
+ * 创建bot
+ * @param botId
+ * @param botKey
+ * @param accountIds
  */
-@RestController
-@RequestMapping("/botInstance")
-public class BotInstanceController {
-
-    @Autowired
-    private IBotInstanceService botInstanceService;
-
-    @RPCReference
-    private IScriptAgentRPC scriptAgentRPC;
-
-    @PostMapping("/pageQuery")
-    public Result pageQuery(PageQuery query) throws SQLException {
-        return Result.ok(botInstanceService.conditionPageQuery(
-                query.getPage(),
-                query.getLimit(),
-                query.getFilterMap()
-        ));
+export function createBot({botId, botKey, accountIds}) {
+  return request({
+    url: '/bot/create',
+    method: 'post',
+    data: {
+      botId,
+      botKey,
+      accountIds
     }
-
-    @PostMapping("/onlineInstance")
-    public Result onlineInstance() {
-        List<RegisteredService> registeredServices = botInstanceService.queryOnLineInstance();
-        return Result.ok(registeredServices);
-    }
+  })
 }
-package cn.com.vortexa.bot_platform.service.impl;
-
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.control.BotControlServer;
-import cn.com.vortexa.common.dto.control.RegisteredService;
-import cn.com.vortexa.db_layer.mapper.BotInfoMapper;
-import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.common.entity.BotInfo;
-import cn.com.vortexa.common.entity.BotInstance;
-import cn.com.vortexa.db_layer.mapper.BotInstanceMapper;
-import cn.com.vortexa.db_layer.service.IBotInstanceService;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-
-import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
-import lombok.extern.slf4j.Slf4j;
-
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.stereotype.Service;
-
-import java.sql.SQLException;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-18
+ * 分页查询bot实例
+ * @param pageQuery
  */
-@Slf4j
-@Service
-public class BotInstanceServiceImpl extends AbstractBaseService<BotInstanceMapper, BotInstance> implements IBotInstanceRPC, IBotInstanceService {
-
-    @Autowired
-    private BotInfoMapper botInfoMapper;
-
-    @Lazy
-    @Autowired
-    private BotControlServer botControlServer;
-
-    public BotInstanceServiceImpl() {
-        super(botInstance -> {
-            botInstance.setInsertDatetime(LocalDateTime.now());
-            botInstance.setUpdateDatetime(LocalDateTime.now());
-            botInstance.setIsValid(1);
-        });
-    }
-
-    @Override
-    public PageResult<BotInstance> conditionPageQuery(int page, int limit, Map<String, Object> filterMap) throws SQLException {
-
-        PageResult<BotInstance> result = super.conditionPageQuery(page, limit, filterMap);
-
-        // 填充botInfo
-        List<Integer> botIds = result.getList().stream().map(BotInstance::getBotId).toList();
-        Map<Integer, BotInfo> idMapBotInfo = botInfoMapper.selectBatchIds(botIds)
-                .stream().collect(Collectors.toMap(BotInfo::getId, botInfo -> botInfo));
-
-        for (BotInstance instance : result.getList()) {
-            instance.setBotInfo(idMapBotInfo.get(instance.getBotId()));
-        }
-
-        return result;
-    }
-
-
-    @Override
-    public Boolean existsBotInstance(BotInstance query) {
-        return getBaseMapper().exists(new QueryWrapper<>(query));
-    }
-
-    @Override
-    public List<RegisteredService> queryOnLineInstance() {
-        List<RegisteredService> res = new ArrayList<>();
-        List<String> keys = botControlServer.getConnectionService().queryOnlineInstanceKey();
-        keys.forEach(key-> res.addAll(botControlServer.getRegistryService().queryServiceInstance(key)));
-        res.forEach(service -> {
-            BotInstanceMapper mapper = getBaseMapper();
-            BotInstance botInstance = mapper.selectOne(
-                new QueryWrapper<>(BotInstance.builder().botKey(service.getAddress().getInstanceId()).build())
-            );
-            service.addProps("bot_info", botInstance);
-        });
-        return res;
-    }
-
-    @Override
-    public Boolean existsBotInstanceRPC(BotInstance query) {
-        return existsBotInstance(query);
-    }
-
-    @Override
-    public Integer insertOrUpdateRPC(BotInstance instance) throws SQLException {
-        return insertOrUpdate(instance);
-    }
-
-    @Override
-    public BotInstance selectOneRPC(BotInstance query) {
-        return getOne(new QueryWrapper<>(query));
-    }
+export function pageQueryBotInstanceNetwork(pageQuery: PageQuery) {
+  return request({
+    url: '/botInstance/pageQuery',
+    method: 'post',
+    data: pageQuery
+  })
 }
-package cn.com.vortexa.bot_platform;
 
-import cn.com.vortexa.common.util.BannerUtil;
-import cn.com.vortexa.db_layer.DBLayerAutoConfig;
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
 
-@SpringBootApplication
-@ImportAutoConfiguration(classes = DBLayerAutoConfig.class)
-public class BotPlatformApplication {
-    public static void main(String[] args) {
-        BannerUtil.printBanner("");
-        SpringApplication.run(BotPlatformApplication.class, args);
-    }
+bot.js
+
+
+components\horizontal-scroll-bar
+
+<script setup lang="ts">
+import {CaretLeft, CaretRight} from "@element-plus/icons-vue";
+import {ref} from "vue";
+
+const props = withDefaults(defineProps<{step:number}>(), {
+  step: 50
+});
+
+const scrollWrapper = ref(null)
+
+const scrollRight = () => {
+  if (scrollWrapper.value) {
+    console.log(scrollWrapper.value.scrollLeft)
+    scrollWrapper.value.wrapRef.scrollLeft += props.step
+  }
 }
-spring:
-  datasource:
-    url: "jdbc:sqlite://D:\\workspace\\BotFramework-dev_1.0\\botData\\db\\auto_bot.db"
 
-mybatis-plus:
-  configuration:
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
-    cache-enabled: true
-    map-underscore-to-camel-case: false
-  global-config:
-    db-config:
-      logic-delete-field: isValid  # 全局逻辑删除的实体字段名(since 3.3.0,配置后可以忽略不配置步骤2)
-      logic-delete-value: 0    # 设置 1 为未删除
-      logic-not-delete-value: 1 # 设置 0 为已删除
-  mapper-locations: classpath:/mapper/*.xml
+const scrollLeft = () => {
+  if (scrollWrapper.value) {
+    scrollWrapper.value.wrapRef.scrollLeft -= props.step
+  }
+}
+</script>
 
-logging:
-  level:
-    org:
-      apache:
-        dubbo: WARN
-        zookeeper: WARN
-server:
-  port: 10110
+<template>
+  <div class="horizontal-scroll-bar">
+    <el-icon class="control-left" @click="scrollLeft">
+      <CaretLeft/>
+    </el-icon>
+    <div style="width: calc(100% - 20px)">
+      <el-scrollbar ref="scrollWrapper">
+        <div  style="display: flex; width: fit-content">
+          <slot></slot>
+        </div>
+      </el-scrollbar>
+    </div>
+    <el-icon class="control-right" @click="scrollRight">
+      <CaretRight/>
+    </el-icon>
+  </div>
+</template>
+
+<style scoped>
+.horizontal-scroll-bar {
+  height: 100%;
+  display: flex;
+}
+
+.control-left {
+  font-size: 18px;
+}
+
+.control-left:hover {
+  font-weight: 700;
+  font-size: 22px;
+  cursor: pointer;
+}
+
+.control-right {
+  font-size: 18px;
+}
+
+.control-right:hover {
+  font-weight: 700;
+  font-size: 22px;
+  cursor: pointer;
+}
+</style>
+
+vortexa-config.tx
+export enum BotInstanceStatus {
+  ALL='',
+  RUNNING='RUNNING',
+  STOPPED='STOPPED',
+  UN_USABLE='UN_USABLE'
+}
 
 
-vortexa:
-  control-server:
-    nio-thread-count: 1 # netty nio 线程数
-    service-offline-ttl: 120  # 服务下线时间
-    service-instance:
-      host: localhost # 命名服务host
-      port: 18848 # 命名服务port
-      group: test1
-      serviceId: nameserver
-      instanceId: nameserver-1
-package cn.com.vortexa.common.constants;
+export const API_BASE_URL:string = 'http://localhost:10110'
+export const API_TIME_OUT:number = 5000
 
-import java.io.Serial;
-import java.io.Serializable;
+export const API_DEFAULT_PAGE:number = 1
+export const API_DEFAULT_PAGE_SIZE:number = 20
+
+export const PAGINATION_PAGE_SIZES:number[] = [20, 50, 100, 200, 400];
+
+
+vortexa-tpe-common.ts
+
+import {API_DEFAULT_PAGE, API_DEFAULT_PAGE_SIZE} from "@/config/vortexa-config.ts";
 
 /**
- * Bot Job 类型
+ * 上传实体
  */
-public enum BotJobType implements Serializable {
-    /**
-     * 注册
-     */
-    REGISTER,
-    /**
-     * 登录
-     */
-    LOGIN,
-    /**
-     * 查询奖励
-     */
-    QUERY_REWARD,
-    /**
-     * 只运行一次的任务
-     */
-    ONCE_TASK,
-    /**
-     * 定时任务
-     */
-    TIMED_TASK,
-    /**
-     * web socket连接任务
-     */
-    WEB_SOCKET_CONNECT,
+export class UploadEntry {
+  rawLines: Array<Map<string, object>>
 
-    /**
-     * 按账户拆分后的JOB
-     */
-    ACCOUNT_SPLIT_JOB;
-
-
-    @Serial
-    private static final long serialVersionUID = 89472398479283L;
+  constructor(rawLines: Array<Map<string, object>>) {
+    this.rawLines = rawLines
+  }
 }
-package cn.com.vortexa.common.dto.control;
-
-
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Objects;
 
 /**
- * @author helei
- * @since 2025-03-12
+ * Http 响应实体
  */
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-public class RegisteredService {
+export class Result<T> {
+  success: boolean
+  errorMsg: string
+  data: T
 
-    private ServiceInstance address;
-
-    private Map<Object, Object> props;
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        RegisteredService that = (RegisteredService) o;
-        return Objects.equals(address, that.address);
-    }
-
-    public void addProps(Object key, Object value) {
-        if (props == null) props = new HashMap<>();
-        props.put(key, value);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(address);
-    }
+  constructor({success, errorMsg, data}) {
+    this.success = success
+    this.errorMsg = errorMsg
+    this.data = data
+  }
 }
-package cn.com.vortexa.common.dto.job;
 
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+export class PageQuery {
+  page: number = API_DEFAULT_PAGE
+  limit: number = API_DEFAULT_PAGE_SIZE
+  filterMap?: Map<string, object>
 
-import java.io.Serial;
-import java.io.Serializable;
-
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-@Builder
-public class AutoBotJobWSParam implements Serializable {
-
-    @Serial
-    private static final long serialVersionUID = 984984151765154986L;
-
-
-    private Boolean isRefreshWSConnection;
-
-    private Boolean wsUnlimitedRetry;
-
-    private Integer nioEventLoopGroupThreads;
-
-    private Integer wsConnectCount;
-
-    private Integer reconnectLimit;
-
-    private Integer heartBeatIntervalSecond;
-
-    private Integer reconnectCountDownSecond;
-
+  constructor({page, limit, filterMap}:{page?:number, limit?:number, filterMap?:Map<string,object>}) {
+    this.page = page == undefined ? API_DEFAULT_PAGE : page
+    this.limit = limit == undefined ? API_DEFAULT_PAGE_SIZE : limit
+    this.filterMap = filterMap
+  }
 }
-package cn.com.vortexa.common.entity;
-
-import cn.com.vortexa.common.constants.BotJobType;
-import cn.com.vortexa.common.dto.job.AutoBotJobParam;
-import cn.com.vortexa.common.util.typehandler.LocalDateTimeTypeHandler;
-import com.alibaba.fastjson.JSONObject;
-import com.baomidou.mybatisplus.annotation.*;
-import lombok.*;
-
-import java.io.Serial;
-import java.io.Serializable;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 
 /**
- * <p>
- *
- * </p>
- *
- * @author com.helei
- * @since 2025-02-07
+ * 分页响应实体
  */
-@Getter
-@Setter
-@Builder
-@AllArgsConstructor
-@NoArgsConstructor
-@TableName("t_bot_info")
-public class BotInfo implements Serializable {
+export class PageResult<T> {
+  total: number;
+  list: Array<T>;
+  pages: number;
+  pageNum: number;
+  pageSize: number;
 
-    @Serial
-    private static final long serialVersionUID = 1000026515674412242L;
-
-    public static final String CONFIG_PARAMS_KEY = "config_params_key";
-
-    public static final String ACCOUNT_PARAMS_KEY = "account_params_key";
-
-    public static final String BASIC_JOB_LIST_KEY = "basic_job_list";
-
-    @TableId(value = "id", type = IdType.AUTO)
-    private Integer id;
-
-    @TableField("name")
-    private String name;
-
-    @TableField("describe")
-    private String describe;
-
-    @TableField("image")
-    private String image;
-
-    @TableField("limit_project_ids")
-    private String limitProjectIds;
-
-    @TableField("job_params")
-    private Map<String, AutoBotJobParam> jobParams = new HashMap<>();
-
-    @TableField("params")
-    private Map<String, Object> params = new HashMap<>();
-
-    @TableField(value = "insert_datetime", typeHandler = LocalDateTimeTypeHandler.class, fill = FieldFill.INSERT)
-    private LocalDateTime insertDatetime;
-
-    @TableField(value = "update_datetime", typeHandler = LocalDateTimeTypeHandler.class, fill = FieldFill.INSERT_UPDATE)
-    private LocalDateTime updateDatetime;
-
-    @TableField(value = "is_valid", fill = FieldFill.INSERT)
-    @TableLogic
-    private Integer isValid;
-
-
-    /**
-     * 序列化为Json保存的，读取时会存在将AutoBotJobParam变成泛型JsonObject
-     */
-    public void fixMapValueType() {
-        if (jobParams == null || jobParams.isEmpty()) return;
-        for (Map.Entry<String, ?> entry : jobParams.entrySet()) {
-            String key = entry.getKey();
-            Object value = entry.getValue();
-
-            if (value instanceof AutoBotJobParam param) {
-                this.jobParams.put(key, param);
-            } else if (value instanceof JSONObject jb) {
-                this.jobParams.put(key, JSONObject.parseObject(jb.toJSONString(), AutoBotJobParam.class));
-            } else {
-                throw new IllegalArgumentException("error map entity value type");
-            }
-        }
-
-    }
+  constructor({total, pages, pageNum, pageSize, list}) {
+    this.total = total
+    this.pages = pages
+    this.pageNum = pageNum
+    this.pageSize = pageSize
+    this.list = list
+  }
 }
-package cn.com.vortexa.common.entity;
-
-import com.baomidou.mybatisplus.annotation.*;
-
-import cn.com.vortexa.common.dto.job.AutoBotJobParam;
-import lombok.*;
-
-import java.io.Serial;
-import java.io.Serializable;
-import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.Map;
-
-/**
- * @author com.helei
- * @since 2025-02-18
- */
-@Getter
-@Setter
-@Builder
-@AllArgsConstructor
-@NoArgsConstructor
-@TableName("t_bot_instance")
-public class BotInstance implements Serializable {
-
-    @Serial
-    private static final long serialVersionUID = 4984719841947412242L;
 
 
-    @TableId(value = "id", type = IdType.AUTO)
-    private Integer id;
+common.ts
 
-    @TableField("bot_id")
-    private Integer botId;
+export function flattenObject(obj: never): Record<string, never> {
+  const result: Record<string, never> = {}
 
-    @TableField("bot_name")
-    private String botName;
+  for (const key in obj) {
+    if (obj[key] instanceof Map) {
+      // 处理 Map 类型
+      obj[key].forEach((value: never, mapKey: never) => {
+        result[mapKey] = value
+      })
+    } else if (typeof obj[key] === 'object' && obj[key] !== null) {
+      // 递归处理嵌套对象
+      Object.assign(result, flattenObject(obj[key]))
+    } else {
+      // 普通属性
+      result[key] = obj[key]
+    }
+  }
 
-    @TableField("bot_key")
-    private String botKey;
-
-    @TableField("account_table_name")
-    private String accountTableName;
-
-    @TableField("job_params")
-    private Map<String, AutoBotJobParam> jobParams = new HashMap<>();
-
-    @TableField("params")
-    private Map<String, Object> params;
-
-    @TableField(value = "insert_datetime", fill = FieldFill.INSERT)
-    private LocalDateTime insertDatetime;
-
-    @TableField(value = "update_datetime", fill = FieldFill.INSERT_UPDATE)
-    private LocalDateTime updateDatetime;
-
-    @TableField(value = "is_valid", fill = FieldFill.INSERT)
-    @TableLogic
-    private Integer isValid;
-
-    @TableField(exist = false)
-    public BotInfo botInfo;
+  return result
 }
-package cn.com.vortexa.common.util;
 
-/**
- * @author h30069248
- * @since 2025/3/25 16:32
- */
-public class BannerUtil {
 
-    public static void printBanner(String filePath) {
-        System.setProperty("pagehelper.banner", "false");
-        System.setProperty("spring.main.banner-mode", "OFF");
-        System.setProperty("mybatis-plus.global-config.banner", "off");
+export function stringToEnum(value: string, enumValues: { [key: string]: any }): any {
+  for (let key in enumValues) {
+    if (enumValues[key] === value) {
+      return key;
     }
+  }
+  return undefined;
 }
-package cn.com.vortexa.db_layer.service;
 
-import cn.com.vortexa.common.dto.control.RegisteredService;
-import cn.com.vortexa.common.entity.BotInstance;
-
-import java.util.List;
-
-/**
- * <p>
- * 服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-18
- */
-public interface IBotInstanceService extends IBaseService<BotInstance> {
-
-    Boolean existsBotInstance(BotInstance query);
-
-    /**
-     * 查询正在运行的bot实例
-     *
-     * @return List<BotInfo>
-     */
-    List<RegisteredService> queryOnLineInstance();
+export function generateRandomGreenColor(): string {
+  const g = Math.floor(Math.random() * 156) + 100;
+  const r = Math.floor(Math.random() * 100);
+  const b = Math.floor(Math.random() * 100);
+  return `rgb(${r}, ${g}, ${b})`
 }
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="cn.com.vortexa.db_layer.mapper.BotInstanceMapper">
-
-    <!-- 通用查询映射结果 -->
-    <resultMap id="BaseResultMap" type="cn.com.vortexa.common.entity.BotInstance">
-        <id column="id" property="id"/>
-        <result column="bot_id" property="botId"/>
-        <result column="bot_key" property="botKey"/>
-        <result column="account_table_name" property="accountTableName"/>
-        <result column="params" property="params"/>
-        <result column="insert_datetime" property="insertDatetime"/>
-        <result column="update_datetime" property="updateDatetime"/>
-        <result column="is_valid" property="isValid"/>
-    </resultMap>
-
-    <insert id="insertOrUpdate" parameterType="cn.com.vortexa.common.entity.BotInstance">
-        INSERT INTO t_bot_instance
-        (bot_id, bot_name, bot_key, account_table_name, job_params, params, insert_datetime, update_datetime, is_valid)
-        VALUES (#{botId}, #{botName}, #{botKey}, #{accountTableName},#{jobParams}, #{params}, #{insertDatetime}, #{updateDatetime},
-                #{isValid}) ON CONFLICT(bot_id, bot_key)
-        DO
-        UPDATE SET
-            bot_name = excluded.bot_name,
-            account_table_name = excluded.account_table_name,
-            job_params = excluded.job_params,
-            params = excluded.params,
-            update_datetime = excluded.update_datetime;
-    </insert>
 
 
-    <select id="multipleConditionQuery"
-            parameterType="cn.com.vortexa.common.entity.BotInstance"
-            resultType="cn.com.vortexa.common.entity.BotInstance">
-        select
-        t.id as id,
-        t.bot_id as botId,
-        t.bot_key as botKey,
-        t.account_table_name as accountTableName,
-        t.params,
-        t.insert_datetime as insertDatetime,
-        t.update_datetime as updateDatetime,
-        t.is_valid as isValid
-        from
-        t_bot_instance as t
-        <if test="params != null and !params.isEmpty()">
-            left join json_each(t.params) json_each
-        </if>
-        <where>
-            is_valid = 1
-            <if test="botId != null">
-                and t.bot_id = #{botId}
-            </if>
-            <if test="botKey != null">
-                and t.bot_key = #{botKey}
-            </if>
-            <if test="accountTableName != null">
-                and t.account_table_name = #{accountTableName}
-            </if>
-            <if test="params != null and !params.isEmpty()">
-                and
-                <foreach collection="params" item='entry' index='key' separator='AND'>
-                    json_each.key = #{key} and json_each.value = #{entry}
-                </foreach>
-            </if>
-        </where>
-    </select>
-</mapper>
-package cn.com.vortexa.rpc.api.bot;
+view\homepage\script\component\bot-job-detail
+<script setup lang="ts">
+import {CaretLeft, EditPen, SemiSelect} from "@element-plus/icons-vue";
+import {ref} from "vue";
+
+const props = defineProps<{
+  jobName: string,
+  jobParams: object,
+  isRunning: boolean
+}>()
 
 
-import cn.com.vortexa.common.dto.control.ServiceInstance;
-import cn.com.vortexa.common.dto.job.AutoBotJobParam;
+const editJobParamsDialogVisible = ref(false)
 
-import java.util.Map;
+// 事件
+const emit = defineEmits([
+  'start-task',
+  'stop-task'
+])
 
-public interface IScriptAgentRPC {
-
-    String testRPC(ServiceInstance targetServiceInstance, String testParam1);
-
-    Map<String, AutoBotJobParam> queryScriptAgentJobType();
+const startTaskHandler = () => {
+  emit('start-task', {jobName: jobName})
 }
-package cn.com.vortexa.rpc.api.platform;
 
-import cn.com.vortexa.common.entity.BotInstance;
-
-import java.sql.SQLException;
-
-/**
- * @author helei
- * @since 2025/3/21 17:11
- */
-public interface IBotInstanceRPC {
-
-    Boolean existsBotInstanceRPC(BotInstance query);
-
-    Integer insertOrUpdateRPC(BotInstance instance) throws SQLException;
-
-    BotInstance selectOneRPC(BotInstance query);
+const stopTaskHandler = () => {
+  emit('stop-task', {instanceId: jobName})
 }
-package cn.com.vortexa.websocket.netty.base;
+</script>
 
-import cn.com.vortexa.common.entity.ProxyInfo;
-import cn.com.vortexa.common.util.NamedThreadFactory;
-import cn.com.vortexa.websocket.netty.constants.NettyConstants;
-import cn.com.vortexa.websocket.netty.handler.AbstractWebSocketClientHandler;
-import cn.hutool.core.util.StrUtil;
-import io.netty.bootstrap.Bootstrap;
-import io.netty.channel.*;
-import io.netty.channel.socket.nio.NioSocketChannel;
-import io.netty.handler.codec.http.websocketx.*;
-import io.netty.handler.proxy.HttpProxyHandler;
-import io.netty.handler.ssl.SslContext;
-import io.netty.handler.ssl.SslContextBuilder;
-import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
+<template>
+  <div>
+    <div v-if="jobName==''">
+      概况图
+    </div>
+    <div v-else>
+      <el-descriptions
+        class="margin-top"
+        :title="jobName"
+        border
+        :column="1"
+      >
+        <template #extra>
+          <el-button-group class="ml-4">
+            <el-button
+              v-if="!props.isRunning"
+              size="small"
+              @click="startTaskHandler">
+              <el-icon>
+                <CaretLeft/>
+              </el-icon>
+            </el-button>
+            <el-button
+              v-else
+              size="small"
+              @click="stopTaskHandler"
+            >
+              <el-icon>
+                <SemiSelect/>
+              </el-icon>
+            </el-button>
+            <el-button
+              size="small"
+              @click="editJobParamsDialogVisible = true"
+            >
+              <el-icon>
+                <EditPen/>
+              </el-icon>
+            </el-button>
+          </el-button-group>
+        </template>
+        <el-descriptions-item label="Launch Times">1</el-descriptions-item>
+        <el-descriptions-item label="Last Start">2024-03-28 22:12:33</el-descriptions-item>
+        <el-descriptions-item label="Job Type">
+          <el-tag size="small">Timed Job</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="Description">
+          <el-text line-clamp="2">
+            The -webkit-line-clamp CSS property<br/>
+            allows limiting of the contents of<br/>
+            a block to the specified number of lines.
+          </el-text>
+        </el-descriptions-item>
+      </el-descriptions>
+    </div>
 
-import javax.net.ssl.SSLException;
+    <el-dialog v-model="editJobParamsDialogVisible" title="Edit Job Params" width="480">
+      <template #footer>
+        <div>
+          {{jobParams}}
+        </div>
+        <div class="dialog-footer">
+          <el-button @click="editJobParamsDialogVisible = false">Cancel</el-button>
+          <el-button type="primary" @click="editJobParamsDialogVisible = false">
+            Confirm
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
+  </div>
+</template>
 
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicReference;
+<style scoped>
 
-/**
- * Websocket客户端
- */
-@Slf4j
-@Setter
-@Getter
-public abstract class AbstractWebsocketClient<T> extends AutoConnectWSService {
-    private static final int MAX_FRAME_SIZE = 10 * 1024 * 1024;  // 10 MB or set to your desired size
+</style>
 
-    private final AbstractWebSocketClientHandler<T> handler;   //netty pipeline 最后一个执行的handler
-    private final ExecutorService callbackInvoker;  //执行回调的线程池
-    private String name;
-    private boolean handshake = true;
-    private int allIdleTimeSecond = 10; //空闲时间
+bo-runtime-display-card
+<script lang="ts" setup>
+import {SwitchButton, Setting} from '@element-plus/icons-vue'
+import {ElMessage, ElMessageBox} from "element-plus";
+import type {BotInstanceInfo} from "@/types/vortexa-type.ts";
+import {computed, ref} from "vue";
+import {stringToEnum} from "@/util/common.ts";
+import {BotInstanceStatus} from "@/config/vortexa-config.ts";
+import HorizontalScrollBar from "@/components/horizontal-scroll-bar/horizontal-scroll-bar.vue";
+import BotJobDetiail from "@/views/homepage/script/components/bot-job-detiail.vue";
 
-    public AbstractWebsocketClient(
-            String url,
-            String name,
-            AbstractWebSocketClientHandler<T> handler
-    ) {
-        super(url);
-        this.name = name;
-        this.handler = handler;
-        this.callbackInvoker = Executors.newThreadPerTaskExecutor(new NamedThreadFactory(name));
-    }
 
-    @Override
-    protected void afterBoostrapConnected(Channel channel) throws InterruptedException {
-        if (handshake && handler.handshakeFuture() != null) {
-            handler.handshakeFuture().sync();
-        }
-    }
+const props = defineProps<{
+  botInstance: BotInstanceInfo
+}>();
 
-    @Override
-    protected final void init() throws SSLException, URISyntaxException {
-        URI uri = new URI(getUrl());
+// 运行状态
+const botInstanceStatus = computed(() => {
+  return stringToEnum(props.botInstance.params['bot_instance_status'], BotInstanceStatus)
+})
 
-        WebSocketClientHandshaker webSocketClientHandshaker = handshake ? WebSocketClientHandshakerFactory.newHandshaker(
-                uri, WebSocketVersion.V13, null, true, getHeaders(), MAX_FRAME_SIZE
-        ) : null;
-
-        handler.init(this, webSocketClientHandshaker, callbackInvoker);
-
-        final SslContext sslCtx;
-        if (isUseSSL()) {
-            sslCtx = SslContextBuilder
-                    .forClient()
-                    .trustManager(InsecureTrustManagerFactory.INSTANCE)
-                    .build();
-        } else {
-            sslCtx = null;
-        }
-
-        setBootstrap(new Bootstrap());
-        getBootstrap().group(getEventLoopGroup())
-                .channel(NioSocketChannel.class)
-                .option(ChannelOption.TCP_NODELAY, true)
-                .option(ChannelOption.SO_KEEPALIVE, true)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10000) // 设置连接超时为10秒
-                .handler(new ChannelInitializer<NioSocketChannel>() {
-                    @Override
-                    protected void initChannel(NioSocketChannel ch) {
-                        ChannelPipeline p = ch.pipeline();
-                        ProxyInfo proxy = getProxy();
-
-                        if (proxy != null) {
-                            // 添加 HttpProxyHandler 作为代理
-                            if (StrUtil.isNotBlank(proxy.getUsername())) {
-                                p.addFirst(new HttpProxyHandler(proxy.generateAddress(), proxy.getUsername(),
-                                        proxy.getPassword()));
-                            } else {
-                                p.addFirst(new HttpProxyHandler(proxy.generateAddress()));
-                            }
-                        }
-
-                        if (sslCtx != null) {
-                            p.addLast(sslCtx.newHandler(ch.alloc(), uri.getHost(), uri.getPort()));
-                        }
-
-                        addPipeline(p);
-                    }
-                });
-    }
-
-    /**
-     * 添加 pipeline
-     *
-     * @param p p
-     */
-    public abstract void addPipeline(ChannelPipeline p);
-
-    /**
-     * 发送消息，没有回调
-     *
-     * @param message message
-     * @return CompletableFuture<Void>
-     */
-    public CompletableFuture<Void> sendMessage(T message) {
-        return CompletableFuture.runAsync(() -> {
-            if (message == null) {
-                throw new IllegalArgumentException("message is null");
-            }
-
-            doSendMessage(message, false);
-        }, callbackInvoker);
-    }
-
-    /**
-     * 发送请求, 注册响应监听
-     *
-     * @param request 请求体
-     */
-    public CompletableFuture<T> sendRequest(T request) {
-        log.debug("send request [{}]", request);
-
-        return CompletableFuture.supplyAsync(() -> {
-            if (request == null) {
-                log.error("request is null");
-                return null;
-            }
-
-            CountDownLatch latch = new CountDownLatch(1);
-            AtomicReference<T> jb = new AtomicReference<>(null);
-
-            boolean flag = handler.registryRequest(request, response -> {
-                jb.set(response);
-                latch.countDown();
-            });
-
-            if (flag) {
-                doSendMessage(request, true);
-            } else {
-                log.error("request id registered");
-                return null;
-            }
-
-            try {
-                if (!latch.await(NettyConstants.REQUEST_WAITE_SECONDS, TimeUnit.SECONDS)) {
-                    return null;
-                }
-
-                return jb.get();
-            } catch (InterruptedException e) {
-                log.error("send request interrupted", e);
-                return null;
-            }
-        }, callbackInvoker);
-    }
-
-    /**
-     * 发送消息
-     *
-     * @param message   message
-     * @param isRequest isRequest
-     */
-    protected void doSendMessage(T message, boolean isRequest) {
-        try {
-            getChannel().writeAndFlush(message);
-            log.debug("send request [{}] success", message);
-        } catch (Exception e) {
-            throw new RuntimeException("send message [" + message + "] error");
-        }
-    }
+// 基本任务
+const botInstanceBasicTask = computed(() => {
+  return props.botInstance.params['basic_job_list']
+})
+// 任务
+const botInstanceTask = computed(() => {
+  return props.botInstance.jobParams
+})
+// 当前显示的job
+const activeJobName = ref('')
+const activeJobParams = computed(()=>{
+  if (activeJobName.value) {
+    return props.botInstance.jobParams[activeJobName.value]
+  }
+  return {}
+})
+// 当前显示的job 变化
+const activeJobChangeHandler = (newJobName: string) => {
+  activeJobName.value = newJobName
 }
-package cn.com.vortexa.websocket.netty.base;
 
-import cn.com.vortexa.common.entity.ProxyInfo;
-import cn.com.vortexa.websocket.netty.constants.NettyConstants;
-import cn.com.vortexa.websocket.netty.constants.WebsocketClientStatus;
-import io.netty.bootstrap.Bootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.handler.codec.http.HttpHeaders;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
+// 事件
+const emit = defineEmits([
+  'start-script',
+  'stop-script',
+  'delete-script',
+])
 
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.Consumer;
-
-import javax.net.ssl.SSLException;
-
-/**
- * @author helei
- * @since 2025/3/18 10:52
- */
-@Slf4j
-@Setter
-@Getter
-public abstract class AutoConnectWSService implements IWSService {
-    private static volatile EventLoopGroup eventLoopGroup;    //netty线程组
-    private final AtomicInteger reconnectTimes = new AtomicInteger(0);  //重链接次数
-    private final ReentrantLock reconnectLock = new ReentrantLock();    //重连锁
-    private final Condition startingWaitCondition = reconnectLock.newCondition();   //启动中阻塞的condition
-    private final String url; //websocket的url字符串
-    private Bootstrap bootstrap; //netty bootstrap
-    private Channel channel;    //连接channel
-    private String host;    //连接host
-    private int port;    //连接port
-    private boolean useSSL; //是否ssl
-    private HttpHeaders headers;    //请求头
-    private ProxyInfo proxy = null; //代理
-    private int reconnectCountDownSecond = 180; //重连次数减少的间隔
-    private int reconnectLimit = 3; //重连次数限制
-    private int eventLoopGroupThreads = 1; // 线程数
-    private volatile WebsocketClientStatus clientStatus = WebsocketClientStatus.NEW;    //客户端当前状态
-    private Consumer<WebsocketClientStatus> clientStatusChangeHandler = socketCloseStatus -> {
-    };    //clientStatus更新的回调
-
-    protected AutoConnectWSService(String url) {
-        this.url = url;
-    }
-
-    protected abstract void init() throws SSLException, URISyntaxException;
-
-    /**
-     * 连接
-     *
-     * @return CompletableFuture<Boolean>
-     */
-    public final CompletableFuture<Boolean> connect() {
-        return switch (clientStatus) {
-            case NEW, STOP -> reconnect();
-            case STARTING -> waitForStarting();
-            case RUNNING -> {
-                log.warn("ws service [{}] in running, clientStatus[{}]", getName(), clientStatus);
-                yield CompletableFuture.supplyAsync(() -> true);
-            }
-            case SHUTDOWN -> throw new RuntimeException("");
-        };
-    }
-
-    /**
-     * 重连接
-     *
-     * @return CompletableFuture<Boolean>
-     */
-    public CompletableFuture<Boolean> reconnect() {
-        return switch (clientStatus) {
-            case NEW, STOP -> reconnectLogic();
-            case STARTING -> waitForStarting().thenApplyAsync(success -> {
-                if (success) {
-                    return true;
-                }
-                try {
-                    return reconnectLogic().get();
-                } catch (InterruptedException | ExecutionException e) {
-                    throw new RuntimeException(e);
-                }
-            });
-            case RUNNING -> {
-                log.warn("ws service [{}] in running, can't reconnect. clientStatus[{}]", getName(), clientStatus);
-                yield CompletableFuture.supplyAsync(() -> true);
-            }
-            case SHUTDOWN -> CompletableFuture.supplyAsync(() -> {
-                log.error("client[{}] already shutdown", getName());
-                return false;
-            });
-        };
-    }
-
-    /**
-     * 重连接逻辑
-     *
-     * @return CompletableFuture<Boolean>
-     */
-    private CompletableFuture<Boolean> reconnectLogic() {
-        updateClientStatus(WebsocketClientStatus.STARTING);
-
-        String name = getName();
-
-        return CompletableFuture.supplyAsync(() -> {
-            //Step 1 重连次数超过限制，关闭
-            if (reconnectTimes.get() >= reconnectLimit) {
-                log.error("reconnect times out of limit [{}], close websocket client", reconnectLimit);
-                shutdown();
-                return false;
-            }
-
-            AtomicBoolean isSuccess = new AtomicBoolean(false);
-
-            //Step 2 重连逻辑
-            //Step 2.1 加锁保证只要一个线程进行重连
-            reconnectLock.lock();
-            try {
-                //Step 2.2 已经再running状态，直接返回true。变为shutdown、stop状态，直接返回false
-                if (clientStatus.equals(WebsocketClientStatus.RUNNING)) {
-                    log.info("client started by other thread");
-                    return true;
-                } else if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
-                    log.error("clint {} when client starting", clientStatus);
-                    return false;
-                }
-
-                //Step 3 初始化
-                log.info("start init Websocket client");
-                try {
-                    resolveParamFromUrl();
-
-                    init();
-                } catch (SSLException | URISyntaxException e) {
-                    throw new RuntimeException("init websocket client error", e);
-                }
-                log.info("init Websocket finish，start connect server [{}]", url);
-
-                //Step 4 链接服务器
-                if (reconnectTimes.incrementAndGet() <= reconnectLimit) {
-
-                    //Step 4.1 每进行重连都会先将次数加1并设置定时任务将重连次数减1
-                    getEventLoopGroup().schedule(() -> {
-                        reconnectTimes.decrementAndGet();
-                    }, reconnectCountDownSecond, TimeUnit.SECONDS);
-
-                    long waitingConnectTime = reconnectTimes.get() == 1 ? 0 : NettyConstants.RECONNECT_DELAY_SECONDS;
-                    log.info("start connect client [{}], url[{}], current times [{}], start after [{}]s",
-                        name, url, reconnectTimes.get(), waitingConnectTime);
-
-                    //Step 4.2 latch用于同步等等链接完成
-                    CountDownLatch latch = new CountDownLatch(1);
-
-                    //Step 4.3 延迟再进行连接
-                    getEventLoopGroup().schedule(() -> {
-                        try {
-                            channel = bootstrap.connect(host, port).sync().channel();
-
-                            afterBoostrapConnected(channel);
-
-                            log.info("success connect to {}", url);
-                            //Step 4.4 连接成功设置标识
-                            isSuccess.set(true);
-                        } catch (Exception e) {
-                            log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(),
-                                e);
-                            isSuccess.set(false);
-                        } finally {
-                            latch.countDown();
-                        }
-                    }, waitingConnectTime, TimeUnit.SECONDS);
-
-                    //Step 4.5 等待链接完成
-                    try {
-                        latch.await();
-                    } catch (InterruptedException e) {
-                        log.error("connect client [{}], url[{}] interrupted, times [{}]", name, url,
-                            reconnectTimes.get(), e);
-                    }
-
-                    //Step 6 未成功启动，关闭
-                    if (!isSuccess.get()) {
-                        log.info("connect client [{}], url[{}] fail, current times [{}]", name, url,
-                            reconnectTimes.get());
-
-                        close();
-                    } else {
-                        log.info("connect client [{}], url[{}] success, current times [{}]", name, url,
-                            reconnectTimes.get());
-
-                        updateClientStatus(WebsocketClientStatus.RUNNING);
-                        reconnectTimes.set(0);
-                    }
-                }
-            } catch (Exception e) {
-                //exception 遇到未处理异常，直接关闭
-                close();
-                throw new RuntimeException(String.format("connect client [%s] appear unknown error", name), e);
-            } finally {
-                //Step 5 释放等待启动的线程
-                startingWaitCondition.signalAll();
-                reconnectLock.unlock();
-            }
-
-            return isSuccess.get();
-        }, getCallbackInvoker());
-    }
-
-    /**
-     * 关闭
-     */
-    public void close() {
-        if (clientStatus.equals(WebsocketClientStatus.STOP)
-            || clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
-            return;
-        }
-
-        updateClientStatus(WebsocketClientStatus.STOP);
-
-        log.info("closing websocket client [{}], [{}]", getName(), channel == null ? "null" : getChannel().hashCode());
-        if (channel != null) {
-            channel.close();
-            channel = null;
-        }
-        log.warn("web socket client [{}] closed", getName());
-    }
-
-    /**
-     * 终止
-     */
-    public final void shutdown() {
-        updateClientStatus(WebsocketClientStatus.SHUTDOWN);
-
-        if (channel != null) {
-            channel.close();
-            channel = null;
-        }
-        getEventLoopGroup().shutdownGracefully();
-        log.warn("web socket client [{}] already shutdown !", getName());
-    }
-
-    /**
-     * 更新status
-     *
-     * @param newStatus newStatus
-     */
-    protected void updateClientStatus(WebsocketClientStatus newStatus) {
-        synchronized ("CLIENT_STATUS_LOCK") {
-            if (clientStatus.equals(newStatus)) {
-                return;
-            }
-
-            if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
-                throw new IllegalArgumentException("client status is shutdown，new status can not be " + newStatus);
-            }
-
-            try {
-                if (newStatus != clientStatus && clientStatusChangeHandler != null) {
-                    clientStatusChangeHandler.accept(newStatus);
-                }
-            } finally {
-                log.debug("client[{}] status [{}] -> [{}]", getName(), clientStatus, newStatus);
-                clientStatus = newStatus;
-            }
-        }
-    }
-
-    protected EventLoopGroup getEventLoopGroup() {
-        if (eventLoopGroup == null) {
-            synchronized (AutoConnectWSService.class) {
-                if (eventLoopGroup == null) {
-                    eventLoopGroup = new NioEventLoopGroup(eventLoopGroupThreads);
-                }
-            }
-        }
-        return eventLoopGroup;
-    }
-
-    /**
-     * 获取回调执行线程池
-     *
-     * @return ExecutorService
-     */
-    public abstract ExecutorService getCallbackInvoker();
-
-    /**
-     * 每次netty bootstrap 连接后调用
-     *
-     * @throws InterruptedException InterruptedException
-     */
-    protected abstract void afterBoostrapConnected(Channel channel) throws InterruptedException;
-
-    /**
-     * 等待启动完成
-     *
-     * @return CompletableFuture<Void>
-     */
-    private CompletableFuture<Boolean> waitForStarting() {
-        return CompletableFuture.supplyAsync(() -> {
-            log.warn("client [{}] is starting, waiting for complete", getName());
-            reconnectLock.lock();
-            try {
-                while (clientStatus.equals(WebsocketClientStatus.STARTING)) {
-                    startingWaitCondition.await();
-                }
-
-                if (clientStatus.equals(WebsocketClientStatus.STOP) || clientStatus.equals(
-                    WebsocketClientStatus.SHUTDOWN)) {
-                    log.error("启动WS客户端[{}]失败, ClientStatus [{}}", getName(), clientStatus);
-                    return false;
-                }
-                return true;
-            } catch (InterruptedException e) {
-                log.error("waiting for start client [{}] error", getName());
-                throw new RuntimeException(e);
-            } finally {
-                reconnectLock.unlock();
-            }
-        }, getCallbackInvoker());
-    }
-
-    /**
-     * 解析参数
-     *
-     * @throws URISyntaxException url解析错误
-     */
-    private void resolveParamFromUrl() throws URISyntaxException {
-        URI uri = new URI(url);
-        String scheme = uri.getScheme() == null ? "ws" : uri.getScheme();
-        host = uri.getHost() == null ? "127.0.0.1" : uri.getHost();
-        if (uri.getPort() == -1) {
-            if ("ws".equalsIgnoreCase(scheme)) {
-                port = 80;
-            } else if ("wss".equalsIgnoreCase(scheme)) {
-                port = 443;
-            } else {
-                port = -1;
-            }
-        } else {
-            port = uri.getPort();
-        }
-
-        if (!"ws".equalsIgnoreCase(scheme) && !"wss".equalsIgnoreCase(scheme)) {
-            log.error("Only WS(S) is supported.");
-            throw new IllegalArgumentException("url error, Only WS(S) is supported.");
-        }
-
-        useSSL = "wss".equalsIgnoreCase(scheme);
-    }
+const startScriptHandler = () => {
+  emit('start-script', {instanceId: props.botInstance.id})
 }
-package cn.com.vortexa.control.dto;
 
-import cn.com.vortexa.control.constant.LanguageCode;
-import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
-import cn.com.vortexa.control.constant.RemotingCommandFlagConstants;
-import cn.com.vortexa.control.protocol.Serializer;
-import cn.com.vortexa.control.util.DistributeIdMaker;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import org.apache.commons.compress.archivers.sevenz.CLI;
-
-import java.io.Serializable;
-import java.util.HashMap;
-
-
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
-public class RemotingCommand {
-
-    public static final RemotingCommand TIME_OUT_COMMAND;
-    public static final RemotingCommand PARAMS_ERROR;
-
-    public static final String TRANSACTION_ID_KEY = "transaction_id";
-    public static final String GROUP_KEY = "group";
-    public static final String SERVICE_ID_KEY = "service_id";
-    public static final String CLIENT_ID_KEY = "client_id";
-
-    static {
-        TIME_OUT_COMMAND = new RemotingCommand();
-        TIME_OUT_COMMAND.setFlag(RemotingCommandFlagConstants.TIME_OUT_EXCEPTION);
-        TIME_OUT_COMMAND.setCode(RemotingCommandCodeConstants.FAIL);
-
-        PARAMS_ERROR = new RemotingCommand();
-        PARAMS_ERROR.setFlag(RemotingCommandFlagConstants.PARAMS_ERROR);
-        PARAMS_ERROR.setCode(RemotingCommandCodeConstants.FAIL);
-    }
-
-    private Integer flag;
-    private Integer code;
-    private LanguageCode language = LanguageCode.JAVA;
-    private Integer version = 0;
-    private String remark;
-    private HashMap<String, String> extFields;
-
-    private byte[] body;
-
-    private Object payLoad;
-
-    @Override
-    public RemotingCommand clone() {
-        RemotingCommand remotingCommand = new RemotingCommand();
-        remotingCommand.setFlag(this.flag);
-        remotingCommand.setCode(this.code);
-        remotingCommand.setLanguage(this.language);
-        remotingCommand.setVersion(this.version);
-        remotingCommand.setRemark(this.remark);
-        remotingCommand.setExtFields(this.extFields);
-        remotingCommand.setBody(this.body);
-        remotingCommand.setPayLoad(this.payLoad);
-        return remotingCommand;
-    }
-
-    public String getTransactionId() {
-        return getExtFieldsValue(TRANSACTION_ID_KEY);
-    }
-
-    public void setTransactionId(String tsId) {
-        addExtField(TRANSACTION_ID_KEY, tsId);
-    }
-
-    public String getGroup() {
-        String value = getExtFieldsValue(GROUP_KEY);
-        return (value == null || value.isEmpty()) ? "default" : value;
-    }
-
-    public void setGroup(String group) {
-        addExtField(GROUP_KEY, group);
-    }
-
-    public String getServiceId() {
-        return getExtFieldsValue(SERVICE_ID_KEY);
-    }
-
-    public void setServiceId(String serviceId) {
-        addExtField(SERVICE_ID_KEY, serviceId);
-    }
-
-    public String getClientId() {
-        return getExtFieldsValue(CLIENT_ID_KEY);
-    }
-
-    public void setClientId(String clientId) {
-        addExtField(CLIENT_ID_KEY, clientId);
-    }
-
-    public String getExtFieldsValue(String extFieldsKey) {
-        if (extFields == null) return null;
-        return extFields.get(extFieldsKey);
-    }
-
-    public Integer getExtFieldsInt(String extFieldsKey) {
-        String value = getExtFieldsValue(extFieldsKey);
-        if (value == null || value.isEmpty()) return null;
-        return Integer.parseInt(value);
-    }
-
-    public Long getExtFieldsLong(String extFieldsKey) {
-        String value = getExtFieldsValue(extFieldsKey);
-        if (value == null || value.isEmpty()) return null;
-        return Long.parseLong(value);
-    }
-
-    public void addExtField(String key, String value) {
-        if (this.extFields == null) {
-            this.extFields = new HashMap<>();
-        }
-        this.extFields.put(key, value);
-    }
-
-    public void setBodyFromObject(Object body) {
-        if (body == null) this.body = null;
-        else this.body = Serializer.Algorithm.Protostuff.serialize(body);
-    }
-
-    public void release() {
-    }
-
-    protected void clear() {
-        this.flag = null;
-        this.code = null;
-        this.language = null;
-        this.version = null;
-        this.remark = null;
-        if (extFields == null) extFields = new HashMap<>();
-        else this.extFields.clear();
-        this.body = null;
-    }
-
-    public static RemotingCommand generatePingCommand(String key) {
-        String txId = DistributeIdMaker.DEFAULT.nextId(key);
-        RemotingCommand ping = new RemotingCommand();
-        ping.setFlag(RemotingCommandFlagConstants.PING);
-        ping.setTransactionId(txId);
-        ping.setCode(RemotingCommandCodeConstants.SUCCESS);
-        return ping;
-    }
-    public static RemotingCommand generatePongCommand(String key) {
-        String txId = DistributeIdMaker.DEFAULT.nextId(key);
-        RemotingCommand pong = new RemotingCommand();
-        pong.setFlag(RemotingCommandFlagConstants.PONG);
-        pong.setTransactionId(txId);
-        pong.setCode(RemotingCommandCodeConstants.SUCCESS);
-        return pong;
-    }
-
-    public void setObjBody(Serializable objBody) {
-        this.body = Serializer.Algorithm.JDK.serialize(objBody);
-    }
-
-    public <T> T getObjBodY(Class<T> tClass) {
-        return Serializer.Algorithm.JDK.deserialize(this.body, tClass);
-    }
-
-    @Override
-    public String toString() {
-        return "RemotingCommand{" +
-                "flag=" + flag +
-                ", code=" + code +
-                ", language=" + language +
-                ", version=" + version +
-                ", remark='" + remark + '\'' +
-                ", extFields=" + extFields +
-                ", body=" + ((body == null || body.length == 0) ? "empty" : "not empty") +
-                '}';
-    }
+const stopScriptHandler = () => {
+  emit('stop-script', {instanceId: props.botInstance.id})
 }
+
+const deleteInstanceHandler = () => {
+  ElMessageBox.confirm(
+    'delete the script instance. Continue?',
+    'Warning',
+    {
+      confirmButtonText: 'OK',
+      cancelButtonText: 'Cancel',
+      type: 'danger',
+    }
+  )
+    .then(() => {
+      emit('delete-task', {instanceId: props.botInstance.id})
+    })
+    .catch(() => {
+      ElMessage({
+        type: 'info',
+        message: 'Delete canceled',
+      })
+    })
+}
+
+</script>
+
+<template>
+  <div class="bot-runtime-display-card">
+    <div class="card-header clearfix">
+      <div style="display:flex; align-items: start">
+        <div style="width: 60px;">
+          <el-image class="head-image"/>
+        </div>
+        <div
+          style="flex: 1;overflow: hidden;font-weight: 700; cursor: pointer"
+          @click="activeJobName=''"
+        >
+          <el-text truncated>{{ botInstance.botKey }}</el-text>
+          <div style="font-weight: 400;">
+            <el-text truncated>
+              {{ botInstance.insertDatetime ? botInstance.insertDatetime : 'unknown start time' }}
+            </el-text>
+          </div>
+        </div>
+
+        <el-dropdown placement="bottom-end">
+          <el-icon class="setting-button">
+            <Setting/>
+          </el-icon>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item>Account edit</el-dropdown-item>
+              <el-dropdown-item
+                @click="deleteInstanceHandler"
+              >
+                <span  style="color: red">delete</span>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
+    </div>
+
+
+    <div class="data-print-line">
+      <horizontal-scroll-bar :step="180">
+          <el-button
+            v-for="basicTaskName in botInstanceBasicTask"
+            size="small"
+            :key="basicTaskName"
+            class="button-morandi"
+            :class="{'active-job-button': activeJobName==basicTaskName}"
+            @click="activeJobChangeHandler(basicTaskName)"
+            plain
+          >
+            {{ basicTaskName }}
+          </el-button>
+          <el-button
+            v-for="task in botInstanceTask"
+            size="small"
+            :key="task.jobName"
+            class="button-morandi"
+            :class="{'active-job-button': activeJobName==task.jobName}"
+            @click="activeJobChangeHandler(task.jobName)"
+            plain
+          >
+            {{ task.jobName }}
+          </el-button>
+      </horizontal-scroll-bar>
+    </div>
+
+
+    <div class="card-detail">
+      <el-scrollbar class="card-detail-content">
+        <bot-job-detiail
+          :job-name="activeJobName"
+          :job-params="activeJobParams"
+          :is-running="false"
+        />
+      </el-scrollbar>
+
+      <el-button v-if="botInstanceStatus==BotInstanceStatus.RUNNING"
+                 @click="stopScriptHandler"
+                 class="opt-button"
+                 type="danger"
+                 plain
+      >
+        <el-icon>
+          <SwitchButton/>
+        </el-icon>
+        Stop Task
+      </el-button>
+      <el-button
+        v-else
+        class="opt-button"
+        type="success"
+        @click="startScriptHandler"
+        plain
+      >
+        <el-icon>
+          <SwitchButton/>
+        </el-icon>
+        Start Script
+      </el-button>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.bot-runtime-display-card {
+  width: 300px;
+  min-width: 300px;
+  //max-width: 500px;
+  height: 350px;
+  background-color: rgba(110, 110, 110, 0.1);
+  padding: 24px;
+
+  margin-left: 12px;
+
+  color: #9da3ae;
+  border-radius: 10px;
+}
+
+.card-header {
+  height: 48px;
+}
+
+.data-print-line {
+  height: 28px;
+  margin-top: 4px;
+  border-bottom: 1px solid #9da3ae;
+}
+
+.card-detail {
+  height: 222px;
+  margin-top: 16px;
+}
+
+.head-image {
+  height: 48px;
+  width: 48px;
+  margin-right: 8px;
+}
+
+.icon-button {
+  width: 24px;
+  height: 24px;
+  color: #9da3ae;
+  font-size: 20px;
+
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  transform: scale(1.2); /* 鼠标悬浮时放大 */
+  color: #007BFF; /* 鼠标悬浮时改变颜色 */
+}
+
+.card-detail-content {
+  height: 222px;
+}
+
+.opt-button {
+  margin-top: 4px;
+  width: 100%;
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.setting-button {
+  font-size: 23px;
+  cursor: pointer;
+}
+
+.setting-button:hover {
+  color: #000000;
+}
+
+.active-job-button {
+  background-color: aquamarine !important;
+  color: #000000 !important;
+}
+
+:deep(.el-descriptions__body), :deep(.el-descriptions__label.el-descriptions__cell.is-bordered-label) {
+  background-color: transparent!important;
+}
+</style>
+
+
+vortexa-script-ciew
+<script setup lang="ts">
+import {Filter, RefreshRight} from '@element-plus/icons-vue'
+import BotRuntimeDisplayCard from "@/views/homepage/script/components/bot-runtime-display-card.vue";
+import {BotInstanceInfo} from "@/types/vortexa-type.ts";
+import {onMounted, ref, nextTick, computed, reactive} from "vue";
+import ContentBlock from "@/components/content-block/content-block.vue";
+import {BotInstanceStatus} from "@/config/vortexa-config.ts";
+import {pageQueryBotInstanceNetwork} from "@/api/bot.ts";
+import {PageQuery, PageResult} from "@/types/vortexa-type-common.ts";
+import {ElMessage} from "element-plus";
+
+const filters = ref<{
+  status: BotInstanceStatus
+}>({status: BotInstanceStatus.ALL})
+
+const botInstanceList = ref<Array<BotInstanceInfo>>([])
+
+const displayInstanceList = computed(() => {
+  console.log(botInstanceList.value)
+  return botInstanceList.value.filter(info => {
+    let filter: boolean = true
+    if (filterValue.value != null) {
+      filter = info.botName.includes(filterValue.value) || info.botKey.includes(filterValue.value)
+    }
+    if (filters.value.status != BotInstanceStatus.ALL) {
+      filter = info.params['bot_instance_status'] == filters.value.status
+    }
+    return filter
+  })
+})
+
+const isLoading = ref(false)
+// 分页查询数据
+const totalCount = ref(0)
+const pageQuery = reactive(new PageQuery({
+  page: 1,
+  limit: 10,
+  filterMap: new Map<string, object>()
+}))
+
+
+// 1. 过滤
+// 过滤下拉框宽度
+const dropdownWidth = ref(0)
+const filterValue = ref('')
+
+
+function filterByStatus(filterStatus: BotInstanceStatus) {
+  filters.value.status = filterStatus
+}
+
+// 2.BotInstance
+// 网络请求获取实例
+const scrolQueryDisabled = ref(false)
+const pageQueryBotInstance = () => {
+  if (isLoading.value) return
+  isLoading.value = true
+  pageQueryBotInstanceNetwork(pageQuery)
+    .then(result => {
+      const pageResult: PageResult<BotInstanceInfo> = result.data
+      botInstanceList.value.push(...pageResult.list)
+      totalCount.value = pageResult.total
+      pageQuery.page += 1
+
+      if (pageResult.total == botInstanceList.value.length) {
+        ElMessage({
+          message: 'Total script loaded',
+          type: 'warning',
+        })
+        scrolQueryDisabled.value = true
+      }
+    })
+    .catch(() => {
+      scrolQueryDisabled.value = true
+    })
+    .finally(() => {
+      isLoading.value = false
+    })
+}
+
+
+const reload = () => {
+  totalCount.value = 0
+  pageQuery.page = 1
+  pageQuery.limit = 10
+  pageQuery.filterMap = new Map()
+  botInstanceList.value = []
+  pageQueryBotInstance()
+}
+
+onMounted(async () => {
+  await nextTick()
+  dropdownWidth.value = document.querySelector('.filter-button').offsetWidth
+})
+</script>
+
+<template>
+  <div class="vortexa-script-view">
+
+    <!--    搜索块-->
+    <content-block class="vortexa-script-viw-block-1">
+      <div>
+        <el-input v-model="filterValue" placeholder="Search by name"/>
+        <div>
+          <el-button
+            style="width: 90px"
+            @click="reload"
+          >
+            <el-icon>
+              <RefreshRight/>
+            </el-icon>
+            Fresh
+          </el-button>
+          <el-dropdown
+            trigger="click"
+            placement="bottom"
+            style="width:calc(100% - 90px); "
+            :hide-on-click="false"
+          >
+            <el-button class="filter-button">
+              <el-icon>
+                <Filter/>
+              </el-icon>
+              Filter
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu class="filter-menu" :style="{'width': dropdownWidth + 'px'}">
+                <el-dropdown-item>The Action 1st</el-dropdown-item>
+                <el-dropdown-item>The Action 2st</el-dropdown-item>
+                <el-dropdown-item>The Action 3st</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+      </div>
+    </content-block>
+
+    <!--展示块-->
+    <content-block class="vortexa-script-viw-block-2">
+      <template #header>
+        <el-button-group style="margin-bottom: 12px">
+          <el-button
+            type="info"
+            @click="filterByStatus(BotInstanceStatus.ALL)"
+            :disabled="filters.status == BotInstanceStatus.ALL"
+          >
+            All
+          </el-button>
+          <el-button
+            type="success"
+            @click="filterByStatus(BotInstanceStatus.RUNNING)"
+            :disabled="filters.status == BotInstanceStatus.RUNNING"
+          >
+            Running
+          </el-button>
+          <el-button
+            type="danger"
+            @click="filterByStatus(BotInstanceStatus.STOPPED)"
+            :disabled="filters.status == BotInstanceStatus.STOPPED"
+          >
+            Stopped
+          </el-button>
+        </el-button-group>
+      </template>
+      <div class="scroll-bar-wrapper" v-loading="isLoading">
+        <div
+          class="vortexa-script-display-content"
+          v-infinite-scroll="pageQueryBotInstance"
+          :infinite-scroll-disabled="scrolQueryDisabled"
+        >
+          <bot-runtime-display-card
+            v-for="botInstance in displayInstanceList"
+            :key="botInstance.botKey"
+            :bot-instance="botInstance"
+            class="vortexa-script-item"
+          />
+        </div>
+        <el-backtop target=".scroll-bar-wrapper" :bottom="100" :right="100">
+        </el-backtop>
+      </div>
+
+      <span style="float: right;font-size: 14px; font-weight: 600">
+        Total:{{ totalCount }}
+      </span>
+    </content-block>
+  </div>
+</template>
+
+<style scoped>
+
+.vortexa-script-view {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 130px);
+}
+
+.vortexa-script-viw-block-1 {
+  max-width: 500px;
+  height: 70px;
+}
+
+.vortexa-script-viw-block-2 {
+  padding-bottom: 60px;
+}
+
+.scroll-bar-wrapper {
+  height: calc(100vh - 260px);
+  overflow-y: scroll;
+}
+
+.vortexa-script-display-content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-items: start;
+}
+
+.scroll-bar-wrapper::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.scroll-bar-wrapper {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+
+.vortexa-script-item {
+  flex: 1 0 calc((100% - 30px) / 5);
+}
+
+.filter-button {
+  width: 100%;
+}
+
+.filter-menu {
+  min-width: 200px;
+}
+
+@media (min-width: 1980px) {
+  .vortexa-script-view {
+    display: flex;
+    flex-direction: row-reverse;
+    height: calc(100vh - 100px);
+    gap: 10px;
+  }
+
+  .vortexa-script-viw-block-2 {
+    width: calc(100% - 250px);
+    height: calc(100vh - 100px);
+  }
+}
+</style>
+
+
+
