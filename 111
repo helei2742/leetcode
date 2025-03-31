@@ -1,378 +1,779 @@
-<script lang="ts" setup>
-import {SwitchButton} from '@element-plus/icons-vue'
-import {BotInstanceInfo} from "@/interfaces/VortexaTypes.ts";
-import {computed} from "vue";
+package cn.com.vortexa.common.constants;
 
-const props = defineProps<{
-  botInstance: BotInstanceInfo
-}>();
-
-// 事件
-const emit = defineEmits(['start-script', 'stop-script', 'start-task', 'stop-task'])
-
-const startScriptHandler = ()=>{
-  emit('start-script', {instanceId: props.botInstance.id})
+public enum BotInstanceStatus {
+    UN_USABLE,
+    STOPPED,
+    RUNNING
 }
+package cn.com.vortexa.common.entity;
 
-const stopScriptHandler = ()=>{
-  emit('stop-script', {instanceId: props.botInstance.id})
-}
+import com.baomidou.mybatisplus.annotation.*;
 
-const startTaskHandler = ()=>{
-  emit('start-task', {instanceId: props.botInstance.id})
-}
+import cn.com.vortexa.common.dto.job.AutoBotJobParam;
+import lombok.*;
 
-const stopTaskHandler = ()=>{
-  emit('stop-task', {instanceId: props.botInstance.id})
-}
-</script>
+import java.io.Serial;
+import java.io.Serializable;
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
 
-<template>
-  <div class="bot-runtime-display-card" >
-    <div class="card-header clearfix">
-      <div style="display:flex; align-items: start">
-        <el-image class="head-image"/>
-        <div style="font-weight: 700;font-size: 16px">
-          {{ botInstance.botKey }}
-        </div>
-      </div>
+/**
+ * @author com.helei
+ * @since 2025-02-18
+ */
+@Getter
+@Setter
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+@TableName("t_bot_instance")
+public class BotInstance implements Serializable {
+    public static final String BOT_INSTANCE_STATUS_KEY = "bot_instance_status";
 
-      <div style="float: right">
-        <i class="el-icon-setting icon-button"/>
-      </div>
-    </div>
+    @Serial
+    private static final long serialVersionUID = 4984719841947412242L;
 
-    <div class="data-print-line"/>
 
-    <div class="card-detail">
-      <div class="card-detail-content"/>
+    @TableId(value = "id", type = IdType.AUTO)
+    private Integer id;
 
-      <el-button
-        v-if="botInstance.botStatus==0"
-        class="opt-button"
-        type="success"
-        @click="startScriptHandler"
-        plain
-      >
-        <el-icon>
-          <SwitchButton/>
-        </el-icon>
-        Start Task
-      </el-button>
-      <el-button v-else-if="botInstance.botStatus==1" class="opt-button" type="danger" plain>
-        <el-icon>
-          <SwitchButton/>
-        </el-icon>
-        Stop Task
-      </el-button>
-      <el-button v-else class="opt-button" type="warning" plain>
-        <el-icon>
-          <SwitchButton/>
-        </el-icon>
-        Unknown Status
-      </el-button>
-    </div>
-  </div>
-</template>
+    @TableField("bot_id")
+    private Integer botId;
 
-<style scoped>
-.bot-runtime-display-card {
-  width: 300px;
-  min-width: 300px;
-  //max-width: 500px;
-  height: 350px;
-  background-color: rgba(110, 110, 110, 0.1);
-  padding: 24px;
+    @TableField("bot_name")
+    private String botName;
 
-  margin-left: 12px;
+    @TableField("bot_key")
+    private String botKey;
 
-  color: #9da3ae;
-  border-radius: 10px;
-}
+    @TableField("account_table_name")
+    private String accountTableName;
 
-.card-header {
-  height: 48px;
-}
+    @TableField("job_params")
+    private Map<String, AutoBotJobParam> jobParams = new HashMap<>();
 
-.data-print-line {
-  height: 48px;
-  margin-top: 16px;
+    @TableField("params")
+    private Map<String, Object> params;
 
-}
+    @TableField(value = "insert_datetime", fill = FieldFill.INSERT)
+    private LocalDateTime insertDatetime;
 
-.card-detail {
-  height: 222px;
-  margin-top: 16px;
-}
+    @TableField(value = "update_datetime", fill = FieldFill.INSERT_UPDATE)
+    private LocalDateTime updateDatetime;
 
-.head-image {
-  height: 48px;
-  width: 48px;
-  margin-right: 8px;
-}
+    @TableField(value = "is_valid", fill = FieldFill.INSERT)
+    @TableLogic
+    private Integer isValid;
 
-.icon-button {
-  width: 24px;
-  height: 24px;
-  color: #9da3ae;
-  font-size: 20px;
+    @TableField(exist = false)
+    public BotInfo botInfo;
 
-  cursor: pointer;
-}
-
-.icon-button:hover {
-  transform: scale(1.2); /* 鼠标悬浮时放大 */
-  color: #007BFF; /* 鼠标悬浮时改变颜色 */
-}
-
-.card-detail-content {
-  height: 184px;
-}
-
-.opt-button {
-  width: 100%;
-  font-size: 16px;
-  font-weight: 600;
-  text-align: center;
-}
-</style>
-
-<script setup lang="ts">
-import {Filter, RefreshRight} from '@element-plus/icons-vue'
-import BotRuntimeDisplayCard from "@/views/homepage/script/components/bot-runtime-display-card.vue";
-import {BotInstanceInfo} from "@/interfaces/VortexaTypes.ts";
-import {onMounted, ref, nextTick, computed} from "vue";
-import ContentBlock from "@/components/content-block/content-block.vue";
-
-const botInstanceList = ref<Array<BotInstanceInfo>>([])
-
-const filters = ref<{
-  status: number
-}>({ status: -10001})
-
-const displayInstanceList = computed(()=>{
-  return botInstanceList.value.filter(info=>{
-    let filter: boolean = true
-    if (filterValue.value != null) {
-      filter = info.botName.includes(filterValue.value) || info.botKey.includes(filterValue.value)
+    public synchronized void addParam(String key, Object value) {
+        if (params == null) params = new HashMap<>();
+        params.put(key, value);
     }
-    if (filters.value.status != -10001) {
-      filter = info.botStatus == filters.value.status
+}
+package cn.com.vortexa.websocket.netty.base;
+
+import cn.com.vortexa.common.entity.ProxyInfo;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import cn.com.vortexa.websocket.netty.constants.WebsocketClientStatus;
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.handler.codec.http.HttpHeaders;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
+
+import javax.net.ssl.SSLException;
+
+/**
+ * @author helei
+ * @since 2025/3/18 10:52
+ */
+@Slf4j
+@Setter
+@Getter
+public abstract class AutoConnectWSService implements IWSService {
+    private static final AtomicReferenceFieldUpdater<AutoConnectWSService, Channel> CHANNEL_ATOMIC_UPDATER
+        = AtomicReferenceFieldUpdater.newUpdater(AutoConnectWSService.class, Channel.class, "channel");
+    private static volatile EventLoopGroup eventLoopGroup;    //netty线程组
+    private final AtomicInteger reconnectTimes = new AtomicInteger(0);  //重链接次数
+    private final ReentrantLock reconnectLock = new ReentrantLock();    //重连锁
+    private final Condition startingWaitCondition = reconnectLock.newCondition();   //启动中阻塞的condition
+    private final String url; //websocket的url字符串
+    private Bootstrap bootstrap; //netty bootstrap
+    private volatile Channel channel;    //连接channel
+    private String host;    //连接host
+    private int port;    //连接port
+    private boolean useSSL; //是否ssl
+    private HttpHeaders headers;    //请求头
+    private ProxyInfo proxy = null; //代理
+    private int reconnectCountDownSecond = 180; //重连次数减少的间隔
+    private int reconnectLimit = 3; //重连次数限制
+    private int eventLoopGroupThreads = 1; // 线程数
+    private volatile WebsocketClientStatus clientStatus = WebsocketClientStatus.NEW;    //客户端当前状态
+    private Consumer<WebsocketClientStatus> clientStatusChangeHandler = socketCloseStatus -> {
+    };    //clientStatus更新的回调
+
+    protected AutoConnectWSService(String url) {
+        this.url = url;
     }
-    console.log(filter)
-    return filter
-  })
-})
 
-// 1. 过滤
-// 过滤下拉框宽度
-const dropdownWidth = ref(0)
-const filterValue = ref('')
+    protected abstract void init() throws SSLException, URISyntaxException;
 
-const filterByStatus = (status)=>{
-  botInstanceList
+    /**
+     * 连接
+     *
+     * @return CompletableFuture<Boolean>
+     */
+    public final CompletableFuture<Boolean> connect() {
+        return switch (clientStatus) {
+            case NEW, STOP -> reconnect();
+            case STARTING -> waitForStarting();
+            case RUNNING -> {
+                log.warn("ws service [{}] in running, clientStatus[{}]", getName(), clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN -> throw new RuntimeException("");
+        };
+    }
+
+    /**
+     * 重连接
+     *
+     * @return CompletableFuture<Boolean>
+     */
+    public CompletableFuture<Boolean> reconnect() {
+        return switch (clientStatus) {
+            case NEW, STOP -> reconnectLogic();
+            case STARTING -> waitForStarting().thenApplyAsync(success -> {
+                if (success) {
+                    return true;
+                }
+                try {
+                    return reconnectLogic().get();
+                } catch (InterruptedException | ExecutionException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            case RUNNING -> {
+                log.warn("ws service [{}] in running, can't reconnect. clientStatus[{}]", getName(), clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN -> CompletableFuture.supplyAsync(() -> {
+                log.error("client[{}] already shutdown", getName());
+                return false;
+            });
+        };
+    }
+
+    /**
+     * 重连接逻辑
+     *
+     * @return CompletableFuture<Boolean>
+     */
+    private CompletableFuture<Boolean> reconnectLogic() {
+        updateClientStatus(WebsocketClientStatus.STARTING);
+
+        String name = getName();
+
+        return CompletableFuture.supplyAsync(() -> {
+            //Step 1 重连次数超过限制，关闭
+            if (reconnectTimes.get() >= reconnectLimit) {
+                log.error("reconnect times out of limit [{}], close websocket client", reconnectLimit);
+                shutdown();
+                return false;
+            }
+
+            AtomicBoolean isSuccess = new AtomicBoolean(false);
+
+            //Step 2 重连逻辑
+            //Step 2.1 加锁保证只要一个线程进行重连
+            reconnectLock.lock();
+            try {
+                //Step 2.2 已经再running状态，直接返回true。变为shutdown、stop状态，直接返回false
+                if (clientStatus.equals(WebsocketClientStatus.RUNNING)) {
+                    log.info("client started by other thread");
+                    return true;
+                } else if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+                    log.error("clint {} when client starting", clientStatus);
+                    return false;
+                }
+
+                //Step 3 初始化
+                log.info("start init Websocket client");
+                try {
+                    resolveParamFromUrl();
+
+                    init();
+                } catch (SSLException | URISyntaxException e) {
+                    throw new RuntimeException("init websocket client error", e);
+                }
+                log.info("init Websocket finish，start connect server [{}]", url);
+
+                //Step 4 链接服务器
+                if (reconnectTimes.incrementAndGet() <= reconnectLimit) {
+
+                    //Step 4.1 每进行重连都会先将次数加1并设置定时任务将重连次数减1
+                    getEventLoopGroup().schedule(() -> {
+                        reconnectTimes.decrementAndGet();
+                    }, reconnectCountDownSecond, TimeUnit.SECONDS);
+
+                    long waitingConnectTime = reconnectTimes.get() == 1 ? 0 : NettyConstants.RECONNECT_DELAY_SECONDS;
+                    log.info("start connect client [{}], url[{}], current times [{}], start after [{}]s",
+                        name, url, reconnectTimes.get(), waitingConnectTime);
+
+                    //Step 4.2 latch用于同步等等链接完成
+                    CountDownLatch latch = new CountDownLatch(1);
+
+                    //Step 4.3 延迟再进行连接
+                    getEventLoopGroup().schedule(() -> {
+                        try {
+                            ChannelFuture connect = bootstrap.connect(host, port);
+                            connect.addListener(future -> {
+                                try {
+                                    if (future.isSuccess()) {
+                                        setChannel(connect.channel());
+                                        afterBoostrapConnected(getChannel());
+
+                                        log.info("success connect to {}", url);
+                                        //Step 4.4 连接成功设置标识
+                                        isSuccess.set(true);
+                                    } else {
+                                        log.error("connect client [{}], url[{}] error, times [{}]",
+                                            name, url, reconnectTimes.get(), future.cause());
+
+                                        isSuccess.set(false);
+                                    }
+                                } finally {
+                                    if (latch.getCount() != 0) {
+                                        latch.countDown();
+                                    }
+                                }
+                            });
+                        } catch (Exception e) {
+                            log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(),
+                                e);
+                            isSuccess.set(false);
+                            latch.countDown();
+                        }
+                    }, waitingConnectTime, TimeUnit.SECONDS);
+
+                    //Step 4.5 等待链接完成
+                    try {
+                        latch.await();
+                    } catch (InterruptedException e) {
+                        log.error("connect client [{}], url[{}] interrupted, times [{}]", name, url,
+                            reconnectTimes.get(), e);
+                    }
+
+                    //Step 6 未成功启动，关闭
+                    if (!isSuccess.get()) {
+                        log.info("connect client [{}], url[{}] fail, current times [{}]", name, url,
+                            reconnectTimes.get());
+
+                        close();
+                    } else {
+                        log.info("connect client [{}], url[{}] success, current times [{}]", name, url,
+                            reconnectTimes.get());
+
+                        updateClientStatus(WebsocketClientStatus.RUNNING);
+                        reconnectTimes.set(0);
+                    }
+                }
+            } catch (Exception e) {
+                //exception 遇到未处理异常，直接关闭
+                log.error("connect client [{}] appear unknown error", name, e);
+                close();
+                throw new RuntimeException(String.format("connect client [%s] appear unknown error", name), e);
+            } finally {
+                //Step 5 释放等待启动的线程
+                startingWaitCondition.signalAll();
+                reconnectLock.unlock();
+            }
+
+            return isSuccess.get();
+        }, getCallbackInvoker());
+    }
+
+    /**
+     * 关闭
+     */
+    public void close() {
+        if (clientStatus.equals(WebsocketClientStatus.STOP)
+            || clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+            return;
+        }
+
+        updateClientStatus(WebsocketClientStatus.STOP);
+
+        log.info("closing websocket client [{}], [{}]", getName(), channel == null ? "null" : getChannel().hashCode());
+        if (channel != null) {
+            channel.close();
+            setChannel(null);
+        }
+        log.warn("web socket client [{}] closed", getName());
+    }
+
+    /**
+     * 终止
+     */
+    public final void shutdown() {
+        updateClientStatus(WebsocketClientStatus.SHUTDOWN);
+
+        if (channel != null) {
+            channel.close();
+            setChannel(null);
+        }
+        getEventLoopGroup().shutdownGracefully();
+        log.warn("web socket client [{}] already shutdown !", getName());
+    }
+
+    /**
+     * 更新status
+     *
+     * @param newStatus newStatus
+     */
+    protected void updateClientStatus(WebsocketClientStatus newStatus) {
+        synchronized ("CLIENT_STATUS_LOCK") {
+            if (clientStatus.equals(newStatus)) {
+                return;
+            }
+
+            if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+                throw new IllegalArgumentException("client status is shutdown，new status can not be " + newStatus);
+            }
+
+            try {
+                if (newStatus != clientStatus && clientStatusChangeHandler != null) {
+                    clientStatusChangeHandler.accept(newStatus);
+                }
+            } finally {
+                log.debug("client[{}] status [{}] -> [{}]", getName(), clientStatus, newStatus);
+                clientStatus = newStatus;
+            }
+        }
+    }
+
+    protected EventLoopGroup getEventLoopGroup() {
+        if (eventLoopGroup == null) {
+            synchronized (AutoConnectWSService.class) {
+                if (eventLoopGroup == null) {
+                    eventLoopGroup = new NioEventLoopGroup(eventLoopGroupThreads);
+                }
+            }
+        }
+        return eventLoopGroup;
+    }
+
+    /**
+     * 获取回调执行线程池
+     *
+     * @return ExecutorService
+     */
+    public abstract ExecutorService getCallbackInvoker();
+
+    /**
+     * 每次netty bootstrap 连接后调用
+     *
+     * @throws InterruptedException InterruptedException
+     */
+    protected abstract void afterBoostrapConnected(Channel channel) throws InterruptedException;
+
+    /**
+     * 等待启动完成
+     *
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Boolean> waitForStarting() {
+        return CompletableFuture.supplyAsync(() -> {
+            log.warn("client [{}] is starting, waiting for complete", getName());
+            reconnectLock.lock();
+            try {
+                while (clientStatus.equals(WebsocketClientStatus.STARTING)) {
+                    startingWaitCondition.await();
+                }
+
+                if (clientStatus.equals(WebsocketClientStatus.STOP) || clientStatus.equals(
+                    WebsocketClientStatus.SHUTDOWN)) {
+                    log.error("启动WS客户端[{}]失败, ClientStatus [{}}", getName(), clientStatus);
+                    return false;
+                }
+                return true;
+            } catch (InterruptedException e) {
+                log.error("waiting for start client [{}] error", getName());
+                throw new RuntimeException(e);
+            } finally {
+                reconnectLock.unlock();
+            }
+        }, getCallbackInvoker());
+    }
+
+    public Channel getChannel() {
+        return CHANNEL_ATOMIC_UPDATER.get(this);
+    }
+
+    public void setChannel(Channel channel) {
+        CHANNEL_ATOMIC_UPDATER.set(this, channel);
+    }
+
+    /**
+     * 解析参数
+     *
+     * @throws URISyntaxException url解析错误
+     */
+    private void resolveParamFromUrl() throws URISyntaxException {
+        URI uri = new URI(url);
+        String scheme = uri.getScheme() == null ? "ws" : uri.getScheme();
+        host = uri.getHost() == null ? "127.0.0.1" : uri.getHost();
+        if (uri.getPort() == -1) {
+            if ("ws".equalsIgnoreCase(scheme)) {
+                port = 80;
+            } else if ("wss".equalsIgnoreCase(scheme)) {
+                port = 443;
+            } else {
+                port = -1;
+            }
+        } else {
+            port = uri.getPort();
+        }
+
+        if (!"ws".equalsIgnoreCase(scheme) && !"wss".equalsIgnoreCase(scheme)) {
+            log.error("Only WS(S) is supported.");
+            throw new IllegalArgumentException("url error, Only WS(S) is supported.");
+        }
+
+        useSSL = "wss".equalsIgnoreCase(scheme);
+    }
 }
+package cn.com.vortexa.bot_platform.service.impl;
 
-// 2.BotInstance
+import cn.com.vortexa.common.constants.BotInstanceStatus;
+import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.control.BotControlServer;
+import cn.com.vortexa.common.dto.control.RegisteredService;
+import cn.com.vortexa.bot_platform.mapper.BotInfoMapper;
+import cn.com.vortexa.control.constant.NameserverSystemConstants;
+import cn.com.vortexa.control.dto.ConnectEntry;
+import cn.com.vortexa.control.util.ControlServerUtil;
+import cn.com.vortexa.db_layer.service.AbstractBaseService;
+import cn.com.vortexa.common.entity.BotInfo;
+import cn.com.vortexa.common.entity.BotInstance;
+import cn.com.vortexa.bot_platform.mapper.BotInstanceMapper;
+import cn.com.vortexa.bot_platform.service.IBotInstanceService;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 
-// 网络请求获取实例
-const pageQueryBotInstanceNetwork = () => {
-  botInstanceList.value.push(new BotInstanceInfo({ botKey: 'bot', botStatus:0}))
-  botInstanceList.value.push(new BotInstanceInfo({ botKey: 'bot', botStatus:1}))
-  botInstanceList.value.push(new BotInstanceInfo({ botKey: 'bot', botStatus:-1}))
-  for (let i = 0; i < 10; i++) {
-    botInstanceList.value.push(new BotInstanceInfo({ botKey: 'bot' + i}))
-  }
+import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
+import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.stereotype.Service;
+
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-18
+ */
+@Slf4j
+@Service
+public class BotInstanceServiceImpl extends AbstractBaseService<BotInstanceMapper, BotInstance>
+    implements IBotInstanceRPC, IBotInstanceService {
+
+    @Autowired
+    private BotInfoMapper botInfoMapper;
+
+    @Lazy
+    @Autowired
+    private BotControlServer botControlServer;
+
+    public BotInstanceServiceImpl() {
+        super(botInstance -> {
+            botInstance.setInsertDatetime(LocalDateTime.now());
+            botInstance.setUpdateDatetime(LocalDateTime.now());
+            botInstance.setIsValid(1);
+        });
+    }
+
+    @Override
+    public PageResult<BotInstance> conditionPageQuery(int page, int limit, Map<String, Object> filterMap)
+        throws SQLException {
+
+        PageResult<BotInstance> result = super.conditionPageQuery(page, limit, filterMap);
+
+        // 填充botInfo
+        List<Integer> botIds = result.getList().stream().map(BotInstance::getBotId).toList();
+        Map<Integer, BotInfo> idMapBotInfo = botInfoMapper.selectBatchIds(botIds)
+            .stream().collect(Collectors.toMap(BotInfo::getId, botInfo -> botInfo));
+
+        for (BotInstance instance : result.getList()) {
+            String instanceKey = ControlServerUtil.generateServiceInstanceKey(NameserverSystemConstants.DEFAULT_GROUP, instance.getBotName(),
+                instance.getBotKey());
+            instance.setBotInfo(idMapBotInfo.get(instance.getBotId()));
+
+            ConnectEntry connectEntry = botControlServer.getConnectionService().getServiceInstanceChannel(instanceKey);
+            instance.addParam(BotInstance.BOT_INSTANCE_STATUS_KEY,
+                connectEntry == null ? BotInstanceStatus.STOPPED :
+                    (connectEntry.isUsable() ? BotInstanceStatus.RUNNING : BotInstanceStatus.UN_USABLE)
+            );
+        }
+
+        return result;
+    }
+
+    @Override
+    public Boolean existsBotInstance(BotInstance query) {
+        return getBaseMapper().exists(new QueryWrapper<>(query));
+    }
+
+    @Override
+    public List<RegisteredService> queryOnLineInstance() {
+        List<RegisteredService> res = new ArrayList<>();
+        List<String> keys = botControlServer.getConnectionService().queryOnlineInstanceKey();
+        keys.forEach(key -> res.addAll(botControlServer.getRegistryService().queryServiceInstance(key)));
+        res.forEach(service -> {
+            BotInstanceMapper mapper = getBaseMapper();
+            BotInstance botInstance = mapper.selectOne(
+                new QueryWrapper<>(BotInstance.builder().botKey(service.getAddress().getInstanceId()).build())
+            );
+            service.addProps("bot_info", botInstance);
+        });
+        return res;
+    }
+
+    @Override
+    public Boolean existsBotInstanceRPC(BotInstance query) {
+        return existsBotInstance(query);
+    }
+
+    @Override
+    public Integer insertOrUpdateRPC(BotInstance instance) throws SQLException {
+        return insertOrUpdate(instance);
+    }
+
+    @Override
+    public BotInstance selectOneRPC(BotInstance query) {
+        return getOne(new QueryWrapper<>(query));
+    }
 }
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.com.vortexa.bot_platform.mapper.BotInstanceMapper">
 
-onMounted(async () => {
-  await nextTick()
-  dropdownWidth.value = document.querySelector('.filter-button').offsetWidth
-  pageQueryBotInstanceNetwork()
-})
-</script>
+    <!-- 通用查询映射结果 -->
+    <resultMap id="BaseResultMap" type="cn.com.vortexa.common.entity.BotInstance">
+        <id column="id" property="id"/>
+        <result column="bot_id" property="botId"/>
+        <result column="bot_key" property="botKey"/>
+        <result column="account_table_name" property="accountTableName"/>
+        <result column="params" property="params"/>
+        <result column="insert_datetime" property="insertDatetime"/>
+        <result column="update_datetime" property="updateDatetime"/>
+        <result column="is_valid" property="isValid"/>
+    </resultMap>
 
-<template>
-  <div class="vortexa-script-view">
+    <insert id="insertOrUpdate" parameterType="cn.com.vortexa.common.entity.BotInstance">
+        INSERT INTO t_bot_instance
+        (bot_id, bot_name, bot_key, account_table_name, job_params, params, insert_datetime, update_datetime, is_valid)
+        VALUES (#{botId}, #{botName}, #{botKey}, #{accountTableName}, #{jobParams}, #{params}, #{insertDatetime},
+                #{updateDatetime},
+                #{isValid}) ON CONFLICT(bot_id, bot_key)
+DO
+        UPDATE SET
+            bot_name = excluded.bot_name,
+            account_table_name = excluded.account_table_name,
+            job_params = excluded.job_params,
+            params = excluded.params,
+            update_datetime = excluded.update_datetime;
+    </insert>
 
-    <!--    搜索块-->
-    <content-block class="vortexa-script-viw-block-1">
-      <div>
-        <el-input v-model="filterValue" placeholder="Search by name"/>
-        <div>
-          <el-button style="width: 90px">
-            <el-icon>
-              <RefreshRight/>
-            </el-icon>
-            Fresh
-          </el-button>
-          <el-dropdown
-            trigger="click"
-            placement="bottom"
-            style="width:calc(100% - 90px); "
-            :hide-on-click="false"
-          >
-            <el-button class="filter-button">
-              <el-icon>
-                <Filter/>
-              </el-icon>
-              Filter
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu class="filter-menu" :style="{'width': dropdownWidth + 'px'}">
-                <el-dropdown-item>The Action 1st</el-dropdown-item>
-                <el-dropdown-item>The Action 2st</el-dropdown-item>
-                <el-dropdown-item>The Action 3st</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </div>
-      </div>
-    </content-block>
 
-    <!--展示块-->
-    <content-block class="vortexa-script-viw-block-2">
-      <template #header>
-        <div style="margin-bottom: 12px">
-          <el-button type="info" @click="filterByStatus(0)">All</el-button>
-          <el-button type="success" @click="filterByStatus(1)">Running</el-button>
-          <el-button type="danger" @click="filterByStatus(-1)">Stopped</el-button>
-          <span style="float: right;font-size: 14px; font-weight: 300">Total:</span>
-        </div>
-      </template>
-      <div class="scroll-bar-wrapper">
-        <div class="vortexa-script-display-content" v-infinite-scroll="pageQueryBotInstanceNetwork">
-          <bot-runtime-display-card
-            v-for="botInstance in displayInstanceList"
-            :bot-instance="<BotInstanceInfo>botInstance"
-            class="vortexa-script-item"
-          />
-        </div>
-        <el-backtop target=".scroll-bar-wrapper" :bottom="100" :right="100">
-        </el-backtop>
-      </div>
-    </content-block>
-  </div>
-</template>
+    <select id="multipleConditionQuery"
+            parameterType="cn.com.vortexa.common.entity.BotInstance"
+            resultType="cn.com.vortexa.common.entity.BotInstance">
+        select
+        t.id as id,
+        t.bot_id as botId,
+        t.bot_key as botKey,
+        t.bot_name as botName,
+        t.account_table_name as accountTableName,
+        t.job_params as jobParams,
+        t.params,
+        t.insert_datetime as insertDatetime,
+        t.update_datetime as updateDatetime,
+        t.is_valid as isValid
+        from
+        t_bot_instance as t
+        <if test="params != null and !params.isEmpty()">
+            left join json_each(t.params) json_each
+        </if>
+        <where>
+            is_valid = 1
+            <if test="botId != null">
+                and t.bot_id = #{botId}
+            </if>
+            <if test="botKey != null">
+                and t.bot_key = #{botKey}
+            </if>
+            <if test="botName != null">
+                and t.bot_name = #{botName}
+            </if>
+            <if test="accountTableName != null">
+                and t.account_table_name = #{accountTableName}
+            </if>
+            <if test="params != null and !params.isEmpty()">
+                and
+                <foreach collection="params" item='entry' index='key' separator='AND'>
+                    json_each.key = #{key} and json_each.value = #{entry}
+                </foreach>
+            </if>
+        </where>
+    </select>
+</mapper>
+package cn.com.vortexa.script_node.scriptagent;
 
-<style scoped>
+import cn.com.vortexa.common.constants.BotRemotingCommandFlagConstants;
+import cn.com.vortexa.control.ScriptAgent;
+import cn.com.vortexa.control.config.ScriptAgentConfig;
+import cn.com.vortexa.control.dto.RPCArgsWrapper;
+import cn.com.vortexa.control.dto.RPCServiceInfo;
+import cn.com.vortexa.control.dto.RequestHandleResult;
+import cn.com.vortexa.control.exception.CustomCommandException;
+import cn.com.vortexa.control.exception.CustomCommandInvokeException;
+import cn.com.vortexa.control.protocol.Serializer;
+import cn.com.vortexa.control.util.RPCMethodUtil;
+import cn.com.vortexa.websocket.netty.constants.WebsocketClientStatus;
+import lombok.extern.slf4j.Slf4j;
 
-.vortexa-script-view {
-  display: flex;
-  flex-direction: column;
-  height: calc(100vh - 130px);
+import java.lang.reflect.Method;
+import java.net.URISyntaxException;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import javax.net.ssl.SSLException;
+
+/**
+ * @author helei
+ * @since 2025/3/26 16:56
+ */
+@Slf4j
+public class BotScriptAgent extends ScriptAgent {
+
+    private final AtomicInteger initCount = new AtomicInteger(0);
+
+    private final List<RPCServiceInfo<?>> rpcServiceInfos;
+
+    private final BotScriptAgentLogUploadService logUploadService;
+
+    public BotScriptAgent(ScriptAgentConfig clientConfig, List<RPCServiceInfo<?>> rpcServiceInfos) {
+        super(clientConfig);
+        this.rpcServiceInfos = rpcServiceInfos;
+        this.logUploadService = new BotScriptAgentLogUploadService(this);
+    }
+
+    @Override
+    protected void init() throws SSLException, URISyntaxException {
+        super.init();
+
+        // Step 1 RPC命令处理
+        if (rpcServiceInfos == null) {
+            return;
+        }
+        if (initCount.getAndIncrement() > 0){
+            return;
+        }
+        log.info("start registry rpc services");
+        for (RPCServiceInfo<?> rpcServiceInfo : rpcServiceInfos) {
+            Class<?> interfaces = rpcServiceInfo.getInterfaces();
+            Object ref = rpcServiceInfo.getRef();
+
+            for (Method method : interfaces.getDeclaredMethods()) {
+                method.setAccessible(true);
+                String key = RPCMethodUtil.buildRpcMethodKey(interfaces.getName(), method);
+
+                try {
+                    super.addCustomCommandHandler(key, request -> {
+                        RequestHandleResult result = new RequestHandleResult();
+
+                        log.debug("invoke rpc method[{}]", method.getName());
+                        try {
+                            byte[] body = request.getBody();
+                            RPCArgsWrapper params = Serializer.Algorithm.JDK.deserialize(body, RPCArgsWrapper.class);
+                            result.setData(method.invoke(ref, params.getArgs()));
+                            result.setSuccess(true);
+                            return result;
+                        } catch (Exception e) {
+                            log.error("invoke rpc method [{}] error", method.getName());
+                            throw new CustomCommandInvokeException(e);
+                        }
+                    });
+                } catch (CustomCommandException e) {
+                    log.error("registry custom method error", e);
+                }
+            }
+        }
+
+        // Step 2 其它命令处理
+//        getCustomRemotingCommandHandlerMap().put(
+//                BotRemotingCommandFlagConstants.START_UP_BOT_LOG,
+//                logUploadService::startUploadLogRCHandler
+//        );
+//        getCustomRemotingCommandHandlerMap().put(
+//                BotRemotingCommandFlagConstants.STOP_UP_BOT_LOG,
+//                logUploadService::stopUploadLogRCHandler
+//        );
+    }
 }
-
-.vortexa-script-viw-block-1 {
-  max-width: 800px;
-  height: 70px;
-}
-
-.vortexa-script-viw-block-2 {
-
-}
-
-.scroll-bar-wrapper {
-  height: 900px;
-  overflow-y: scroll;
-}
-
-.vortexa-script-display-content {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  justify-items: start;
-}
-.scroll-bar-wrapper::-webkit-scrollbar{
-  width: 0;
-  height: 0;
-}
-.scroll-bar-wrapper {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
+package cn.com.vortexa.control.constant;
 
 
-.vortexa-script-item {
-  flex: 1 0 calc((100% - 30px) / 5);
-}
+/**
+ * @author helei
+ * @since 2025-03-12
+ */
+public class NameserverSystemConstants {
 
-.filter-button {
-  width: 100%;
-}
+    public static final String DEFAULT_GROUP = "default";
 
-.filter-menu {
-  min-width: 200px;
-}
+    public static final int MAX_FRAME_LENGTH = 10240;
 
-@media (min-width: 1980px) {
-  .vortexa-script-view {
-    display: flex;
-    flex-direction: row-reverse;
-    height: calc(100vh - 130px);
-    gap: 10px;
-  }
+    public static final int MESSAGE_OBJ_POOL_INIT_SIZE = 100;
 
-  .vortexa-script-viw-block-2 {
-    width: calc(100% - 250px);
-  }
-}
-</style>
+    public static final int MESSAGE_OBJ_POOL_MAX_SIZE = 500;
 
-export class BotInstanceInfo {
-  id?:number
-  botId?: number
-  botName: string
-  botKey: string
-  botStatus: number // 0 未运行 1 正在运行 -1 告警
-  runningTask: Array<string>
-  accountTableName?: string
-  jobParams: Map<string, Object>
-  params: Map<string, Object>
-  insertDatetime?: string
-  updateDatetime?: string
-  botInfo?: Object
+    public static final int EXPIRE_CLIENT_HANDLER_CLEAR_INTERVAL = 60000;
 
-  public constructor({id, botId, botName, botKey, botStatus, runningTask, accountTableName, jobParams, params, insertDatetime, updateDatetime, botInfo}
-                : { id?:number, botId?:number, botName?:string, botKey?:string, botStatus?:number, runningTask?:Array<string>,accountTableName?:string, jobParams?: Map<string, object>, params?:Map<string, object>, insertDatetime?:string, updateDatetime?:string, botInfo?:BotInfo }
-  ) {
-    this.id = id
-    this.botId = botId
-    this.botName = botName ? botName : 'unknown_bot'
-    this.botKey = botKey ? botKey : 'unknown_instance'
-    this.botStatus = botStatus !== undefined ? botStatus : -1
-    this.runningTask = runningTask ? runningTask : new Array<string>()
-    this.accountTableName = accountTableName
-    this.jobParams = jobParams ?  jobParams: new Map<string, object>()
-    this.params = params ?  params: new Map<string, object>()
-    this.insertDatetime = insertDatetime
-    this.updateDatetime = updateDatetime
-    this.botInfo = botInfo
-  }
-}
-
-
-export class BotInfo {
-  id?:number
-  name: string
-  describe: string
-  image?: string
-  jobParams: Map<string, Object>
-  params: Map<string, Object>
-  insertDatetime?: string
-  updateDatetime?: string
-
-  constructor({id, name, describe, image, jobParams, params, insertDatetime, updateDatetime}
-                : { id?:number, name?:string, describe?:string, image?:string, jobParams?: Map<string, object>, params?:Map<string, object>, insertDatetime?:string, updateDatetime?:string }
-  ) {
-    this.id = id
-    this.name = name ? name : 'unknown_bot'
-    this.describe = describe ? describe : ''
-    this.image = image
-    this.jobParams = jobParams ?  jobParams: new Map<string, object>()
-    this.params = params ?  params: new Map<string, object>()
-    this.insertDatetime = insertDatetime
-    this.updateDatetime = updateDatetime
-  }
+    public static final int RESPONSE_TIME_LIMIT = 60;
 }
