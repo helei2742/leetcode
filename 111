@@ -1,1499 +1,760 @@
-package cn.com.vortexa.common.constants;
+package cn.com.vortexa.common.vo;
 
-/**
- * @author helei
- * @since 2025/3/26 14:54
- */
-public class BotExtFieldConstants {
-    public static final String TARGET_GROUP_KEY = "target_group";   // 目标的group
-    public static final String TARGET_BOT_NAME_KEY = "target_bot_name"; // 目标的bot name
-    public static final String TARGET_BOT_KEY_KEY = "target_bot_key";   // 目标的bot key
+import com.alibaba.fastjson.JSONArray;
 
-    public static final String LOG_UPLOAD_TX_ID = "log_upload_tx_id";   // 日志上传的txId
-
-    public static final String JOB_NAME = "job_name";   // job名称
-}
-
-
-package cn.com.vortexa.common.dto.control;
-
-import lombok.*;
-
-import java.io.Serial;
-import java.io.Serializable;
-
-@Data
-@Builder
-@AllArgsConstructor
-@NoArgsConstructor
-@EqualsAndHashCode
-public class ServiceInstance implements Serializable {
-
-    @Serial
-    private static final long serialVersionUID = 189273891273821798L;
-
-    private String group;
-
-    private String serviceId;
-
-    private String instanceId;
-
-    private String host;
-
-    private int port;
-
-    @Override
-    public String toString() {
-        return "[%s][%s][%s]-[%s:%s]".formatted(group, serviceId, instanceId, host, port);
-    }
-
-    public String getGroup() {
-        if (group == null) {
-            return "default";
-        }
-        return group;
-    }
-}
-
-package cn.com.vortexa.common.dto;
-
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import java.io.Serial;
-import java.io.Serializable;
-
-@Data
-@AllArgsConstructor
-@NoArgsConstructor
-@Builder
-public class BotACJobResult implements Serializable {
-    @Serial
-    private static final long serialVersionUID = -894375743645678459L;
-
-    private Integer botId;
-
-    private String group;
-
-    private String jobName;
-
-    private Integer acId;
-
-    private Boolean success;
-
-    private String errorMsg;
-
-    private Object data;
-
-    public BotACJobResult(Integer botId, String group, String jobName, Integer acId) {
-        this(botId, group, jobName, acId, true, null, null);
-    }
-
-    public static BotACJobResult ok(Integer botId, String group, String jobName, Integer acId) {
-        return new BotACJobResult(botId, group, jobName, acId, true, null, null);
-    }
-
-    public BotACJobResult setResult(Result result) {
-        this.success = result.getSuccess();
-        this.errorMsg = result.getErrorMsg();
-        this.data = result.getData();
-
-        return this;
-    }
-}
-
-
-package cn.com.vortexa.bot_platform.config;
-
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.web.servlet.config.annotation.CorsRegistry;
-import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
-import org.springframework.web.socket.server.standard.ServerEndpointExporter;
-
-@Configuration
-public class WebConfig implements WebMvcConfigurer {
-
-    @Override
-    public void addCorsMappings(CorsRegistry registry) {
-        registry.addMapping("/**")
-                .allowedOrigins("http://localhost:5181", "http://localhost:5180",
-                        "http://localhost:9531")
-                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-                .allowedHeaders("*")
-                .allowCredentials(true)
-                .maxAge(3600);
-    }
-
-    @Bean
-    public ServerEndpointExporter serverEndpointExporter(){
-        return new ServerEndpointExporter();
-    }
-}
-
-package cn.com.vortexa.bot_platform.dto;
-
-import cn.com.vortexa.control.config.ControlServerConfig;
-import cn.com.vortexa.control.constant.NameserverSystemConstants;
+import cn.com.vortexa.common.entity.BotInfo;
+import cn.com.vortexa.common.entity.BotInstance;
 import lombok.Data;
 
-/**
- * @author helei
- * @since 2025-03-31
- */
-@Data
-public class BotJob {
-    private String group;
-    private String botName;
-    private String botKey;
-    private String jobName;
-
-    public String getGroup() {
-        if (group == null) {
-            return NameserverSystemConstants.DEFAULT_GROUP;
-        }
-
-        return group;
-    }
-}
-
-package cn.com.vortexa.bot_platform.script_control;
-
-import cn.com.vortexa.bot_platform.wsController.WebSocketServer;
-import cn.com.vortexa.common.constants.BotExtFieldConstants;
-import cn.com.vortexa.common.constants.BotInstanceStatus;
-import cn.com.vortexa.common.constants.BotRemotingCommandFlagConstants;
-import cn.com.vortexa.common.dto.BotACJobResult;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.exception.BotStartException;
-import cn.com.vortexa.control.BotControlServer;
-import cn.com.vortexa.control.config.ControlServerConfig;
-import cn.com.vortexa.control.dto.*;
-import cn.com.vortexa.control.exception.ControlServerException;
-import cn.com.vortexa.control.exception.CustomCommandInvokeException;
-import cn.com.vortexa.control.protocol.Serializer;
-import cn.com.vortexa.control.service.IConnectionService;
-import cn.com.vortexa.control.service.IRegistryService;
-import cn.com.vortexa.control.util.ControlServerUtil;
-import cn.com.vortexa.control.util.RPCMethodUtil;
-import lombok.extern.slf4j.Slf4j;
-
-import java.lang.reflect.Method;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 
 /**
- * @author helei
- * @since 2025/3/26 15:42
+ * @author h30069248
+ * @since 2025/4/2 14:13
  */
+@Data
+public class BotInstanceVO {
+
+    private BotInfo botInfo;
+
+    /**
+     * bot实例
+     */
+    private BotInstance botInstance;
+
+    /**
+     * 正在运行的jobName
+     */
+    private String runningJob;
+}
+package cn.com.vortexa.db_layer.service;
+
+import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.common.util.ConditionBuildUtil;
+import cn.com.vortexa.common.vo.BotInstanceVO;
+import cn.com.vortexa.db_layer.mapper.IBaseMapper;
+import cn.com.vortexa.db_layer.util.ConditionQueryUtil;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.github.pagehelper.PageInfo;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.io.Serializable;
+import java.lang.reflect.InvocationTargetException;
+import java.sql.SQLException;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
+
 @Slf4j
-public class BotPlatformControlServer extends BotControlServer {
+public abstract class AbstractBaseService<M extends IBaseMapper<T>, T> extends ServiceImpl<M, T> implements IBaseService<T> {
 
-    private final List<RPCServiceInfo<?>> rpcServiceInfos;
-    private final BotLogUploadService botLogUploadService;
-    private final WebSocketServer webSocketServer;
+    private final Consumer<T> fillFunction;
 
-    public BotPlatformControlServer(
-        ControlServerConfig controlServerConfig,
-        WebSocketServer webSocketServer,
-        List<RPCServiceInfo<?>> rpcServiceInfos
-    ) throws ControlServerException {
-        super(controlServerConfig);
-        this.rpcServiceInfos = rpcServiceInfos;
-        this.webSocketServer = webSocketServer;
-        this.botLogUploadService = new BotLogUploadService(this);
+    protected AbstractBaseService(Consumer<T> fillFunction) {
+        this.fillFunction = fillFunction;
     }
 
     @Override
-    public void init(IRegistryService registryService, IConnectionService connectionService) throws Exception {
-        super.init(registryService, connectionService);
-
-        // 1 RPC 服务
-        for (RPCServiceInfo<?> rpcServiceInfo : rpcServiceInfos) {
-            Class<?> interfaces = rpcServiceInfo.getInterfaces();
-
-            Object ref = rpcServiceInfo.getRef();
-
-            for (Method method : interfaces.getDeclaredMethods()) {
-                method.setAccessible(true);
-                String key = RPCMethodUtil.buildRpcMethodKey(interfaces.getName(), method);
-
-                log.info("add custom command handler [{}]", key);
-
-                super.addCustomCommandHandler(key, request -> {
-                    RequestHandleResult result = new RequestHandleResult();
-
-                    log.debug("invoke rpc method[{}]", method.getName());
-                    try {
-                        byte[] body = request.getBody();
-                        RPCArgsWrapper params = Serializer.Algorithm.JDK.deserialize(body, RPCArgsWrapper.class);
-
-                        Object invoke = method.invoke(ref, params.getArgs());
-                        log.info("invoke rpc[{}] method[{}] return [{}]", request.getTransactionId(), key, invoke);
-                        result.setData(invoke);
-                        result.setSuccess(true);
-                        return result;
-                    } catch (Exception e) {
-                        log.error("invoke rpc method [{}] error", method.getName());
-                        throw new CustomCommandInvokeException(e);
-                    }
-                });
-            }
-        }
-    }
-
-
-    public CompletableFuture<Result> initScriptNodeUploadLog() {
-        webSocketServer.getMessageHandlerMap().put(BotRemotingCommandFlagConstants.START_UP_BOT_LOG, (name, request)->{
-            String group = request.getParams().getString(BotExtFieldConstants.TARGET_GROUP_KEY);
-            String botName = request.getParams().getString(BotExtFieldConstants.TARGET_BOT_NAME_KEY);
-            String botKey = request.getParams().getString(BotExtFieldConstants.TARGET_BOT_KEY_KEY);
-
-            botLogUploadService.browserRequestBotLogRCHandler()
-        })
+    public T queryById(Serializable id) {
+        return getById(id);
     }
 
     /**
-     * 开启job
+     * 插入或更新
      *
-     * @param group   group
-     * @param jobName jobName
-     * @param botName botName
-     * @param botKey  botKey
-     * @return CompletableFuture<Result>
+     * @param t t
+     * @return Integer
      */
-    public CompletableFuture<Result> startJob(String group, String botName, String botKey, String jobName) throws BotStartException {
-        // Step 1 判断目标Bot是否在线
-        String key = ControlServerUtil.generateServiceInstanceKey(group, botName, botKey);
-        BotInstanceStatus status = getBotInstanceStatus(key);
+    @Override
+    public Integer insertOrUpdate(T t) throws SQLException {
+        fillFunction.accept(t);
+        return getBaseMapper().insertOrUpdate(t);
+    }
 
-        if (status != BotInstanceStatus.RUNNING) {
-            throw new BotStartException("bot[%s][%s][%s] status is[%s] not RUNNING".formatted(
-                    group, botName, botKey, status
+
+    /**
+     * 批量插入或更新
+     *
+     * @param tList tList
+     * @return Integer
+     */
+    @Override
+    public Integer insertOrUpdateBatch(List<T> tList) throws SQLException {
+        int successCount = 0;
+        for (T t : tList) {
+            try {
+                Integer count = insertOrUpdate(t);
+                successCount += count == null ? 0 : count;
+            } catch (Exception e) {
+                throw new SQLException("insert or update error", e);
+            }
+        }
+
+        return successCount;
+    }
+
+    /**
+     * 条件分页查询
+     *
+     * @param page page
+     * @param limit limit
+     * @param filterMap filterMap
+     * @return PageInfo<T>
+     * @throws SQLException SQLException
+     */
+    @Override
+    public PageResult<T> conditionPageQuery(
+            int page,
+            int limit,
+            Map<String, Object> filterMap
+    ) throws SQLException {
+        return conditionPageQuery(page, limit, "params", filterMap);
+    }
+
+
+    /**
+     * 条件分页查询
+     *
+     * @param page      page
+     * @param limit     limit
+     * @param paramsKey paramsKey
+     * @param filterMap filterMap
+     * @return PageInfo<T>
+     * @throws SQLException SQLException
+     */
+    @Override
+    public PageResult<T> conditionPageQuery(
+            int page,
+            int limit,
+            String paramsKey,
+            Map<String, Object> filterMap
+    ) throws SQLException {
+        try {
+            PageInfo<T> pageInfo = ConditionQueryUtil.conditionQuery(
+                    page,
+                    limit,
+                    filterMap,
+                    paramsKey,
+                    condition -> getBaseMapper().multipleConditionQuery(condition),
+                    entityClass
+            );
+            List<T> list = pageInfo.getList();
+            PageResult<T> pageResult = new PageResult<>();
+            pageResult.setPages(pageInfo.getPages());
+            pageResult.setPageNum(pageInfo.getPageNum());
+            pageResult.setPageSize(pageInfo.getPageSize());
+            pageResult.setTotal(pageInfo.getTotal());
+            pageResult.setList(list);
+            return pageResult;
+        } catch (InvocationTargetException | NoSuchMethodException | InstantiationException |
+                 IllegalAccessException e
+        ) {
+            throw new SQLException("condition query error", e);
+        }
+    }
+
+    @Override
+    public List<T> conditionQuery(Map<String, Object> filterMap) throws SQLException {
+        return conditionQuery("params", filterMap);
+    }
+
+    @Override
+    public List<T> conditionQuery(String paramsKey, Map<String, Object> filterMap) throws SQLException {
+        T condition = null;
+        try {
+            condition = ConditionBuildUtil.getMapContainsCondition(
+                    filterMap,
+                    paramsKey,
+                    entityClass
+            );
+        } catch (NoSuchMethodException | InvocationTargetException | InstantiationException |
+                 IllegalAccessException e) {
+            throw new SQLException(e);
+        }
+
+        return getBaseMapper().multipleConditionQuery(condition);
+    }
+
+    /**
+     * 删除
+     *
+     * @param ids ids
+     * @return Result
+     */
+    @Transactional
+    public Boolean delete(List<Integer> ids) {
+        return removeBatchByIds(ids);
+    }
+
+
+    protected <T> T autoCast(Object obj) {
+        return obj == null ? null : (T) obj;
+    }
+
+    protected Integer toInteger(Object obj) {
+        return obj == null ? null : Integer.valueOf(obj.toString());
+    }
+}
+package cn.com.vortexa.bot_platform.controller;
+
+import cn.com.vortexa.bot_platform.dto.BotJob;
+import cn.com.vortexa.common.dto.control.RegisteredService;
+import cn.com.vortexa.common.exception.BotStartException;
+import cn.com.vortexa.common.vo.PageQuery;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.control.anno.RPCReference;
+import cn.com.vortexa.bot_platform.service.IBotInstanceService;
+import cn.com.vortexa.rpc.api.bot.IScriptAgentRPC;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.sql.SQLException;
+import java.util.List;
+
+/**
+ * <p>
+ * 前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-18
+ */
+@RestController
+@RequestMapping("/botInstance")
+public class BotInstanceController {
+
+    @Autowired
+    private IBotInstanceService botInstanceService;
+
+    @RPCReference
+    private IScriptAgentRPC scriptAgentRPC;
+
+    @PostMapping("/pageQuery")
+    public Result pageQuery(@RequestBody PageQuery query) throws SQLException {
+        return Result.ok(botInstanceService.conditionPageQueryAllInfo(
+                query.getPage(),
+                query.getLimit(),
+                query.getFilterMap()
+        ));
+    }
+
+    @PostMapping("/onlineInstance")
+    public Result onlineInstance() {
+        List<RegisteredService> registeredServices = botInstanceService.queryOnLineInstance();
+        return Result.ok(registeredServices);
+    }
+
+    @PostMapping("/startJob")
+    public Result startJob(@RequestBody BotJob botJob) throws BotStartException {
+        return botInstanceService.startJob(botJob);
+    }
+}
+package cn.com.vortexa.bot_platform.service.impl;
+
+import cn.com.vortexa.bot_platform.dto.BotJob;
+import cn.com.vortexa.bot_platform.script_control.BotPlatformControlServer;
+import cn.com.vortexa.common.vo.BotInstanceVO;
+import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.exception.BotStartException;
+import cn.com.vortexa.common.dto.control.RegisteredService;
+import cn.com.vortexa.bot_platform.mapper.BotInfoMapper;
+import cn.com.vortexa.control.constant.WSControlSystemConstants;
+import cn.com.vortexa.db_layer.service.AbstractBaseService;
+import cn.com.vortexa.common.entity.BotInfo;
+import cn.com.vortexa.common.entity.BotInstance;
+import cn.com.vortexa.bot_platform.mapper.BotInstanceMapper;
+import cn.com.vortexa.bot_platform.service.IBotInstanceService;
+
+import com.alibaba.fastjson.JSONObject;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+
+import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
+import lombok.extern.slf4j.Slf4j;
+
+import org.quartz.JobExecutionContext;
+import org.quartz.Scheduler;
+import org.quartz.Trigger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.stereotype.Service;
+
+import java.sql.SQLException;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
+
+/**
+ * <p>
+ * 服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-18
+ */
+@Slf4j
+@Service
+public class BotInstanceServiceImpl extends AbstractBaseService<BotInstanceMapper, BotInstance>
+        implements IBotInstanceRPC, IBotInstanceService {
+
+    @Autowired
+    private BotInfoMapper botInfoMapper;
+
+    @Lazy
+    @Autowired
+    private BotPlatformControlServer botControlServer;
+
+    @Autowired
+    private Scheduler scheduler;
+
+    public BotInstanceServiceImpl() {
+        super(botInstance -> {
+            botInstance.setInsertDatetime(LocalDateTime.now());
+            botInstance.setUpdateDatetime(LocalDateTime.now());
+            botInstance.setIsValid(1);
+        });
+    }
+
+
+    @Override
+    public PageResult<BotInstanceVO> conditionPageQueryAllInfo(Integer page, Integer limit,
+        Map<String, Object> filterMap) throws SQLException {
+
+        PageResult<BotInstance> result = super.conditionPageQuery(page, limit, filterMap);
+
+        // 填充botInfo
+        List<Integer> botIds = result.getList().stream().map(BotInstance::getBotId).toList();
+        Map<Integer, BotInfo> idMapBotInfo = botInfoMapper.selectBatchIds(botIds)
+            .stream().collect(Collectors.toMap(BotInfo::getId, botInfo -> botInfo));
+
+        List<String> botKeys = result.getList().stream().map(BotInstance::getBotKey).toList();
+
+        // 查询运行中的任务
+        Map<String, List<Trigger>> groupByBotKey = scheduler.getCurrentlyExecutingJobs()
+            .stream()
+            .map(JobExecutionContext::getTrigger)
+            .collect(Collectors.groupingBy(trigger -> trigger.getJobKey().getGroup()));
+
+        ArrayList<BotInstanceVO> voList = new ArrayList<>();
+        for (BotInstance instance : result.getList()) {
+            BotInstanceVO vo = new BotInstanceVO();
+
+            vo.setBotInstance(instance);
+            vo.setBotInfo(idMapBotInfo.get(instance.getBotId()));
+            vo.setRunningJob(JSONObject.toJSONString(groupByBotKey.get(instance.getBotKey())));
+
+            instance.addParam(BotInstance.BOT_INSTANCE_STATUS_KEY, botControlServer.getBotInstanceStatus(
+                WSControlSystemConstants.DEFAULT_GROUP, instance.getBotName(), instance.getBotKey()
             ));
         }
 
-        // Step 2 发送启动命令
-        RemotingCommand command = newRemotingCommand(BotRemotingCommandFlagConstants.START_BOT_JOB, true);
-        command.addExtField(BotExtFieldConstants.JOB_NAME, jobName);
-        return sendCommandToServiceInstance(
-                key,
-                command
-        ).thenApplyAsync(response->{
-            BotACJobResult result = response.getObjBodY(BotACJobResult.class);
-            if (response.isSuccess()) {
-                log.info("[{}] start job[{}] success", key, jobName);
-                return Result.ok(result.getData());
-            } else {
-                log.error("[{}] start job[{}] fail, {}", key, jobName, response.getPayLoad());
-                return Result.fail(result.getErrorMsg());
-            }
-        }).exceptionally(throwable -> {
-            log.error("[{}] start job[{}] error", key, jobName, throwable);
-            return Result.fail(throwable.getMessage());
-        });
-    }
-
-    /**
-     * 获取bot实例状态
-     *
-     * @param group   group
-     * @param botName botName
-     * @param botKey  botKey
-     * @return BotInstanceStatus
-     */
-    public BotInstanceStatus getBotInstanceStatus(String group, String botName, String botKey) {
-        String instanceKey = ControlServerUtil.generateServiceInstanceKey(group, botName, botKey);
-        return getBotInstanceStatus(instanceKey);
-    }
-
-    /**
-     * 获取bot实例状态
-     *
-     * @param instanceKey instanceKey
-     * @return BotInstanceStatus
-     */
-    public BotInstanceStatus getBotInstanceStatus(String instanceKey) {
-        ConnectEntry connectEntry = getConnectionService().getServiceInstanceChannel(instanceKey);
-        return connectEntry == null ? BotInstanceStatus.STOPPED :
-                (connectEntry.isUsable() ? BotInstanceStatus.RUNNING : BotInstanceStatus.UN_USABLE);
-    }
-}
-
-
-package cn.com.vortexa.bot_platform.script_control;
-
-import cn.com.vortexa.bot_platform.wsController.WebSocketServer;
-import cn.com.vortexa.common.util.NamedThreadFactory;
-import cn.com.vortexa.control.config.ControlServerConfig;
-import cn.com.vortexa.control.service.IConnectionService;
-import cn.com.vortexa.control.service.IRegistryService;
-import cn.com.vortexa.control.service.impl.FileRegistryService;
-import cn.com.vortexa.control.service.impl.MemoryConnectionService;
-import cn.com.vortexa.control.dto.RPCServiceInfo;
-import lombok.extern.slf4j.Slf4j;
-
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-
-import java.io.FileNotFoundException;
-import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
-/**
- * @author helei
- * @since 2025-03-21
- */
-@Slf4j
-@Configuration
-public class BotPlatformControlServerConfig {
-
-    private static final String APPLICATION_FILE_NAME = "application.yaml";
-
-    private static final String NAMESERVER_CONFIG_PREFIX = "vortexa.controlServer";
-
-    @Autowired
-    private List<RPCServiceInfo<?>> rpcServiceInfos;
-
-    @Autowired
-    private WebSocketServer webSocketServer;
-
-    @Bean
-    public ControlServerConfig controlServerConfig() throws FileNotFoundException {
-        return ControlServerConfig.loadConfig(APPLICATION_FILE_NAME, NAMESERVER_CONFIG_PREFIX);
-    }
-
-    @Bean
-    public ExecutorService controlServerThreadPool() throws FileNotFoundException {
-        return Executors.newThreadPerTaskExecutor(
-                new NamedThreadFactory(controlServerConfig().getServiceInstance().toString())
+        return new PageResult<>(
+            result.getTotal(),
+            voList,
+            result.getPages(),
+            result.getPageNum(),
+            result.getPageSize()
         );
-    }
-
-    @Bean
-    public IRegistryService registryService() throws FileNotFoundException {
-        return new FileRegistryService(controlServerThreadPool());
-    }
-
-    @Bean
-    public IConnectionService connectionService() {
-        return new MemoryConnectionService();
-    }
-
-    @Bean
-    public BotPlatformControlServer botControlServer() throws Exception {
-        ControlServerConfig controlServerConfig = controlServerConfig();
-        log.info("start launch BotPlatFormNameserver[{}]", controlServerConfig.getServiceInstance());
-        BotPlatformControlServer botControlServer = new BotPlatformControlServer(controlServerConfig, webSocketServer, rpcServiceInfos);
-        botControlServer.init(registryService(), connectionService());
-        botControlServer.start().get();
-        log.info("BotPlatFormNameserver[{}] launch finish", controlServerConfig.getServiceInstance());
-        return botControlServer;
-    }
-}
-
-
-package cn.com.vortexa.bot_platform.wsController;
-
-import jakarta.websocket.Session;
-import lombok.Data;
-
-@Data
-public class SocketDomain {
-    private Session session;
-    private String uri;
-}
-
-package cn.com.vortexa.bot_platform.wsController;
-
-/**
- * @author h30069248
- * @since 2025/4/1 17:34
- */
-public interface UIMessageHandler {
-    UIWSMessage handle(String username, UIWSMessage message);
-}
-
-package cn.com.vortexa.bot_platform.wsController;
-
-import com.alibaba.fastjson.JSONObject;
-
-import lombok.Builder;
-import lombok.Data;
-
-import java.util.Map;
-
-/**
- * @author h30069248
- * @since 2025/4/1 14:27
- */
-@Data
-@Builder
-public class UIWSMessage {
-
-    private int code;
-
-    private boolean success;
-
-    private JSONObject params;
-
-    private String message;
-}
-package cn.com.vortexa.bot_platform.wsController;
-
-import com.alibaba.fastjson.JSONObject;
-import com.github.pagehelper.util.StringUtil;
-
-import cn.com.vortexa.control.constant.RemotingCommandFlagConstants;
-import jakarta.websocket.OnClose;
-import jakarta.websocket.OnMessage;
-import jakarta.websocket.OnOpen;
-import jakarta.websocket.Session;
-import jakarta.websocket.server.PathParam;
-import jakarta.websocket.server.ServerEndpoint;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-
-import org.springframework.stereotype.Component;
-
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Function;
-
-@Slf4j
-@Component
-@ServerEndpoint("/websocket/{userName}")
-public class WebSocketServer {
-    //Map用来存储已连接的客户端信息
-    private static final ConcurrentHashMap<String, SocketDomain> websocketMap = new ConcurrentHashMap<>();
-    //在线客户端数量
-    private static int onlineCount = 0;
-    @Getter
-    private final ConcurrentHashMap<Integer, UIMessageHandler> messageHandlerMap = new ConcurrentHashMap<>();
-
-    //当前连接客户端的Session信息
-    private Session session;
-    //当前客户端名称
-    private String userName = "";
-
-    @OnOpen
-    public void onOpen(Session session, @PathParam("userName") String userName) {
-        if (!websocketMap.containsKey(userName)) {
-            WebSocketServer.onlineCount++;
-        }
-
-        this.session = session;
-        this.userName = userName;
-
-        SocketDomain socketDomain = new SocketDomain();
-        socketDomain.setSession(session);
-        socketDomain.setUri(session.getRequestURI().toString());
-        websocketMap.put(userName, socketDomain);
-
-        log.info("user[{}] connect, online:{}", userName, onlineCount);
-        try {
-            sendMessage(UIWSMessage.builder().code(RemotingCommandFlagConstants.PING).build());
-        } catch (Exception e) {
-            log.error("{} send connect success message error", userName);
-        }
-    }
-
-    @OnClose
-    public void onClose() {
-        if (websocketMap.containsKey(userName)) {
-            websocketMap.remove(userName);
-            onlineCount--;
-            log.info("用户关闭：{}，人数:{}", userName, onlineCount);
-        }
-    }
-
-    @OnMessage
-    public void onMessage(String message, Session session) {
-        if (StringUtil.isNotEmpty(message)) {
-            UIWSMessage uiwsMessage = JSONObject.parseObject(message, UIWSMessage.class);
-
-            log.info("收到用户消息:{},报文:{}", userName, message);
-        }
-    }
-
-    //给外部调用的方法接口
-    public void sendAll(String Message) {
-        sendMessageToAll(Message);
-    }
-
-    //给当前客户端发消息
-    private void sendMessage(Object obj) {
-        synchronized (getSessionLock()) {
-            this.session.getAsyncRemote().sendText(JSONObject.toJSONString(obj));
-        }
-    }
-
-    //给指定客户端发送消息，通过UserName找到Session发送
-    private void sendMessageTo(String userName, String obj) {
-        SocketDomain socketDomain = websocketMap.get(userName);
-        try {
-            if (socketDomain != null) {
-                socketDomain.getSession().getAsyncRemote().sendText(obj);
-            }
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    //给除了当前客户端的其他客户端发消息
-    private void sendMessageToAllExpectSelf(String message, Session fromSession) {
-        for (Map.Entry<String, SocketDomain> client : websocketMap.entrySet()) {
-            Session toSeesion = client.getValue().getSession();
-            if (!toSeesion.getId().equals(fromSession.getId()) && toSeesion.isOpen()) {
-                toSeesion.getAsyncRemote().sendText(message);
-                log.info("服务端发送消息给" + client.getKey() + ":" + message);
-            }
-        }
-    }
-
-    //给包括当前客户端的全部客户端发送消息
-    private void sendMessageToAll(String message) {
-        for (Map.Entry<String, SocketDomain> client : websocketMap.entrySet()) {
-            Session toSeesion = client.getValue().getSession();
-            if (toSeesion.isOpen()) {
-                toSeesion.getAsyncRemote().sendText(message);
-                log.info("服务端发送消息给" + client.getKey() + ":" + message);
-            }
-        }
-    }
-
-    private String getSessionLock() {
-        return userName + ":" + session.getId();
-    }
-}
-package cn.com.vortexa.script_node.scriptagent;
-
-import cn.com.vortexa.common.constants.BotExtFieldConstants;
-import cn.com.vortexa.common.constants.BotRemotingCommandFlagConstants;
-import cn.com.vortexa.common.dto.BotACJobResult;
-import cn.com.vortexa.control.ScriptAgent;
-import cn.com.vortexa.control.config.ScriptAgentConfig;
-import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
-import cn.com.vortexa.control.dto.RPCArgsWrapper;
-import cn.com.vortexa.control.dto.RPCServiceInfo;
-import cn.com.vortexa.control.dto.RemotingCommand;
-import cn.com.vortexa.control.dto.RequestHandleResult;
-import cn.com.vortexa.control.exception.CustomCommandException;
-import cn.com.vortexa.control.exception.CustomCommandInvokeException;
-import cn.com.vortexa.control.protocol.Serializer;
-import cn.com.vortexa.control.util.RPCMethodUtil;
-import cn.com.vortexa.script_node.bot.AutoLaunchBot;
-import cn.hutool.core.util.BooleanUtil;
-import io.netty.channel.Channel;
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
-
-import java.lang.reflect.Method;
-import java.net.URISyntaxException;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiFunction;
-
-import javax.net.ssl.SSLException;
-
-/**
- * @author helei
- * @since 2025/3/26 16:56
- */
-@Slf4j
-public class BotScriptAgent extends ScriptAgent {
-
-    private final AtomicInteger initCount = new AtomicInteger(0);
-
-    private final List<RPCServiceInfo<?>> rpcServiceInfos;
-
-    private final BotScriptAgentLogUploadService logUploadService;
-    @Setter
-    private AutoLaunchBot<?> bot;
-
-    public BotScriptAgent(ScriptAgentConfig clientConfig, List<RPCServiceInfo<?>> rpcServiceInfos) {
-        super(clientConfig);
-        this.rpcServiceInfos = rpcServiceInfos;
-        this.logUploadService = new BotScriptAgentLogUploadService(this);
     }
 
     @Override
-    protected void init() throws SSLException, URISyntaxException {
-        super.init();
-
-        // Step 1 RPC命令处理
-        if (rpcServiceInfos == null) {
-            return;
-        }
-        if (initCount.getAndIncrement() > 0) {
-            return;
-        }
-        log.info("start registry rpc services");
-        for (RPCServiceInfo<?> rpcServiceInfo : rpcServiceInfos) {
-            Class<?> interfaces = rpcServiceInfo.getInterfaces();
-            Object ref = rpcServiceInfo.getRef();
-
-            for (Method method : interfaces.getDeclaredMethods()) {
-                method.setAccessible(true);
-                String key = RPCMethodUtil.buildRpcMethodKey(interfaces.getName(), method);
-
-                try {
-                    super.addCustomCommandHandler(key, request -> {
-                        RequestHandleResult result = new RequestHandleResult();
-
-                        log.debug("invoke rpc method[{}]", method.getName());
-                        try {
-                            byte[] body = request.getBody();
-                            RPCArgsWrapper params = Serializer.Algorithm.JDK.deserialize(body, RPCArgsWrapper.class);
-                            result.setData(method.invoke(ref, params.getArgs()));
-                            result.setSuccess(true);
-                            return result;
-                        } catch (Exception e) {
-                            log.error("invoke rpc method [{}] error", method.getName());
-                            throw new CustomCommandInvokeException(e);
-                        }
-                    });
-                } catch (CustomCommandException e) {
-                    log.error("registry custom method error", e);
-                }
-            }
-        }
-
-        // Step 2 其它命令处理
-        Map<Integer, BiFunction<Channel, RemotingCommand, RemotingCommand>> handlerMap
-            = getCustomRemotingCommandHandlerMap();
-        handlerMap.put(
-            BotRemotingCommandFlagConstants.START_UP_BOT_LOG,
-            logUploadService::startUploadLogRCHandler
-        );
-        handlerMap.put(
-            BotRemotingCommandFlagConstants.STOP_UP_BOT_LOG,
-            logUploadService::stopUploadLogRCHandler
-        );
-        handlerMap.put(
-            BotRemotingCommandFlagConstants.START_BOT_JOB,
-            (channel, remotingCommand) -> startOrParsedBotJob(remotingCommand)
-        );
+    public Boolean existsBotInstance(BotInstance query) {
+        return getBaseMapper().exists(new QueryWrapper<>(query));
     }
 
-    private RemotingCommand startOrParsedBotJob(RemotingCommand remotingCommand) {
-        String jobName = remotingCommand.getExtFieldsValue(BotExtFieldConstants.JOB_NAME);
+    @Override
+    public List<RegisteredService> queryOnLineInstance() {
+        List<RegisteredService> res = new ArrayList<>();
+        List<String> keys = botControlServer.getConnectionService().queryOnlineInstanceKey();
+        keys.forEach(key -> res.addAll(botControlServer.getRegistryService().queryServiceInstance(key)));
+        res.forEach(service -> {
+            BotInstanceMapper mapper = getBaseMapper();
+            BotInstance botInstance = mapper.selectOne(
+                    new QueryWrapper<>(BotInstance.builder().botKey(service.getAddress().getInstanceId()).build())
+            );
+            service.addProps("bot_info", botInstance);
+        });
+        return res;
+    }
 
-        BotACJobResult botACJobResult = bot.startBotJob(jobName);
-
-        RemotingCommand response = new RemotingCommand();
-        if (BooleanUtil.isTrue(botACJobResult.getSuccess())) {
-            response.setCode(RemotingCommandCodeConstants.SUCCESS);
-            bot.logger.debug("start/parsed job[%s] success".formatted(jobName));
-        } else {
-            response.setCode(RemotingCommandCodeConstants.FAIL);
-            bot.logger.error("start/parsed job[%s] fail".formatted(jobName));
+    @Override
+    public Result startJob(BotJob botJob) throws BotStartException {
+        try {
+            return botControlServer.startJob(
+                    botJob.getGroup(),
+                    botJob.getBotName(),
+                    botJob.getBotKey(),
+                    botJob.getJobName()
+            ).get();
+        } catch (InterruptedException | ExecutionException e) {
+            log.error("[{}] start job error", botJob, e);
+            return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
         }
+    }
 
-        response.setBody(Serializer.Algorithm.JDK.serialize(botACJobResult));
-        return response;
+    @Override
+    public Boolean existsBotInstanceRPC(BotInstance query) {
+        return existsBotInstance(query);
+    }
+
+    @Override
+    public Integer insertOrUpdateRPC(BotInstance instance) throws SQLException {
+        return insertOrUpdate(instance);
+    }
+
+    @Override
+    public BotInstance selectOneRPC(BotInstance query) {
+        return getOne(new QueryWrapper<>(query));
     }
 }
-package cn.com.vortexa.script_node.scriptagent;
+package cn.com.vortexa.bot_platform.service;
 
-import cn.com.vortexa.control.ScriptAgent;
-import cn.com.vortexa.control.config.ScriptAgentConfig;
-import cn.com.vortexa.control.exception.CustomCommandException;
-import cn.com.vortexa.control.dto.RPCServiceInfo;
-import cn.com.vortexa.script_node.service.BotApi;
-import lombok.extern.slf4j.Slf4j;
+import cn.com.vortexa.bot_platform.dto.BotJob;
+import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.dto.control.RegisteredService;
+import cn.com.vortexa.common.entity.BotInstance;
+import cn.com.vortexa.common.exception.BotStartException;
+import cn.com.vortexa.common.vo.BotInstanceVO;
+import cn.com.vortexa.db_layer.service.IBaseService;
 
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-
-import java.io.FileNotFoundException;
+import java.sql.SQLException;
 import java.util.List;
+import java.util.Map;
 
 /**
- * @author helei
- * @since 2025/3/21 15:04
+ * <p>
+ * 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-02-18
  */
-@Slf4j
-@Configuration
-@ConditionalOnClass(ScriptAgent.class)
-public class BotScriptAgentConfig {
+public interface IBotInstanceService extends IBaseService<BotInstance> {
 
-    private static final String APPLICATION_FILE_NAME = "application.yaml";
+    Boolean existsBotInstance(BotInstance query);
 
-    private static final String NAMESERVER_CONFIG_PREFIX = "vortexa.scriptAgent";
+    /**
+     * 查询正在运行的bot实例
+     *
+     * @return List<BotInfo>
+     */
+    List<RegisteredService> queryOnLineInstance();
 
-    @Autowired(required = false)
-    private List<RPCServiceInfo<?>> rpcServiceInfos;
+    /**
+     * 启动job
+     *
+     * @param botJob botJob
+     * @return boolean
+     */
+    Result startJob(BotJob botJob) throws BotStartException;
 
-    @Bean
-    public ScriptAgentConfig scriptAgentClientConfig() throws FileNotFoundException {
-        return ScriptAgentConfig.loadConfig(APPLICATION_FILE_NAME, NAMESERVER_CONFIG_PREFIX);
-    }
-
-    @Bean
-    public BotScriptAgent scriptAgent() throws FileNotFoundException, CustomCommandException {
-        ScriptAgentConfig scriptAgentConfig = scriptAgentClientConfig();
-        return new BotScriptAgent(scriptAgentConfig, rpcServiceInfos);
-    }
+    /**
+     * 分页查询bot instance 的全信息
+     *
+     * @param page page
+     * @param limit limit
+     * @param filterMap filterMap
+     * @return PageResult<BotInstanceVO>
+     */
+    PageResult<BotInstanceVO> conditionPageQueryAllInfo(Integer page, Integer limit, Map<String, Object> filterMap)
+        throws SQLException;
 }
-package cn.com.vortexa.script_node;
+package cn.com.vortexa.bot_platform;
 
-import cn.com.vortexa.control.config.ScriptAgentConfig;
-import cn.com.vortexa.control.dto.RPCServiceInfo;
-import cn.com.vortexa.script_node.anno.BotApplication;
-import cn.com.vortexa.script_node.bot.AutoLaunchBot;
-import cn.com.vortexa.script_node.config.AutoBotConfig;
-import cn.com.vortexa.script_node.constants.BotStatus;
-import cn.com.vortexa.script_node.scriptagent.BotScriptAgent;
-import cn.com.vortexa.script_node.service.BotApi;
-import cn.com.vortexa.script_node.service.impl.ScriptAgentRPCImpl;
-import cn.com.vortexa.common.dto.control.ServiceInstance;
-import cn.com.vortexa.common.exception.BotInitException;
-import cn.com.vortexa.common.exception.BotStartException;
 import cn.com.vortexa.common.util.BannerUtil;
-import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
-import cn.com.vortexa.control.dto.RemotingCommand;
-import cn.hutool.core.util.BooleanUtil;
-import cn.hutool.core.util.StrUtil;
+import cn.com.vortexa.db_layer.DBLayerAutoConfig;
+import cn.com.vortexa.job.JobAutoConfig;
 
+import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.autoconfigure.web.servlet.ServletWebServerFactoryAutoConfiguration;
-import org.springframework.context.ApplicationContext;
-import org.springframework.context.ConfigurableApplicationContext;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Optional;
-
-@SpringBootApplication(exclude = ServletWebServerFactoryAutoConfiguration.class)
-@ImportAutoConfiguration({ScriptNodeAutoConfig.class})
-public class ScriptNodeLauncher {
-
-    private static final String BOT_KEY_PARAM_KEY = "--vortexa.botKey=";
-
-    public static AutoLaunchBot<?> LAUNCHED_BOT = null;
-
-    /**
-     * 启动bot
-     *
-     * @param botClass botClass
-     * @param args     args
-     * @param <T>      T
-     * @return ApplicationContext
-     * @throws BotStartException BotStartException
-     * @throws BotInitException  BotInitException
-     */
-    public static <T extends AutoLaunchBot<T>> ApplicationContext launch(Class<T> botClass, String[] args)
-            throws BotStartException, BotInitException {
+@SpringBootApplication
+@MapperScan(basePackages = "cn.com.vortexa.bot_platform.mapper")
+@ImportAutoConfiguration(classes = {DBLayerAutoConfig.class, JobAutoConfig.class})
+public class BotPlatformApplication {
+    public static void main(String[] args) {
         BannerUtil.printBanner("");
-
-        // 命令行参数设置app name
-        Optional<String> botKeyOp = Arrays.stream(args).filter(arg -> arg.startsWith(BOT_KEY_PARAM_KEY)).findFirst();
-        if (botKeyOp.isEmpty()) {
-            throw new BotStartException("bot key is empty");
-        }
-        String botKey = botKeyOp.get().replace(BOT_KEY_PARAM_KEY, "");
-        System.setProperty("spring.application.name", botKey);
-
-        // 解析注解上的bot name
-        BotApplication annotation = botClass.getAnnotation(BotApplication.class);
-        String botName = null;
-        if (annotation == null || StrUtil.isBlank((botName = annotation.name()))) {
-            throw new BotStartException("bot must have @BotApplication annotation and must have name");
-        }
-        AutoBotConfig.BOT_NAME = botName;
-
-        // Step 1 创建容器
-        ConfigurableApplicationContext applicationContext = SpringApplication.run(ScriptNodeLauncher.class, args);
-
-        // Step 2 获取配置Bean
-        AutoBotConfig botConfig = applicationContext.getBean(AutoBotConfig.class);
-        BotApi botApi = applicationContext.getBean(BotApi.class);
-        BotScriptAgent scriptAgent = applicationContext.getBean(BotScriptAgent.class);
-        ScriptAgentConfig scriptAgentConfig = applicationContext.getBean(ScriptAgentConfig.class);
-
-        // Step 3 创建bot实例
-        Constructor<T> constructor = null;
-        try {
-            constructor = botClass.getConstructor();
-            LAUNCHED_BOT = constructor.newInstance();
-        } catch (NoSuchMethodException | InstantiationException | IllegalAccessException |
-                 InvocationTargetException e) {
-            throw new BotInitException(e);
-        }
-
-        ScriptAgentRPCImpl scriptAgentRPC = (ScriptAgentRPCImpl) botApi.getScriptAgentRPC();
-        scriptAgentRPC.setBot(LAUNCHED_BOT);
-
-        // Step 4 启动script agent
-        // Step 4.1 替换ScriptAgent的配置，设置为botName和botKey
-        scriptAgent.setBot(LAUNCHED_BOT);
-
-        ServiceInstance scripAgentInstance = scriptAgent.getClientConfig().getServiceInstance();
-        scripAgentInstance.setGroup(scripAgentInstance.getGroup());
-        scripAgentInstance.setServiceId(botName);
-        scripAgentInstance.setInstanceId(botKey);
-        scriptAgent.setName(scriptAgentConfig.toString());
-
-        // Step 4.2 设置注册完成后的回调，回调中启动bot
-        scriptAgent.setAfterRegistryHandler(response -> {
-            try {
-                startLaunch(response, botConfig, botApi);
-            } catch (BotStartException | BotInitException e) {
-                LAUNCHED_BOT.logger.error("launch bot error", e);
-                throw new RuntimeException(e);
-            }
-        });
-
-        try {
-            Boolean success = scriptAgent.connect().get();
-            if (BooleanUtil.isTrue(success)) {
-                LAUNCHED_BOT.logger.info("script agent connect to ControlServer success");
-            } else {
-                LAUNCHED_BOT.logger.error("script agent connect to ControlServer fail");
-            }
-        } catch (Exception e) {
-            LAUNCHED_BOT.logger.error("script agent connect to ControlServer error", e);
-        }
-
-        return applicationContext;
-    }
-
-    private static void startLaunch(RemotingCommand response, AutoBotConfig botConfig, BotApi botApi)
-            throws BotStartException, BotInitException {
-        if (response.getCode() == RemotingCommandCodeConstants.SUCCESS) {
-            if (LAUNCHED_BOT.getStatus() == BotStatus.NEW) {
-                // Step 4 启动bot
-                LAUNCHED_BOT.launch(botConfig, botApi, () -> true);
-            }
-        } else {
-            LAUNCHED_BOT.logger.error("registry fail, response:" + response);
-        }
+        SpringApplication.run(BotPlatformApplication.class, args);
     }
 }
-package cn.com.vortexa.control.dto;
+package cn.com.vortexa.script_node.scriptagent;
 
-import cn.com.vortexa.control.constant.LanguageCode;
+import com.alibaba.fastjson.JSONObject;
+
+import cn.com.vortexa.control.constant.ExtFieldsConstants;
+import cn.com.vortexa.script_node.config.AutoBotConfig;
+import cn.com.vortexa.common.constants.BotExtFieldConstants;
+import cn.com.vortexa.common.constants.BotRemotingCommandFlagConstants;
+import cn.com.vortexa.common.util.DiscardingBlockingQueue;
 import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
-import cn.com.vortexa.control.constant.RemotingCommandFlagConstants;
-import cn.com.vortexa.control.protocol.Serializer;
-import cn.com.vortexa.control.util.DistributeIdMaker;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import cn.com.vortexa.control.dto.RemotingCommand;
+import cn.com.vortexa.script_node.util.log.AppendLogger;
+import cn.hutool.core.util.StrUtil;
+import io.netty.channel.Channel;
+import lombok.extern.slf4j.Slf4j;
 
-import org.apache.commons.compress.archivers.sevenz.CLI;
-
-import java.io.Serializable;
-import java.util.HashMap;
-
-
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
-public class RemotingCommand {
-
-    public static final RemotingCommand TIME_OUT_COMMAND;
-    public static final RemotingCommand PARAMS_ERROR;
-
-    public static final String TRANSACTION_ID_KEY = "transaction_id";
-    public static final String GROUP_KEY = "group";
-    public static final String SERVICE_ID_KEY = "service_id";
-    public static final String CLIENT_ID_KEY = "client_id";
-
-    static {
-        TIME_OUT_COMMAND = new RemotingCommand();
-        TIME_OUT_COMMAND.setFlag(RemotingCommandFlagConstants.TIME_OUT_EXCEPTION);
-        TIME_OUT_COMMAND.setCode(RemotingCommandCodeConstants.FAIL);
-
-        PARAMS_ERROR = new RemotingCommand();
-        PARAMS_ERROR.setFlag(RemotingCommandFlagConstants.PARAMS_ERROR);
-        PARAMS_ERROR.setCode(RemotingCommandCodeConstants.FAIL);
-    }
-
-    private Integer flag;
-    private Integer code;
-    private LanguageCode language = LanguageCode.JAVA;
-    private Integer version = 0;
-    private String remark;
-    private HashMap<String, String> extFields;
-
-    private byte[] body;
-
-    private Object payLoad;
-
-    @Override
-    public RemotingCommand clone() {
-        RemotingCommand remotingCommand = new RemotingCommand();
-        remotingCommand.setFlag(this.flag);
-        remotingCommand.setCode(this.code);
-        remotingCommand.setLanguage(this.language);
-        remotingCommand.setVersion(this.version);
-        remotingCommand.setRemark(this.remark);
-        remotingCommand.setExtFields(this.extFields);
-        remotingCommand.setBody(this.body);
-        remotingCommand.setPayLoad(this.payLoad);
-        return remotingCommand;
-    }
-
-    public String getTransactionId() {
-        return getExtFieldsValue(TRANSACTION_ID_KEY);
-    }
-
-    public void setTransactionId(String tsId) {
-        addExtField(TRANSACTION_ID_KEY, tsId);
-    }
-
-    public String getGroup() {
-        String value = getExtFieldsValue(GROUP_KEY);
-        return (value == null || value.isEmpty()) ? "default" : value;
-    }
-
-    public void setGroup(String group) {
-        addExtField(GROUP_KEY, group);
-    }
-
-    public String getServiceId() {
-        return getExtFieldsValue(SERVICE_ID_KEY);
-    }
-
-    public void setServiceId(String serviceId) {
-        addExtField(SERVICE_ID_KEY, serviceId);
-    }
-
-    public String getClientId() {
-        return getExtFieldsValue(CLIENT_ID_KEY);
-    }
-
-    public void setClientId(String clientId) {
-        addExtField(CLIENT_ID_KEY, clientId);
-    }
-
-    public String getExtFieldsValue(String extFieldsKey) {
-        if (extFields == null) return null;
-        return extFields.get(extFieldsKey);
-    }
-
-    public Integer getExtFieldsInt(String extFieldsKey) {
-        String value = getExtFieldsValue(extFieldsKey);
-        if (value == null || value.isEmpty()) return null;
-        return Integer.parseInt(value);
-    }
-
-    public Long getExtFieldsLong(String extFieldsKey) {
-        String value = getExtFieldsValue(extFieldsKey);
-        if (value == null || value.isEmpty()) return null;
-        return Long.parseLong(value);
-    }
-
-    public void addExtField(String key, String value) {
-        if (this.extFields == null) {
-            this.extFields = new HashMap<>();
-        }
-        this.extFields.put(key, value);
-    }
-
-    public void setBodyFromObject(Object body) {
-        if (body == null) this.body = null;
-        else this.body = Serializer.Algorithm.Protostuff.serialize(body);
-    }
-
-    public boolean isSuccess() {
-        return code != null && code == RemotingCommandCodeConstants.SUCCESS;
-    }
-
-    public void release() {
-    }
-
-    protected void clear() {
-        this.flag = null;
-        this.code = null;
-        this.language = null;
-        this.version = null;
-        this.remark = null;
-        if (extFields == null) extFields = new HashMap<>();
-        else this.extFields.clear();
-        this.body = null;
-    }
-
-    public static RemotingCommand generatePingCommand(String key) {
-        String txId = DistributeIdMaker.DEFAULT.nextId(key);
-        RemotingCommand ping = new RemotingCommand();
-        ping.setFlag(RemotingCommandFlagConstants.PING);
-        ping.setTransactionId(txId);
-        ping.setCode(RemotingCommandCodeConstants.SUCCESS);
-        return ping;
-    }
-
-    public static RemotingCommand generatePongCommand(String key) {
-        String txId = DistributeIdMaker.DEFAULT.nextId(key);
-        RemotingCommand pong = new RemotingCommand();
-        pong.setFlag(RemotingCommandFlagConstants.PONG);
-        pong.setTransactionId(txId);
-        pong.setCode(RemotingCommandCodeConstants.SUCCESS);
-        return pong;
-    }
-
-    public void setObjBody(Serializable objBody) {
-        this.body = Serializer.Algorithm.JDK.serialize(objBody);
-    }
-
-    public <T> T getObjBodY(Class<T> tClass) {
-        return Serializer.Algorithm.JDK.deserialize(this.body, tClass);
-    }
-
-    @Override
-    public String toString() {
-        return "RemotingCommand{" +
-                "flag=" + flag +
-                ", code=" + code +
-                ", language=" + language +
-                ", version=" + version +
-                ", remark='" + remark + '\'' +
-                ", extFields=" + extFields +
-                ", body=" + ((body == null || body.length == 0) ? "empty" : "not empty") +
-                '}';
-    }
-}
-package cn.com.vortexa.control.config;
-
-
-import cn.com.vortexa.common.util.YamlConfigLoadUtil;
-import cn.com.vortexa.common.dto.control.ServiceInstance;
-import cn.com.vortexa.control.dto.RPCServiceInfo;
-import lombok.Data;
-
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.net.URL;
-import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * @author helei
- * @since 2025-03-15
+ * @since 2025/3/26 17:04
  */
-@Data
-public class ScriptAgentConfig {
+@Slf4j
+public class BotScriptAgentLogUploadService {
 
-    private static final String RESOURCE_PATH = "nameserver-client-config.yaml";
+    public static final int LOG_SEND_MAX_INTERVAL = 30;
 
-    private static final String PREFIX_PATH = "cn.com.vortexa.nameserver.client";
+    private final BotScriptAgent botScriptAgent;
 
-    private volatile static ScriptAgentConfig INSTANCE;
+    private final DiscardingBlockingQueue<AppendLogger.LogContent> logCache = new DiscardingBlockingQueue<>(
+            AutoBotConfig.LOG_CACHE_COUNT);
 
-    public static ScriptAgentConfig defaultConfig() throws FileNotFoundException {
-        return loadConfig("nameserver-client-config.yaml", PREFIX_PATH);
+    private final AtomicBoolean upload = new AtomicBoolean(false);
+
+    private volatile String bindUploadTXId;
+
+    public BotScriptAgentLogUploadService(BotScriptAgent botScriptAgent) {
+        this.botScriptAgent = botScriptAgent;
     }
 
-    public static ScriptAgentConfig loadConfig(String fileName, String prefix) throws FileNotFoundException {
-        if (INSTANCE == null) {
-            synchronized (ScriptAgentConfig.class) {
-                if (INSTANCE == null) {
-                    URL resource = ScriptAgentConfig.class.getClassLoader().getResource(fileName);
-                    if (resource != null) {
-                        String file = resource.getFile();
-                        INSTANCE = YamlConfigLoadUtil.load(
-                                new File(file),
-                                List.of(prefix.split("\\.")),
-                                ScriptAgentConfig.class
-                        );
-                    } else {
-                        throw new FileNotFoundException("config file not found");
+    public void pushLog(AppendLogger.LogContent content) {
+        try {
+            logCache.put(content);
+        } catch (InterruptedException e) {
+            log.error("put script node log error", e);
+        }
+    }
+
+    /**
+     * 开始上传日志命令处理器
+     *
+     * @param channel channel
+     * @param command command
+     * @return RemotingCommand
+     */
+    public RemotingCommand startUploadLogRCHandler(Channel channel, RemotingCommand command) {
+        // 开始上传日志
+        String logUploadTXID = command.getExtFieldsValue(BotExtFieldConstants.LOG_UPLOAD_TX_ID);
+
+        log.info("start upload log, logUploadTXID[{}]", logUploadTXID);
+        RemotingCommand response = new RemotingCommand();
+        response.setTransactionId(command.getTransactionId());
+        response.setCode(RemotingCommandCodeConstants.FAIL);
+        response.setFlag(BotRemotingCommandFlagConstants.START_UP_BOT_LOG_RESPONSE);
+
+        // 开启日志上传任务
+        if (startBotLogUploadTask(logUploadTXID)) {
+            response.setCode(RemotingCommandCodeConstants.SUCCESS);
+            log.info("start log upload task success, logUploadTXID[{}]", logUploadTXID);
+        } else {
+            log.error("start log upload task error, logUploadTXID[{}]", logUploadTXID);
+            response.addExtField(ExtFieldsConstants.REQUEST_ERROR_MSG,
+                    "script node log in uploading");
+        }
+
+        return response;
+    }
+
+    /**
+     * 关闭上传日志命令处理器
+     *
+     * @param channel channel
+     * @param command command
+     * @return RemotingCommand
+     */
+    public RemotingCommand stopUploadLogRCHandler(Channel channel, RemotingCommand command) {
+        upload.set(false);
+
+        RemotingCommand response = new RemotingCommand();
+        response.setTransactionId(command.getTransactionId());
+        response.setCode(RemotingCommandCodeConstants.SUCCESS);
+        response.setFlag(BotRemotingCommandFlagConstants.STOP_UP_BOT_LOG);
+
+        return response;
+    }
+
+    /**
+     * 开启bot日志上传任务
+     *
+     * @param logUploadTXID logUploadTXID
+     * @return boolean
+     */
+    private boolean startBotLogUploadTask(String logUploadTXID) {
+
+        if (judgeUploadAble(logUploadTXID)) {
+            synchronized (this) {
+                if (judgeUploadAble(logUploadTXID)) {
+                    bindUploadTXId = logUploadTXID;
+                    AppendLogger logger = botScriptAgent.getBot().logger;
+                    logger.setBeforePrintHandler(this::pushLog);
+                    AppendLogger.LogContent[] cachedLog = logger.getLogCache().toArray(new AppendLogger.LogContent[0]);
+
+                    logCache.clear();
+                    for (AppendLogger.LogContent logContent : cachedLog) {
+                        try {
+                            logCache.put(logContent);
+                        } catch (InterruptedException e) {
+                            log.error("put script node log error", e);
+                            upload.set(false);
+                            throw new RuntimeException(e);
+                        }
                     }
+                    upload.set(true);
+                } else {
+                    return false;
                 }
             }
+
+            botScriptAgent.getCallbackInvoker().execute(() -> {
+                while (upload.get()) {
+                    try {
+                        String oriTxId = bindUploadTXId;
+                        AppendLogger.LogContent logContent = logCache.poll(LOG_SEND_MAX_INTERVAL, TimeUnit.SECONDS);
+
+                        // 线程醒后需判断当前要发的txId有没有变化
+                        if (!bindUploadTXId.equals(oriTxId) || !upload.get()) {
+                            upload.set(false);
+                            continue;
+                        }
+
+                        RemotingCommand command = botScriptAgent.newRequestCommand(
+                                BotRemotingCommandFlagConstants.BOT_RUNTIME_LOG, true);
+                        command.addExtField(BotExtFieldConstants.LOG_UPLOAD_TX_ID, logUploadTXID);
+                        command.setPayLoad(JSONObject.toJSONString(logContent));
+
+                        log.debug("upload log, logUploadTXID[{}]", logUploadTXID);
+                        RemotingCommand response = botScriptAgent.sendRequest(command).get();
+                        if (response == null || !response.isSuccess()) {
+                            log.error("upload log response error, {}", response);
+                            upload.set(false);
+                        }
+                    } catch (InterruptedException e) {
+                        upload.set(false);
+                        log.error("log upload task interrupted");
+                    } catch (ExecutionException e) {
+                        upload.set(false);
+                        log.error("upload log error", e);
+                    }
+                }
+                log.warn("stopped upload log upload task");
+            });
+            return true;
         }
-        return INSTANCE;
+        return false;
     }
 
-    private String registryCenterUrl;   // 注册中心地址
-    private Integer nioThreadCount = 1; // netty nio 线程数
-    private ServiceInstance serviceInstance;    // 服务地址
-    private Integer serviceOfflineTtl; // 服务被判断为下线时间（ping interval）
-
-    private int metricUploadIntervalSeconds = 15 * 60;  //  指标上报间隔（秒）
-
-    private List<RPCServiceInfo<?>> rpcServiceInfos;
-
-    private static String toCamelCase(String name) {
-        String[] parts = name.split("-");
-        StringBuilder camelCase = new StringBuilder(parts[0]);
-        for (int i = 1; i < parts.length; i++) {
-            camelCase.append(parts[i].substring(0, 1).toUpperCase()).append(parts[i].substring(1));
-        }
-        return camelCase.toString();
+    private boolean judgeUploadAble(String logUploadTXID) {
+        return StrUtil.isNotBlank(logUploadTXID) && (!logUploadTXID.equals(bindUploadTXId)
+                || upload.compareAndSet(false, true));
     }
 }
-package cn.com.vortexa.control.processor;
+package cn.com.vortexa.script_node.util.log;
 
-import cn.com.vortexa.control.ScriptAgent;
-import cn.com.vortexa.control.config.ScriptAgentConfig;
-import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
-import cn.com.vortexa.control.constant.RemotingCommandFlagConstants;
-import cn.com.vortexa.control.dto.RemotingCommand;
-import cn.com.vortexa.control.util.DistributeIdMaker;
-import cn.com.vortexa.websocket.netty.handler.AbstractWebSocketClientHandler;
-import cn.com.vortexa.websocket.netty.constants.NettyConstants;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandlerContext;
+import cn.com.vortexa.common.util.DiscardingBlockingQueue;
+import cn.com.vortexa.script_node.config.AutoBotConfig;
+import lombok.AllArgsConstructor;
+import lombok.Data;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.function.BiFunction;
+import org.jetbrains.annotations.NotNull;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-/**
- * @author helei
- * @since 2025-03-13
- */
-@Slf4j
-public class ScriptAgentProcessorAdaptor extends AbstractWebSocketClientHandler<RemotingCommand> {
+import java.util.function.Consumer;
+
+public class AppendLogger {
+
+    private final Logger log;
+
+    private final StringBuilder format = new StringBuilder();
+
+    @Getter
+    private final DiscardingBlockingQueue<LogContent> logCache = new DiscardingBlockingQueue<>(
+        AutoBotConfig.LOG_CACHE_COUNT);
 
     @Setter
-    private ScriptAgent scriptAgent;
+    private Consumer<LogContent> beforePrintHandler;
 
-    @Getter
-    private final ScriptAgentConfig clientConfig;
-
-    public ScriptAgentProcessorAdaptor(ScriptAgentConfig clientConfig) {
-        this.clientConfig = clientConfig;
+    public AppendLogger(Class<?> clazz) {
+        log = LoggerFactory.getLogger(clazz);
     }
 
-    @Override
-    protected void handlerMessage(ChannelHandlerContext ctx, RemotingCommand remotingCommand) {
-        Integer opt = remotingCommand.getFlag();
-        String txId = remotingCommand.getTransactionId();
-
-        Channel channel = ctx.channel();
-        String key = channel.attr(NettyConstants.CLIENT_NAME).get();
-        log.debug("receive client[{}] command [{}]", key, remotingCommand);
-
-        CompletableFuture.supplyAsync(() -> switch (opt) {
-                    case RemotingCommandFlagConstants.PING -> this.handlerPing(remotingCommand);
-                    case RemotingCommandFlagConstants.PONG -> this.handlerPong(remotingCommand);
-                    case RemotingCommandFlagConstants.CUSTOM_COMMAND -> this.handlerCustomCommand(remotingCommand);
-                    case RemotingCommandFlagConstants.CUSTOM_COMMAND_RESPONSE -> this.handlerCustomCommandResponse(remotingCommand);
-                    default -> {
-                        BiFunction<Channel, RemotingCommand, RemotingCommand> processor = scriptAgent.getCustomRemotingCommandHandlerMap().get(opt);
-                        if (processor == null) {
-                            throw new IllegalArgumentException("resolve custom request[%s] error ".formatted(
-                                remotingCommand
-                            ));
-                        }
-                        // 执行自定义命令
-                        yield processor.apply(channel, remotingCommand);
-                    }
-                }, scriptAgent.getCallbackInvoker())
-                .whenCompleteAsync((response, throwable) -> {
-                    if (throwable != null) {
-                        log.error("remote command[{}} resolve error", remotingCommand, throwable);
-                        response = scriptAgent.newRequestCommand(-1 *opt, false);
-                        response.setTransactionId(txId);
-                        response.setCode(RemotingCommandCodeConstants.FAIL);
-                        scriptAgent.sendRequest(response);
-                        return;
-                    }
-                    if (response != null) {
-                        response.setTransactionId(txId);
-                        scriptAgent.sendRequest(response);
-                    }
-                });
-    }
-
-    @Override
-    protected Object getMessageId(RemotingCommand message) {
-        return message.getTransactionId();
-    }
-
-    @Override
-    protected void handleAllIdle(ChannelHandlerContext ctx) {
-        super.handleAllIdle(ctx);
-        RemotingCommand ping = RemotingCommand.generatePingCommand(scriptAgent.getName());
-        ping.setTransactionId(
-                DistributeIdMaker.DEFAULT.nextId(scriptAgent.getName())
-        );
-        log.info("send ping to remote");
-        scriptAgent.sendRequest(ping).whenComplete((response, throwable) -> {
-            if (throwable != null) {
-                log.error("send ping to remote server[{}] error", clientConfig.getRegistryCenterUrl());
-                return;
-            }
-            log.debug("receive remote server pong [{}]", response);
-        });
-    }
-
-    /**
-     * 处理Ping
-     *
-     * @param ping ping
-     * @return RemotingCommand
-     */
-    private RemotingCommand handlerPing(RemotingCommand ping) {
-        log.debug("receive pint[{}] from server", ping);
-        RemotingCommand pong = RemotingCommand.generatePongCommand(scriptAgent.getName());
-        pong.setTransactionId(ping.getTransactionId());
-        return pong;
-    }
-
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-
-        log.error("exception ", cause);
-    }
-
-    /**
-     * 处理Pong
-     *
-     * @param pong pong
-     * @return RemotingCommand
-     */
-    private RemotingCommand handlerPong(RemotingCommand pong) {
-        log.debug("receive pong[{}] from server", pong);
-        return null;
-    }
-
-
-    private RemotingCommand handlerCustomCommand(RemotingCommand remotingCommand) {
-        return scriptAgent.tryResolveCustomRequest(remotingCommand);
-    }
-
-    private RemotingCommand handlerCustomCommandResponse(RemotingCommand remotingCommand) {
-        return null;
-    }
-}
-package cn.com.vortexa.control.processor;
-
-import cn.com.vortexa.control.constant.*;
-import cn.com.vortexa.control.dto.RemotingCommand;
-import cn.com.vortexa.control.BotControlServer;
-import cn.com.vortexa.control.service.IRegistryService;
-import cn.com.vortexa.control.util.ControlServerUtil;
-import cn.com.vortexa.websocket.netty.handler.BaseWebSocketInboundHandler;
-import cn.com.vortexa.websocket.netty.constants.NettyConstants;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandler;
-import io.netty.channel.ChannelHandlerContext;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.concurrent.CompletableFuture;
-import java.util.function.BiFunction;
-
-/**
- * @author helei
- * @since 2025/03/11
- */
-@Slf4j
-@ChannelHandler.Sharable
-public class ControlServerProcessorAdaptor extends BaseWebSocketInboundHandler<RemotingCommand> {
-
-    @Getter
-    private final BotControlServer botControlServer;
-    private final PingCommandProcessor pingCommandProcessor;
-    private final PongCommandProcessor pongCommandProcessor;
-    private final ServiceRegistryProcessor serviceRegistryProcessor;
-    private final ServiceDiscoverProcessor serviceDiscoverProcessor;
-    private final ScriptAgentMetricsCommandProcessor scriptAgentMetricsCommandProcessor;
-
-    public ControlServerProcessorAdaptor(
-            BotControlServer nameServerService,
-            IRegistryService registryService
-    ) {
-        super();
-        this.botControlServer = nameServerService;
-        this.pingCommandProcessor = new PingCommandProcessor(botControlServer);
-        this.pongCommandProcessor = new PongCommandProcessor(botControlServer);
-        this.serviceRegistryProcessor = new ServiceRegistryProcessor(registryService);
-        this.serviceDiscoverProcessor = new ServiceDiscoverProcessor(registryService);
-        this.scriptAgentMetricsCommandProcessor = new ScriptAgentMetricsCommandProcessor(botControlServer);
-
-        init(this.botControlServer.getExecutorService());
-    }
-
-    @Override
-    protected void handlerMessage(ChannelHandlerContext ctx, RemotingCommand remotingCommand) {
-        Integer opt = remotingCommand.getFlag();
-        String txId = remotingCommand.getTransactionId();
-
-        Channel channel = ctx.channel();
-        String key = channel.attr(NettyConstants.CLIENT_NAME).get();
-        log.debug("receive client[{}] command [{}]", key, remotingCommand);
-
-        CompletableFuture.supplyAsync(() -> switch (opt) {
-                    case RemotingCommandFlagConstants.PING -> pingCommandProcessor.handlerPing(key, channel, remotingCommand);
-                    case RemotingCommandFlagConstants.PONG -> pongCommandProcessor.handlerPong(key, channel, remotingCommand);
-                    case RemotingCommandFlagConstants.CLIENT_REGISTRY_SERVICE -> {
-                        RemotingCommand registryResult = serviceRegistryProcessor.handlerClientServiceRegistry(
-                                channel, remotingCommand);
-                        if (registryResult.getCode() == RemotingCommandCodeConstants.SUCCESS) {
-                            // 给channel设置名字
-                            String group = remotingCommand.getGroup();
-                            String serviceId = remotingCommand.getServiceId();
-                            String clientId = remotingCommand.getClientId();
-                            String newKey = ControlServerUtil.generateServiceInstanceKey(group, serviceId, clientId);
-
-                            channel.attr(NettyConstants.CLIENT_NAME).set(newKey);
-
-                            // 注册成功，添加channel连接
-                            botControlServer.getConnectionService().addServiceChannel(newKey, channel);
-                        }
-
-                        // 返回状态
-                        registryResult.addExtField(
-                                ExtFieldsConstants.NAMESERVER_STATUS,
-                                botControlServer.getState().name()
-                        );
-                        yield registryResult;
-                    }
-                    case RemotingCommandFlagConstants.CLIENT_DISCOVER_SERVICE ->
-                            serviceDiscoverProcessor.handlerDiscoverService(channel, remotingCommand);
-                    case RemotingCommandFlagConstants.CUSTOM_COMMAND ->
-                            botControlServer.tryInvokeCustomCommand(channel, remotingCommand);
-                    case RemotingCommandFlagConstants.SCRIPT_AGENT_METRICS_UPLOAD ->
-                            scriptAgentMetricsCommandProcessor.handlerScriptAgentMetricsUpload(key, remotingCommand);
-                    default -> {
-                        BiFunction<Channel, RemotingCommand, RemotingCommand> customProcessor = botControlServer.getCustomRemotingCommandHandlerMap().get(opt);
-                        if (customProcessor != null) {
-                            yield customProcessor.apply(channel, remotingCommand);
-                        } else {
-                            throw new IllegalStateException("Unexpected value: " + opt);
-                        }
-                    }
-                }, getCallbackInvoker())
-                .whenCompleteAsync((response, ex) -> {
-                    if (ex != null) {
-                        log.error("client[{}] command process failed", key, ex);
-
-                        RemotingCommand errorResponse = new RemotingCommand();
-                        errorResponse.setFlag(-1 * opt);
-                        errorResponse.setCode(RemotingCommandCodeConstants.FAIL);
-                        errorResponse.addExtField(
-                                ExtFieldsConstants.REQUEST_ERROR_MSG,
-                                ex.getMessage()
-                        );
-
-                        ctx.channel().writeAndFlush(errorResponse);
-                    } else if (response != null) {
-                        response.setTransactionId(txId);
-
-                        log.debug("send response[{}]", response);
-                        ctx.channel().writeAndFlush(response);
-                    }
-                });
-    }
-
-    @Override
-    protected void handleAllIdle(ChannelHandlerContext ctx) {
-        Channel channel = ctx.channel();
-        log.debug("channel[{}][{}] not active long time, will close it",
-                channel.id(), channel.attr(NettyConstants.CLIENT_NAME));
-
-        botControlServer.closeChannel(channel);
-    }
-
-    @Override
-    protected Object getMessageId(RemotingCommand message) {
-        return message.getTransactionId();
-    }
-
-    @Override
-    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-
-        log.error("channel error", cause);
-    }
-}
-package cn.com.vortexa.control.service.impl;
-
-import cn.com.vortexa.control.dto.ConnectEntry;
-import cn.com.vortexa.control.service.IConnectionService;
-import cn.com.vortexa.control.util.ControlServerUtil;
-import cn.com.vortexa.websocket.netty.constants.NettyConstants;
-import io.netty.channel.Channel;
-import lombok.extern.slf4j.Slf4j;
-
-import org.apache.commons.lang3.BooleanUtils;
-
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-
-/**
- * @author helei
- * @since 2025/3/18 15:03
- */
-@Slf4j
-public class MemoryConnectionService implements IConnectionService {
-
-    private final ConcurrentMap<String, ConnectEntry> connectionMap = new ConcurrentHashMap<>();
-
-    @Override
-    public void addServiceChannel(String key, Channel channel) {
-        connectionMap.compute(key, (k, v) -> {
-            if (v == null) {
-                channel.attr(NettyConstants.CLIENT_NAME).set(key);
-                v = ConnectEntry.builder()
-                        .channel(channel)
-                        .build();
-            }
-            v.setChannel(channel);
-            v.setUsable(true);
-            v.setLastActiveTimestamp(System.currentTimeMillis());
-            return v;
-        });
-    }
-
-    @Override
-    public void addServiceChannel(String group, String serviceId, String instanceId, Channel channel) {
-        String key = ControlServerUtil.generateServiceInstanceKey(
-                group,
-                serviceId,
-                instanceId
-        );
-        addServiceChannel(key, channel);
-    }
-
-    @Override
-    public void closeServiceChannel(Channel channel, String key) {
-        ConnectEntry remove = connectionMap.remove(key);
-        if (remove != null) {
-            remove.close();
+    public AppendLogger append(Object context) {
+        if (!format.isEmpty()) {
+            format.append(" ");
         }
-        if (channel != null && channel.isActive()) {
-            channel.close();
+
+        format.append(context);
+
+        return this;
+    }
+
+    public void info(Object context) {
+        log.info("\033[32m" + getPrefix(LogType.INFO, context) + "\033[0m");
+    }
+
+    public void debug(Object context) {
+        log.info("\033[90m" + getPrefix(LogType.DEBUG, context) + "\033[0m");
+    }
+
+    public void warn(Object context) {
+        log.warn("\033[33m" + getPrefix(LogType.WARNING, context) + "\033[0m");
+    }
+
+    public void error(Object context) {
+        log.error("\033[31m" + getPrefix(LogType.ERROR, context) + "\033[0m");
+    }
+
+    public void error(Object context, Throwable e) {
+        log.error("\033[31m" + getPrefix(LogType.ERROR, context) + "\033[0m", e);
+    }
+
+    private @NotNull String getPrefix(LogType type, Object context) {
+        String logStr = format + " - " + context;
+        LogContent logContent = new LogContent(System.currentTimeMillis(), type, logStr);
+
+        try {
+            logCache.put(logContent);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
         }
-        log.debug("close service instance [{}] channel", key);
+        if (beforePrintHandler != null) {
+            beforePrintHandler.accept(logContent);
+        }
+        return logStr;
     }
 
-    @Override
-    public ConnectEntry getServiceInstanceChannel(String key) {
-        return connectionMap.get(key);
+    public enum LogType {
+        DEBUG,
+        SUCCESS,
+        INFO,
+        ERROR,
+        WARNING
     }
 
-    @Override
-    public void freshServiceInstanceConnection(String key, Channel channel) {
-        addServiceChannel(key, channel);
-    }
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    public static class LogContent {
+        private long datetime;
 
-    @Override
-    public List<String> queryOnlineInstanceKey() {
-        return connectionMap.entrySet().stream()
-                .filter(entry -> BooleanUtils.isTrue(entry.getValue().isUsable()))
-                .map(Map.Entry::getKey)
-                .toList();
+        private LogType type;
+
+        private String content;
     }
 }
-
-
