@@ -1,259 +1,3 @@
-package cn.com.vortexa.common.vo;
-
-import com.alibaba.fastjson.JSONArray;
-
-import cn.com.vortexa.common.entity.BotInfo;
-import cn.com.vortexa.common.entity.BotInstance;
-import lombok.Data;
-
-import java.util.List;
-
-/**
- * @author h30069248
- * @since 2025/4/2 14:13
- */
-@Data
-public class BotInstanceVO {
-
-    private BotInfo botInfo;
-
-    /**
-     * bot实例
-     */
-    private BotInstance botInstance;
-
-    /**
-     * 正在运行的jobName
-     */
-    private String runningJob;
-}
-package cn.com.vortexa.db_layer.service;
-
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.common.util.ConditionBuildUtil;
-import cn.com.vortexa.common.vo.BotInstanceVO;
-import cn.com.vortexa.db_layer.mapper.IBaseMapper;
-import cn.com.vortexa.db_layer.util.ConditionQueryUtil;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.github.pagehelper.PageInfo;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.transaction.annotation.Transactional;
-
-import java.io.Serializable;
-import java.lang.reflect.InvocationTargetException;
-import java.sql.SQLException;
-import java.util.List;
-import java.util.Map;
-import java.util.function.Consumer;
-
-@Slf4j
-public abstract class AbstractBaseService<M extends IBaseMapper<T>, T> extends ServiceImpl<M, T> implements IBaseService<T> {
-
-    private final Consumer<T> fillFunction;
-
-    protected AbstractBaseService(Consumer<T> fillFunction) {
-        this.fillFunction = fillFunction;
-    }
-
-    @Override
-    public T queryById(Serializable id) {
-        return getById(id);
-    }
-
-    /**
-     * 插入或更新
-     *
-     * @param t t
-     * @return Integer
-     */
-    @Override
-    public Integer insertOrUpdate(T t) throws SQLException {
-        fillFunction.accept(t);
-        return getBaseMapper().insertOrUpdate(t);
-    }
-
-
-    /**
-     * 批量插入或更新
-     *
-     * @param tList tList
-     * @return Integer
-     */
-    @Override
-    public Integer insertOrUpdateBatch(List<T> tList) throws SQLException {
-        int successCount = 0;
-        for (T t : tList) {
-            try {
-                Integer count = insertOrUpdate(t);
-                successCount += count == null ? 0 : count;
-            } catch (Exception e) {
-                throw new SQLException("insert or update error", e);
-            }
-        }
-
-        return successCount;
-    }
-
-    /**
-     * 条件分页查询
-     *
-     * @param page page
-     * @param limit limit
-     * @param filterMap filterMap
-     * @return PageInfo<T>
-     * @throws SQLException SQLException
-     */
-    @Override
-    public PageResult<T> conditionPageQuery(
-            int page,
-            int limit,
-            Map<String, Object> filterMap
-    ) throws SQLException {
-        return conditionPageQuery(page, limit, "params", filterMap);
-    }
-
-
-    /**
-     * 条件分页查询
-     *
-     * @param page      page
-     * @param limit     limit
-     * @param paramsKey paramsKey
-     * @param filterMap filterMap
-     * @return PageInfo<T>
-     * @throws SQLException SQLException
-     */
-    @Override
-    public PageResult<T> conditionPageQuery(
-            int page,
-            int limit,
-            String paramsKey,
-            Map<String, Object> filterMap
-    ) throws SQLException {
-        try {
-            PageInfo<T> pageInfo = ConditionQueryUtil.conditionQuery(
-                    page,
-                    limit,
-                    filterMap,
-                    paramsKey,
-                    condition -> getBaseMapper().multipleConditionQuery(condition),
-                    entityClass
-            );
-            List<T> list = pageInfo.getList();
-            PageResult<T> pageResult = new PageResult<>();
-            pageResult.setPages(pageInfo.getPages());
-            pageResult.setPageNum(pageInfo.getPageNum());
-            pageResult.setPageSize(pageInfo.getPageSize());
-            pageResult.setTotal(pageInfo.getTotal());
-            pageResult.setList(list);
-            return pageResult;
-        } catch (InvocationTargetException | NoSuchMethodException | InstantiationException |
-                 IllegalAccessException e
-        ) {
-            throw new SQLException("condition query error", e);
-        }
-    }
-
-    @Override
-    public List<T> conditionQuery(Map<String, Object> filterMap) throws SQLException {
-        return conditionQuery("params", filterMap);
-    }
-
-    @Override
-    public List<T> conditionQuery(String paramsKey, Map<String, Object> filterMap) throws SQLException {
-        T condition = null;
-        try {
-            condition = ConditionBuildUtil.getMapContainsCondition(
-                    filterMap,
-                    paramsKey,
-                    entityClass
-            );
-        } catch (NoSuchMethodException | InvocationTargetException | InstantiationException |
-                 IllegalAccessException e) {
-            throw new SQLException(e);
-        }
-
-        return getBaseMapper().multipleConditionQuery(condition);
-    }
-
-    /**
-     * 删除
-     *
-     * @param ids ids
-     * @return Result
-     */
-    @Transactional
-    public Boolean delete(List<Integer> ids) {
-        return removeBatchByIds(ids);
-    }
-
-
-    protected <T> T autoCast(Object obj) {
-        return obj == null ? null : (T) obj;
-    }
-
-    protected Integer toInteger(Object obj) {
-        return obj == null ? null : Integer.valueOf(obj.toString());
-    }
-}
-package cn.com.vortexa.bot_platform.controller;
-
-import cn.com.vortexa.bot_platform.dto.BotJob;
-import cn.com.vortexa.common.dto.control.RegisteredService;
-import cn.com.vortexa.common.exception.BotStartException;
-import cn.com.vortexa.common.vo.PageQuery;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.control.anno.RPCReference;
-import cn.com.vortexa.bot_platform.service.IBotInstanceService;
-import cn.com.vortexa.rpc.api.bot.IScriptAgentRPC;
-
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-import java.sql.SQLException;
-import java.util.List;
-
-/**
- * <p>
- * 前端控制器
- * </p>
- *
- * @author com.helei
- * @since 2025-02-18
- */
-@RestController
-@RequestMapping("/botInstance")
-public class BotInstanceController {
-
-    @Autowired
-    private IBotInstanceService botInstanceService;
-
-    @RPCReference
-    private IScriptAgentRPC scriptAgentRPC;
-
-    @PostMapping("/pageQuery")
-    public Result pageQuery(@RequestBody PageQuery query) throws SQLException {
-        return Result.ok(botInstanceService.conditionPageQueryAllInfo(
-                query.getPage(),
-                query.getLimit(),
-                query.getFilterMap()
-        ));
-    }
-
-    @PostMapping("/onlineInstance")
-    public Result onlineInstance() {
-        List<RegisteredService> registeredServices = botInstanceService.queryOnLineInstance();
-        return Result.ok(registeredServices);
-    }
-
-    @PostMapping("/startJob")
-    public Result startJob(@RequestBody BotJob botJob) throws BotStartException {
-        return botInstanceService.startJob(botJob);
-    }
-}
 package cn.com.vortexa.bot_platform.service.impl;
 
 import cn.com.vortexa.bot_platform.dto.BotJob;
@@ -279,6 +23,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import org.quartz.JobExecutionContext;
 import org.quartz.Scheduler;
+import org.quartz.SchedulerException;
 import org.quartz.Trigger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
@@ -326,22 +71,21 @@ public class BotInstanceServiceImpl extends AbstractBaseService<BotInstanceMappe
 
     @Override
     public PageResult<BotInstanceVO> conditionPageQueryAllInfo(Integer page, Integer limit,
-        Map<String, Object> filterMap) throws SQLException {
+                                                               Map<String, Object> filterMap) throws SQLException, SchedulerException {
 
         PageResult<BotInstance> result = super.conditionPageQuery(page, limit, filterMap);
 
         // 填充botInfo
         List<Integer> botIds = result.getList().stream().map(BotInstance::getBotId).toList();
         Map<Integer, BotInfo> idMapBotInfo = botInfoMapper.selectBatchIds(botIds)
-            .stream().collect(Collectors.toMap(BotInfo::getId, botInfo -> botInfo));
+                .stream().collect(Collectors.toMap(BotInfo::getId, botInfo -> botInfo));
 
-        List<String> botKeys = result.getList().stream().map(BotInstance::getBotKey).toList();
 
         // 查询运行中的任务
         Map<String, List<Trigger>> groupByBotKey = scheduler.getCurrentlyExecutingJobs()
-            .stream()
-            .map(JobExecutionContext::getTrigger)
-            .collect(Collectors.groupingBy(trigger -> trigger.getJobKey().getGroup()));
+                .stream()
+                .map(JobExecutionContext::getTrigger)
+                .collect(Collectors.groupingBy(trigger -> trigger.getJobKey().getGroup()));
 
         ArrayList<BotInstanceVO> voList = new ArrayList<>();
         for (BotInstance instance : result.getList()) {
@@ -351,17 +95,19 @@ public class BotInstanceServiceImpl extends AbstractBaseService<BotInstanceMappe
             vo.setBotInfo(idMapBotInfo.get(instance.getBotId()));
             vo.setRunningJob(JSONObject.toJSONString(groupByBotKey.get(instance.getBotKey())));
 
+            voList.add(vo);
+
             instance.addParam(BotInstance.BOT_INSTANCE_STATUS_KEY, botControlServer.getBotInstanceStatus(
-                WSControlSystemConstants.DEFAULT_GROUP, instance.getBotName(), instance.getBotKey()
+                    WSControlSystemConstants.DEFAULT_GROUP, instance.getBotName(), instance.getBotKey()
             ));
         }
 
         return new PageResult<>(
-            result.getTotal(),
-            voList,
-            result.getPages(),
-            result.getPageNum(),
-            result.getPageSize()
+                result.getTotal(),
+                voList,
+                result.getPages(),
+                result.getPageNum(),
+                result.getPageSize()
         );
     }
 
@@ -415,346 +161,449 @@ public class BotInstanceServiceImpl extends AbstractBaseService<BotInstanceMappe
         return getOne(new QueryWrapper<>(query));
     }
 }
-package cn.com.vortexa.bot_platform.service;
+package cn.com.vortexa.example.klok;
 
-import cn.com.vortexa.bot_platform.dto.BotJob;
-import cn.com.vortexa.common.dto.PageResult;
+import cn.com.vortexa.common.constants.HttpMethod;
 import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.control.RegisteredService;
-import cn.com.vortexa.common.entity.BotInstance;
-import cn.com.vortexa.common.exception.BotStartException;
-import cn.com.vortexa.common.vo.BotInstanceVO;
-import cn.com.vortexa.db_layer.service.IBaseService;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.common.entity.RewordInfo;
+import cn.com.vortexa.web3.EthWalletUtil;
+import cn.hutool.core.lang.Pair;
 
-import java.sql.SQLException;
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- * 服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-18
- */
-public interface IBotInstanceService extends IBaseService<BotInstance> {
-
-    Boolean existsBotInstance(BotInstance query);
-
-    /**
-     * 查询正在运行的bot实例
-     *
-     * @return List<BotInfo>
-     */
-    List<RegisteredService> queryOnLineInstance();
-
-    /**
-     * 启动job
-     *
-     * @param botJob botJob
-     * @return boolean
-     */
-    Result startJob(BotJob botJob) throws BotStartException;
-
-    /**
-     * 分页查询bot instance 的全信息
-     *
-     * @param page page
-     * @param limit limit
-     * @param filterMap filterMap
-     * @return PageResult<BotInstanceVO>
-     */
-    PageResult<BotInstanceVO> conditionPageQueryAllInfo(Integer page, Integer limit, Map<String, Object> filterMap)
-        throws SQLException;
-}
-package cn.com.vortexa.bot_platform;
-
-import cn.com.vortexa.common.util.BannerUtil;
-import cn.com.vortexa.db_layer.DBLayerAutoConfig;
-import cn.com.vortexa.job.JobAutoConfig;
-
-import org.mybatis.spring.annotation.MapperScan;
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-
-@SpringBootApplication
-@MapperScan(basePackages = "cn.com.vortexa.bot_platform.mapper")
-@ImportAutoConfiguration(classes = {DBLayerAutoConfig.class, JobAutoConfig.class})
-public class BotPlatformApplication {
-    public static void main(String[] args) {
-        BannerUtil.printBanner("");
-        SpringApplication.run(BotPlatformApplication.class, args);
-    }
-}
-package cn.com.vortexa.script_node.scriptagent;
-
+import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 
-import cn.com.vortexa.control.constant.ExtFieldsConstants;
-import cn.com.vortexa.script_node.config.AutoBotConfig;
-import cn.com.vortexa.common.constants.BotExtFieldConstants;
-import cn.com.vortexa.common.constants.BotRemotingCommandFlagConstants;
-import cn.com.vortexa.common.util.DiscardingBlockingQueue;
-import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
-import cn.com.vortexa.control.dto.RemotingCommand;
-import cn.com.vortexa.script_node.util.log.AppendLogger;
-import cn.hutool.core.util.StrUtil;
-import io.netty.channel.Channel;
-import lombok.extern.slf4j.Slf4j;
-
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * @author helei
- * @since 2025/3/26 17:04
- */
-@Slf4j
-public class BotScriptAgentLogUploadService {
-
-    public static final int LOG_SEND_MAX_INTERVAL = 30;
-
-    private final BotScriptAgent botScriptAgent;
-
-    private final DiscardingBlockingQueue<AppendLogger.LogContent> logCache = new DiscardingBlockingQueue<>(
-            AutoBotConfig.LOG_CACHE_COUNT);
-
-    private final AtomicBoolean upload = new AtomicBoolean(false);
-
-    private volatile String bindUploadTXId;
-
-    public BotScriptAgentLogUploadService(BotScriptAgent botScriptAgent) {
-        this.botScriptAgent = botScriptAgent;
-    }
-
-    public void pushLog(AppendLogger.LogContent content) {
-        try {
-            logCache.put(content);
-        } catch (InterruptedException e) {
-            log.error("put script node log error", e);
-        }
-    }
-
-    /**
-     * 开始上传日志命令处理器
-     *
-     * @param channel channel
-     * @param command command
-     * @return RemotingCommand
-     */
-    public RemotingCommand startUploadLogRCHandler(Channel channel, RemotingCommand command) {
-        // 开始上传日志
-        String logUploadTXID = command.getExtFieldsValue(BotExtFieldConstants.LOG_UPLOAD_TX_ID);
-
-        log.info("start upload log, logUploadTXID[{}]", logUploadTXID);
-        RemotingCommand response = new RemotingCommand();
-        response.setTransactionId(command.getTransactionId());
-        response.setCode(RemotingCommandCodeConstants.FAIL);
-        response.setFlag(BotRemotingCommandFlagConstants.START_UP_BOT_LOG_RESPONSE);
-
-        // 开启日志上传任务
-        if (startBotLogUploadTask(logUploadTXID)) {
-            response.setCode(RemotingCommandCodeConstants.SUCCESS);
-            log.info("start log upload task success, logUploadTXID[{}]", logUploadTXID);
-        } else {
-            log.error("start log upload task error, logUploadTXID[{}]", logUploadTXID);
-            response.addExtField(ExtFieldsConstants.REQUEST_ERROR_MSG,
-                    "script node log in uploading");
-        }
-
-        return response;
-    }
-
-    /**
-     * 关闭上传日志命令处理器
-     *
-     * @param channel channel
-     * @param command command
-     * @return RemotingCommand
-     */
-    public RemotingCommand stopUploadLogRCHandler(Channel channel, RemotingCommand command) {
-        upload.set(false);
-
-        RemotingCommand response = new RemotingCommand();
-        response.setTransactionId(command.getTransactionId());
-        response.setCode(RemotingCommandCodeConstants.SUCCESS);
-        response.setFlag(BotRemotingCommandFlagConstants.STOP_UP_BOT_LOG);
-
-        return response;
-    }
-
-    /**
-     * 开启bot日志上传任务
-     *
-     * @param logUploadTXID logUploadTXID
-     * @return boolean
-     */
-    private boolean startBotLogUploadTask(String logUploadTXID) {
-
-        if (judgeUploadAble(logUploadTXID)) {
-            synchronized (this) {
-                if (judgeUploadAble(logUploadTXID)) {
-                    bindUploadTXId = logUploadTXID;
-                    AppendLogger logger = botScriptAgent.getBot().logger;
-                    logger.setBeforePrintHandler(this::pushLog);
-                    AppendLogger.LogContent[] cachedLog = logger.getLogCache().toArray(new AppendLogger.LogContent[0]);
-
-                    logCache.clear();
-                    for (AppendLogger.LogContent logContent : cachedLog) {
-                        try {
-                            logCache.put(logContent);
-                        } catch (InterruptedException e) {
-                            log.error("put script node log error", e);
-                            upload.set(false);
-                            throw new RuntimeException(e);
-                        }
-                    }
-                    upload.set(true);
-                } else {
-                    return false;
-                }
-            }
-
-            botScriptAgent.getCallbackInvoker().execute(() -> {
-                while (upload.get()) {
-                    try {
-                        String oriTxId = bindUploadTXId;
-                        AppendLogger.LogContent logContent = logCache.poll(LOG_SEND_MAX_INTERVAL, TimeUnit.SECONDS);
-
-                        // 线程醒后需判断当前要发的txId有没有变化
-                        if (!bindUploadTXId.equals(oriTxId) || !upload.get()) {
-                            upload.set(false);
-                            continue;
-                        }
-
-                        RemotingCommand command = botScriptAgent.newRequestCommand(
-                                BotRemotingCommandFlagConstants.BOT_RUNTIME_LOG, true);
-                        command.addExtField(BotExtFieldConstants.LOG_UPLOAD_TX_ID, logUploadTXID);
-                        command.setPayLoad(JSONObject.toJSONString(logContent));
-
-                        log.debug("upload log, logUploadTXID[{}]", logUploadTXID);
-                        RemotingCommand response = botScriptAgent.sendRequest(command).get();
-                        if (response == null || !response.isSuccess()) {
-                            log.error("upload log response error, {}", response);
-                            upload.set(false);
-                        }
-                    } catch (InterruptedException e) {
-                        upload.set(false);
-                        log.error("log upload task interrupted");
-                    } catch (ExecutionException e) {
-                        upload.set(false);
-                        log.error("upload log error", e);
-                    }
-                }
-                log.warn("stopped upload log upload task");
-            });
-            return true;
-        }
-        return false;
-    }
-
-    private boolean judgeUploadAble(String logUploadTXID) {
-        return StrUtil.isNotBlank(logUploadTXID) && (!logUploadTXID.equals(bindUploadTXId)
-                || upload.compareAndSet(false, true));
-    }
-}
-package cn.com.vortexa.script_node.util.log;
-
-import cn.com.vortexa.common.util.DiscardingBlockingQueue;
-import cn.com.vortexa.script_node.config.AutoBotConfig;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
+import static cn.com.vortexa.example.klok.KlokBot.*;
 
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.function.Consumer;
+public class KlokApi {
 
-public class AppendLogger {
+    private static final String VERIFY_API = "https://api1-pp.klokapp.ai/v1/verify";
+    private static final String BASE_API = "https://api1-pp.klokapp.ai/v1/verify";
+    private static final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+        .withZone(java.time.ZoneOffset.UTC);
+    private static final Logger log = LoggerFactory.getLogger(KlokApi.class);
 
-    private final Logger log;
+    private final KlokBot klokBot;
 
-    private final StringBuilder format = new StringBuilder();
-
-    @Getter
-    private final DiscardingBlockingQueue<LogContent> logCache = new DiscardingBlockingQueue<>(
-        AutoBotConfig.LOG_CACHE_COUNT);
-
-    @Setter
-    private Consumer<LogContent> beforePrintHandler;
-
-    public AppendLogger(Class<?> clazz) {
-        log = LoggerFactory.getLogger(clazz);
+    public KlokApi(KlokBot klokBot) {
+        this.klokBot = klokBot;
     }
 
-    public AppendLogger append(Object context) {
-        if (!format.isEmpty()) {
-            format.append(" ");
+    public Result login(AccountContext accountContext) {
+        try {
+            Pair<String, String> signature = generateSignature(accountContext);
+            klokBot.logger.debug(accountContext.getSimpleInfo() + " signature success");
+
+            CompletableFuture<String> tokenFuture = verify(accountContext, signature.getKey(), signature.getValue(),
+                null);
+            String token = tokenFuture.get();
+            klokBot.logger.info(accountContext.getSimpleInfo() + " login success, token: " + token);
+            accountContext.setParam(SESSION_TOKEN, token);
+
+            return Result.ok(token);
+        } catch (Exception e) {
+            String errorMsg = accountContext.getSimpleInfo() + " login success, token: " +
+                (e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+            klokBot.logger.error(
+                errorMsg
+            );
+            return Result.fail(errorMsg);
+        }
+    }
+
+    public CompletableFuture<String> verify(
+        AccountContext accountContext,
+        String message,
+        String signature,
+        String inviteCode
+    ) {
+        JSONObject body = new JSONObject();
+        body.put("signedMessage", signature);
+        body.put("message", message);
+        body.put("referral_code", inviteCode);
+
+        Map<String, String> headers = generateACHeader(accountContext);
+
+        return klokBot.syncRequest(
+            accountContext.getProxy(),
+            VERIFY_API,
+            HttpMethod.POST,
+            headers,
+            null,
+            body,
+            () -> accountContext.getSimpleInfo() + " send verify request"
+        ).thenApply(response -> {
+            JSONObject result = JSONObject.parseObject(response);
+
+            if ("Verification successful".equals(result.getString("message"))) {
+                return result.getString("session_token");
+            } else {
+                throw new RuntimeException("Verification failed, " + response);
+            }
+        });
+    }
+
+    public void dailyTask(AccountContext accountContext) throws ExecutionException, InterruptedException {
+        String simpleInfo = accountContext.getSimpleInfo();
+        int count = (int) accountContext.getParams().getOrDefault(DAILY_TIMES, 10);
+        Result result = login(accountContext);
+
+        klokBot.logger.debug(simpleInfo + " start daily task, remaining: " + count);
+
+        if (result.getSuccess()) {
+            String token = accountContext.getParam(SESSION_TOKEN);
+
+            Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
+            headers.put("x-session-token", token);
+
+            int errorCount = 0;
+            while (count > 0) {
+                JSONObject limitCheck = accountRequestLimitCheck(accountContext, headers);
+                if (limitCheck.getInteger("remaining") <= 0) {
+                    klokBot.logger.warn(simpleInfo + " Daily limit reached " + count);
+                    return;
+                }
+
+                JSONObject body = new JSONObject();
+                body.put("id", UUID.randomUUID().toString());
+                body.put("messages", buildChatMessage());
+                body.put("model", "llama-3.3-70b-instruct");
+                body.put("created_at", currentISOTime());
+                body.put("language", "english");
+
+                try {
+                    int finalCount = count;
+                    String chatResult = klokBot.syncRequest(
+                        accountContext.getProxy(),
+                        BASE_API + "/v1/chat",
+                        HttpMethod.POST,
+                        headers,
+                        null,
+                        body,
+                        () -> simpleInfo + " send chat request - " + finalCount
+                    ).get();
+                    klokBot.logger.info("%s daily chat %d finish...".formatted(simpleInfo, count));
+                } catch (Exception e) {
+                    klokBot.logger.error("daily chat %d error, %s".formatted(count,
+                        e.getCause() == null ? e.getCause().getMessage() : e.getMessage()));
+                    errorCount++;
+                }
+                count++;
+            }
+
+            if (errorCount > 0) {
+                accountContext.setParam(DAILY_TIMES, errorCount);
+            }
+        }
+    }
+
+    public JSONObject accountRequestLimitCheck(AccountContext accountContext, Map<String, String> headers)
+        throws ExecutionException, InterruptedException {
+
+        String limitResponse = klokBot.syncRequest(
+            accountContext.getProxy(),
+            BASE_API + "/v1/rate-limit",
+            HttpMethod.GET,
+            headers,
+            null,
+            null,
+            () -> accountContext.getSimpleInfo() + " check request limit"
+        ).get();
+
+        return JSONObject.parseObject(limitResponse);
+    }
+
+    public Result rewordQuery(AccountContext accountContext) {
+        String token = accountContext.getParam(SESSION_TOKEN);
+        String simpleInfo = accountContext.getSimpleInfo();
+        if (token == null) {
+            return Result.fail(simpleInfo + " rewordQuery failed, token not found");
         }
 
-        format.append(context);
+        Map<String, String> headers = generateACHeader(accountContext);
 
+        try {
+            String responseStr = klokBot.syncRequest(
+                accountContext.getProxy(),
+                BASE_API + "/v1/chat/stats",
+                HttpMethod.GET,
+                headers,
+                null,
+                null,
+                () -> simpleInfo + " send reword query request"
+            ).get();
+
+            JSONObject response = JSONObject.parseObject(responseStr);
+            response.put("message", "Reword query success");
+            if (!accountContext.getParams().containsKey(DAILY_LIMIT)) {
+                accountContext.setParam(DAILY_LIMIT, response.getInteger("remaining"));
+            }
+            accountContext.getRewordInfo().setTotalPoints(response.getDouble("points_earned"));
+            return Result.ok();
+        } catch (InterruptedException | ExecutionException e) {
+            String errorMsg = simpleInfo + " reword query error, " + (e.getCause() == null ? e.getCause().getMessage()
+                : e.getMessage());
+            klokBot.logger.error(errorMsg);
+            return Result.fail(errorMsg);
+        }
+    }
+
+    private static @NotNull Map<String, String> generateACHeader(AccountContext accountContext) {
+        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
+        headers.put("origin", "https://klokapp.ai");
+        headers.put("referer", "https://klokapp.ai/");
+        headers.put("content-type", "application/json");
+        headers.put("accept", "*/*");
+        return headers;
+    }
+
+    private JSONArray buildChatMessage() {
+        JSONArray array = new JSONArray();
+        JSONObject jb = new JSONObject();
+        jb.put("role", "user");
+        jb.put("content", "");
+        array.add(jb);
+        return array;
+    }
+
+    private String buildMessage(String address) {
+        String template
+            = "klokapp.ai wants you to sign in with your Ethereum account:\n%s\n\n\nURI: https://klokapp.ai/\nVersion: 1\nChain ID: 1\nNonce: %s\nIssued At: %s";
+
+        // 使用自定义格式化器，确保毫秒部分保留 3 位
+        String issuedAt = currentISOTime();
+
+        return template.formatted(address, EthWalletUtil.getRandomNonce(), issuedAt);
+    }
+
+    private static @NotNull String currentISOTime() {
+        // 获取当前时间的 Instant 对象（UTC 时间）
+        Instant now = Instant.now();
+
+        return formatter.format(now);
+    }
+
+    private Pair<String, String> generateSignature(AccountContext accountContext) {
+        String primaryKey = accountContext.getParam(PRIMARY_KEY);
+        String address = accountContext.getParam(ETH_ADDRESS);
+        //        if (StrUtil.isBlank(address)) {
+        address = EthWalletUtil.getETHAddress(primaryKey);
+        accountContext.setParam(ETH_ADDRESS, address);
+        //        }
+        String message = buildMessage("0x2dB603E747E2db72747E5b972006f19B2D0d73a1");
+
+        return new Pair<>(
+            message,
+            EthWalletUtil.signatureMessage2String(primaryKey, message)
+        );
+    }
+}
+
+package cn.com.vortexa.example.klok;
+
+
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.com.vortexa.common.exception.BotStartException;
+import cn.com.vortexa.script_node.ScriptNodeLauncher;
+import cn.com.vortexa.script_node.anno.BotApplication;
+import cn.com.vortexa.script_node.anno.BotMethod;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.script_node.config.AutoBotConfig;
+import cn.com.vortexa.script_node.service.BotApi;
+import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.context.annotation.Bean;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutionException;
+
+@Slf4j
+@BotApplication(
+        name = "klok_bot",
+        accountParams = {KlokBot.PRIMARY_KEY}
+)
+public class KlokBot extends AutoLaunchBot<KlokBot> {
+
+    public static final String PRIMARY_KEY = "primary_key";
+    public static final String ETH_ADDRESS = "eth_address";
+    public static final String SESSION_TOKEN = "session_token";
+    public static final String DAILY_TIMES = "daily_times";
+    public static final String DAILY_LIMIT = "daily_limit";
+
+    private KlokApi klokApi;
+
+    @Override
+    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
+        klokApi = new KlokApi(this);
+    }
+
+    @Override
+    protected KlokBot getInstance() {
         return this;
     }
 
-    public void info(Object context) {
-        log.info("\033[32m" + getPrefix(LogType.INFO, context) + "\033[0m");
+    @BotMethod(jobType = BotJobType.LOGIN)
+    public Result login(AccountContext accountContext) {
+        if (accountContext.getId() != 1) return Result.fail("test error");
+        return klokApi.login(accountContext);
     }
 
-    public void debug(Object context) {
-        log.info("\033[90m" + getPrefix(LogType.DEBUG, context) + "\033[0m");
+    @BotMethod(jobType = BotJobType.QUERY_REWARD, intervalInSecond = 24 * 60 * 60)
+    public Result rewordQuery(AccountContext exampleAC, List<AccountContext> sameBAIDList) {
+        return klokApi.rewordQuery(exampleAC);
     }
 
-    public void warn(Object context) {
-        log.warn("\033[33m" + getPrefix(LogType.WARNING, context) + "\033[0m");
+    @BotMethod(jobType = BotJobType.TIMED_TASK, intervalInSecond = 6 * 60 * 60)
+    public void dailyTask(AccountContext accountContext) throws ExecutionException, InterruptedException {
+        klokApi.dailyTask(accountContext);
     }
 
-    public void error(Object context) {
-        log.error("\033[31m" + getPrefix(LogType.ERROR, context) + "\033[0m");
-    }
+    public static void main(String[] args) throws BotStartException, BotInitException {
+        List<String> list = new ArrayList<>(java.util.List.of(args));
+        list.add("--vortexa.botKey=klok_test");
+        list.add("--vortexa.customConfig.invite_code=KMDiFtp9");
+        list.add("--vortexa.accountConfig.configFilePath=klok_google.xlsx");
+        list.add("--add-opens java.base/java.lang=ALL-UNNAMED");
 
-    public void error(Object context, Throwable e) {
-        log.error("\033[31m" + getPrefix(LogType.ERROR, context) + "\033[0m", e);
+        ScriptNodeLauncher.launch(KlokBot.class, list.toArray(new String[0]));
     }
+}
 
-    private @NotNull String getPrefix(LogType type, Object context) {
-        String logStr = format + " - " + context;
-        LogContent logContent = new LogContent(System.currentTimeMillis(), type, logStr);
+package cn.com.vortexa.script_node;
+
+import cn.com.vortexa.script_node.config.AutoBotConfig;
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.typehandler.JsonTypeHandler;
+import cn.com.vortexa.common.util.typehandler.LocalDateTimeTypeHandler;
+import cn.com.vortexa.common.util.typehandler.MapTextTypeHandler;
+import cn.com.vortexa.db_layer.DBLayerAutoConfig;
+import cn.com.vortexa.db_layer.plugn.table_shard.TableShardInterceptor;
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.BotIdBasedTableShardStrategy;
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
+import cn.com.vortexa.job.JobAutoConfig;
+import cn.hutool.core.util.StrUtil;
+import com.zaxxer.hikari.HikariDataSource;
+import org.apache.ibatis.plugin.Interceptor;
+import org.apache.ibatis.session.SqlSessionFactory;
+import org.mybatis.spring.SqlSessionFactoryBean;
+import org.mybatis.spring.annotation.MapperScan;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.PlatformTransactionManager;
+
+import javax.sql.DataSource;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+@Configuration
+@ImportAutoConfiguration({DBLayerAutoConfig.class, JobAutoConfig.class})
+@ComponentScan({"cn.com.vortexa.script_node.service.impl", "cn.com.vortexa.script_node.config"})
+@MapperScan(basePackages = "cn.com.vortexa.script_node.mapper")
+public class ScriptNodeAutoConfig {
+
+    @Autowired
+    private JsonTypeHandler jsonTypeHandler;
+
+    @Autowired
+    private MapTextTypeHandler mapTextTypeHandler;
+
+    @Autowired
+    private LocalDateTimeTypeHandler localDateTimeTypeHandler;
+
+    @Autowired
+    private AutoBotConfig botConfig;
+
+
+    @Bean("vortexaDataSource")
+    public DataSource vortexaDataSource() {
+        String botKey = botConfig.getBotKey();
+        if (StrUtil.isBlank(botKey)) {
+            throw new IllegalArgumentException("botKey is empty");
+        }
 
         try {
-            logCache.put(logContent);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+            String path = tryCreateDBFile(botKey);
+            HikariDataSource dataSource = new HikariDataSource();
+            dataSource.setJdbcUrl("jdbc:sqlite:/" + path);
+            return dataSource;
+        } catch (IOException e) {
+            throw new RuntimeException("create Bot[%s]DB file error".formatted(botKey), e);
         }
-        if (beforePrintHandler != null) {
-            beforePrintHandler.accept(logContent);
-        }
-        return logStr;
     }
 
-    public enum LogType {
-        DEBUG,
-        SUCCESS,
-        INFO,
-        ERROR,
-        WARNING
+
+    @Bean
+    public SqlSessionFactory sqlSessionFactory() throws Exception {
+        SqlSessionFactoryBean factoryBean = new SqlSessionFactoryBean();
+
+        factoryBean.setDataSource(vortexaDataSource());
+        factoryBean.setMapperLocations(new PathMatchingResourcePatternResolver()
+                .getResources("classpath:/mapper/*.xml"));
+
+        factoryBean.addTypeHandlers(jsonTypeHandler, mapTextTypeHandler, localDateTimeTypeHandler);
+        factoryBean.addPlugins(tableShardInterceptor());
+
+        return factoryBean.getObject();
     }
 
-    @Data
-    @AllArgsConstructor
-    @NoArgsConstructor
-    public static class LogContent {
-        private long datetime;
+    // 配置事务管理器
+    @Bean(name = "transactionManager")
+    public PlatformTransactionManager transactionManager() {
+        return new DataSourceTransactionManager(vortexaDataSource());
+    }
 
-        private LogType type;
+    @Bean
+    public ITableShardStrategy tableShardStrategy() {
+        return new BotIdBasedTableShardStrategy();
+    }
 
-        private String content;
+    @Bean
+    public Interceptor tableShardInterceptor() {
+        return new TableShardInterceptor(tableShardStrategy());
+    }
+
+
+    /**
+     * 尝试创建DB File
+     *
+     * @param botKey botKey
+     * @return db file absolutePath
+     * @throws IOException IOException
+     */
+    private static String tryCreateDBFile(String botKey) throws IOException {
+        // 创建BotKey对应的数据库文件
+        Path absolutePath = Paths.get(FileUtil.getBotAppConfigPath(), botKey, "bot_" + botKey + ".db");
+
+        if (Files.notExists(absolutePath)) {
+            if (Files.notExists(absolutePath.getParent())) {
+                Files.createDirectories(absolutePath.getParent());
+            }
+            Files.createFile(absolutePath);
+        }
+
+        return absolutePath.toString();
     }
 }
