@@ -1,609 +1,743 @@
-package cn.com.vortexa.bot_platform.service.impl;
+package cn.com.helei.bot.app.nodego;
 
-import cn.com.vortexa.bot_platform.dto.BotJob;
-import cn.com.vortexa.bot_platform.script_control.BotPlatformControlServer;
-import cn.com.vortexa.common.vo.BotInstanceVO;
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.exception.BotStartException;
-import cn.com.vortexa.common.dto.control.RegisteredService;
-import cn.com.vortexa.bot_platform.mapper.BotInfoMapper;
-import cn.com.vortexa.control.constant.WSControlSystemConstants;
-import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.common.entity.BotInfo;
-import cn.com.vortexa.common.entity.BotInstance;
-import cn.com.vortexa.bot_platform.mapper.BotInstanceMapper;
-import cn.com.vortexa.bot_platform.service.IBotInstanceService;
-
-import com.alibaba.fastjson.JSONObject;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-
-import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
+import cn.com.helei.bot.core.bot.anno.BotApplication;
+import cn.com.helei.bot.core.bot.anno.BotMethod;
+import cn.com.helei.bot.core.bot.base.AnnoDriveAutoBot;
+import cn.com.helei.bot.core.bot.constants.BotJobType;
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.dto.config.AutoBotConfig;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
 import lombok.extern.slf4j.Slf4j;
 
-import org.quartz.JobExecutionContext;
-import org.quartz.Scheduler;
-import org.quartz.SchedulerException;
-import org.quartz.Trigger;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.stereotype.Service;
-
-import java.sql.SQLException;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ExecutionException;
-import java.util.stream.Collectors;
-
-/**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-18
- */
-@Slf4j
-@Service
-public class BotInstanceServiceImpl extends AbstractBaseService<BotInstanceMapper, BotInstance>
-        implements IBotInstanceRPC, IBotInstanceService {
-
-    @Autowired
-    private BotInfoMapper botInfoMapper;
-
-    @Lazy
-    @Autowired
-    private BotPlatformControlServer botControlServer;
-
-    @Autowired
-    private Scheduler scheduler;
-
-    public BotInstanceServiceImpl() {
-        super(botInstance -> {
-            botInstance.setInsertDatetime(LocalDateTime.now());
-            botInstance.setUpdateDatetime(LocalDateTime.now());
-            botInstance.setIsValid(1);
-        });
-    }
-
-
-    @Override
-    public PageResult<BotInstanceVO> conditionPageQueryAllInfo(Integer page, Integer limit,
-                                                               Map<String, Object> filterMap) throws SQLException, SchedulerException {
-
-        PageResult<BotInstance> result = super.conditionPageQuery(page, limit, filterMap);
-
-        // 填充botInfo
-        List<Integer> botIds = result.getList().stream().map(BotInstance::getBotId).toList();
-        Map<Integer, BotInfo> idMapBotInfo = botInfoMapper.selectBatchIds(botIds)
-                .stream().collect(Collectors.toMap(BotInfo::getId, botInfo -> botInfo));
-
-
-        // 查询运行中的任务
-        Map<String, List<Trigger>> groupByBotKey = scheduler.getCurrentlyExecutingJobs()
-                .stream()
-                .map(JobExecutionContext::getTrigger)
-                .collect(Collectors.groupingBy(trigger -> trigger.getJobKey().getGroup()));
-
-        ArrayList<BotInstanceVO> voList = new ArrayList<>();
-        for (BotInstance instance : result.getList()) {
-            BotInstanceVO vo = new BotInstanceVO();
-
-            vo.setBotInstance(instance);
-            vo.setBotInfo(idMapBotInfo.get(instance.getBotId()));
-            vo.setRunningJob(JSONObject.toJSONString(groupByBotKey.get(instance.getBotKey())));
-
-            voList.add(vo);
-
-            instance.addParam(BotInstance.BOT_INSTANCE_STATUS_KEY, botControlServer.getBotInstanceStatus(
-                    WSControlSystemConstants.DEFAULT_GROUP, instance.getBotName(), instance.getBotKey()
-            ));
-        }
-
-        return new PageResult<>(
-                result.getTotal(),
-                voList,
-                result.getPages(),
-                result.getPageNum(),
-                result.getPageSize()
-        );
-    }
-
-    @Override
-    public Boolean existsBotInstance(BotInstance query) {
-        return getBaseMapper().exists(new QueryWrapper<>(query));
-    }
-
-    @Override
-    public List<RegisteredService> queryOnLineInstance() {
-        List<RegisteredService> res = new ArrayList<>();
-        List<String> keys = botControlServer.getConnectionService().queryOnlineInstanceKey();
-        keys.forEach(key -> res.addAll(botControlServer.getRegistryService().queryServiceInstance(key)));
-        res.forEach(service -> {
-            BotInstanceMapper mapper = getBaseMapper();
-            BotInstance botInstance = mapper.selectOne(
-                    new QueryWrapper<>(BotInstance.builder().botKey(service.getAddress().getInstanceId()).build())
-            );
-            service.addProps("bot_info", botInstance);
-        });
-        return res;
-    }
-
-    @Override
-    public Result startJob(BotJob botJob) throws BotStartException {
-        try {
-            return botControlServer.startJob(
-                    botJob.getGroup(),
-                    botJob.getBotName(),
-                    botJob.getBotKey(),
-                    botJob.getJobName()
-            ).get();
-        } catch (InterruptedException | ExecutionException e) {
-            log.error("[{}] start job error", botJob, e);
-            return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
-        }
-    }
-
-    @Override
-    public Boolean existsBotInstanceRPC(BotInstance query) {
-        return existsBotInstance(query);
-    }
-
-    @Override
-    public Integer insertOrUpdateRPC(BotInstance instance) throws SQLException {
-        return insertOrUpdate(instance);
-    }
-
-    @Override
-    public BotInstance selectOneRPC(BotInstance query) {
-        return getOne(new QueryWrapper<>(query));
-    }
-}
-package cn.com.vortexa.example.klok;
-
-import cn.com.vortexa.common.constants.HttpMethod;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.AccountContext;
-import cn.com.vortexa.common.entity.RewordInfo;
-import cn.com.vortexa.web3.EthWalletUtil;
-import cn.hutool.core.lang.Pair;
-
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
-
-import java.time.Instant;
-import java.time.format.DateTimeFormatter;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-
-import static cn.com.vortexa.example.klok.KlokBot.*;
-
-import org.jetbrains.annotations.NotNull;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-public class KlokApi {
-
-    private static final String VERIFY_API = "https://api1-pp.klokapp.ai/v1/verify";
-    private static final String BASE_API = "https://api1-pp.klokapp.ai/v1/verify";
-    private static final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-        .withZone(java.time.ZoneOffset.UTC);
-    private static final Logger log = LoggerFactory.getLogger(KlokApi.class);
-
-    private final KlokBot klokBot;
-
-    public KlokApi(KlokBot klokBot) {
-        this.klokBot = klokBot;
-    }
-
-    public Result login(AccountContext accountContext) {
-        try {
-            Pair<String, String> signature = generateSignature(accountContext);
-            klokBot.logger.debug(accountContext.getSimpleInfo() + " signature success");
-
-            CompletableFuture<String> tokenFuture = verify(accountContext, signature.getKey(), signature.getValue(),
-                null);
-            String token = tokenFuture.get();
-            klokBot.logger.info(accountContext.getSimpleInfo() + " login success, token: " + token);
-            accountContext.setParam(SESSION_TOKEN, token);
-
-            return Result.ok(token);
-        } catch (Exception e) {
-            String errorMsg = accountContext.getSimpleInfo() + " login success, token: " +
-                (e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
-            klokBot.logger.error(
-                errorMsg
-            );
-            return Result.fail(errorMsg);
-        }
-    }
-
-    public CompletableFuture<String> verify(
-        AccountContext accountContext,
-        String message,
-        String signature,
-        String inviteCode
-    ) {
-        JSONObject body = new JSONObject();
-        body.put("signedMessage", signature);
-        body.put("message", message);
-        body.put("referral_code", inviteCode);
-
-        Map<String, String> headers = generateACHeader(accountContext);
-
-        return klokBot.syncRequest(
-            accountContext.getProxy(),
-            VERIFY_API,
-            HttpMethod.POST,
-            headers,
-            null,
-            body,
-            () -> accountContext.getSimpleInfo() + " send verify request"
-        ).thenApply(response -> {
-            JSONObject result = JSONObject.parseObject(response);
-
-            if ("Verification successful".equals(result.getString("message"))) {
-                return result.getString("session_token");
-            } else {
-                throw new RuntimeException("Verification failed, " + response);
-            }
-        });
-    }
-
-    public void dailyTask(AccountContext accountContext) throws ExecutionException, InterruptedException {
-        String simpleInfo = accountContext.getSimpleInfo();
-        int count = (int) accountContext.getParams().getOrDefault(DAILY_TIMES, 10);
-        Result result = login(accountContext);
-
-        klokBot.logger.debug(simpleInfo + " start daily task, remaining: " + count);
-
-        if (result.getSuccess()) {
-            String token = accountContext.getParam(SESSION_TOKEN);
-
-            Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
-            headers.put("x-session-token", token);
-
-            int errorCount = 0;
-            while (count > 0) {
-                JSONObject limitCheck = accountRequestLimitCheck(accountContext, headers);
-                if (limitCheck.getInteger("remaining") <= 0) {
-                    klokBot.logger.warn(simpleInfo + " Daily limit reached " + count);
-                    return;
-                }
-
-                JSONObject body = new JSONObject();
-                body.put("id", UUID.randomUUID().toString());
-                body.put("messages", buildChatMessage());
-                body.put("model", "llama-3.3-70b-instruct");
-                body.put("created_at", currentISOTime());
-                body.put("language", "english");
-
-                try {
-                    int finalCount = count;
-                    String chatResult = klokBot.syncRequest(
-                        accountContext.getProxy(),
-                        BASE_API + "/v1/chat",
-                        HttpMethod.POST,
-                        headers,
-                        null,
-                        body,
-                        () -> simpleInfo + " send chat request - " + finalCount
-                    ).get();
-                    klokBot.logger.info("%s daily chat %d finish...".formatted(simpleInfo, count));
-                } catch (Exception e) {
-                    klokBot.logger.error("daily chat %d error, %s".formatted(count,
-                        e.getCause() == null ? e.getCause().getMessage() : e.getMessage()));
-                    errorCount++;
-                }
-                count++;
-            }
-
-            if (errorCount > 0) {
-                accountContext.setParam(DAILY_TIMES, errorCount);
-            }
-        }
-    }
-
-    public JSONObject accountRequestLimitCheck(AccountContext accountContext, Map<String, String> headers)
-        throws ExecutionException, InterruptedException {
-
-        String limitResponse = klokBot.syncRequest(
-            accountContext.getProxy(),
-            BASE_API + "/v1/rate-limit",
-            HttpMethod.GET,
-            headers,
-            null,
-            null,
-            () -> accountContext.getSimpleInfo() + " check request limit"
-        ).get();
-
-        return JSONObject.parseObject(limitResponse);
-    }
-
-    public Result rewordQuery(AccountContext accountContext) {
-        String token = accountContext.getParam(SESSION_TOKEN);
-        String simpleInfo = accountContext.getSimpleInfo();
-        if (token == null) {
-            return Result.fail(simpleInfo + " rewordQuery failed, token not found");
-        }
-
-        Map<String, String> headers = generateACHeader(accountContext);
-
-        try {
-            String responseStr = klokBot.syncRequest(
-                accountContext.getProxy(),
-                BASE_API + "/v1/chat/stats",
-                HttpMethod.GET,
-                headers,
-                null,
-                null,
-                () -> simpleInfo + " send reword query request"
-            ).get();
-
-            JSONObject response = JSONObject.parseObject(responseStr);
-            response.put("message", "Reword query success");
-            if (!accountContext.getParams().containsKey(DAILY_LIMIT)) {
-                accountContext.setParam(DAILY_LIMIT, response.getInteger("remaining"));
-            }
-            accountContext.getRewordInfo().setTotalPoints(response.getDouble("points_earned"));
-            return Result.ok();
-        } catch (InterruptedException | ExecutionException e) {
-            String errorMsg = simpleInfo + " reword query error, " + (e.getCause() == null ? e.getCause().getMessage()
-                : e.getMessage());
-            klokBot.logger.error(errorMsg);
-            return Result.fail(errorMsg);
-        }
-    }
-
-    private static @NotNull Map<String, String> generateACHeader(AccountContext accountContext) {
-        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
-        headers.put("origin", "https://klokapp.ai");
-        headers.put("referer", "https://klokapp.ai/");
-        headers.put("content-type", "application/json");
-        headers.put("accept", "*/*");
-        return headers;
-    }
-
-    private JSONArray buildChatMessage() {
-        JSONArray array = new JSONArray();
-        JSONObject jb = new JSONObject();
-        jb.put("role", "user");
-        jb.put("content", "");
-        array.add(jb);
-        return array;
-    }
-
-    private String buildMessage(String address) {
-        String template
-            = "klokapp.ai wants you to sign in with your Ethereum account:\n%s\n\n\nURI: https://klokapp.ai/\nVersion: 1\nChain ID: 1\nNonce: %s\nIssued At: %s";
-
-        // 使用自定义格式化器，确保毫秒部分保留 3 位
-        String issuedAt = currentISOTime();
-
-        return template.formatted(address, EthWalletUtil.getRandomNonce(), issuedAt);
-    }
-
-    private static @NotNull String currentISOTime() {
-        // 获取当前时间的 Instant 对象（UTC 时间）
-        Instant now = Instant.now();
-
-        return formatter.format(now);
-    }
-
-    private Pair<String, String> generateSignature(AccountContext accountContext) {
-        String primaryKey = accountContext.getParam(PRIMARY_KEY);
-        String address = accountContext.getParam(ETH_ADDRESS);
-        //        if (StrUtil.isBlank(address)) {
-        address = EthWalletUtil.getETHAddress(primaryKey);
-        accountContext.setParam(ETH_ADDRESS, address);
-        //        }
-        String message = buildMessage("0x2dB603E747E2db72747E5b972006f19B2D0d73a1");
-
-        return new Pair<>(
-            message,
-            EthWalletUtil.signatureMessage2String(primaryKey, message)
-        );
-    }
-}
-
-package cn.com.vortexa.example.klok;
-
-
-import cn.com.vortexa.common.constants.BotJobType;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.AccountContext;
-import cn.com.vortexa.common.exception.BotInitException;
-import cn.com.vortexa.common.exception.BotStartException;
-import cn.com.vortexa.script_node.ScriptNodeLauncher;
-import cn.com.vortexa.script_node.anno.BotApplication;
-import cn.com.vortexa.script_node.anno.BotMethod;
-import cn.com.vortexa.script_node.bot.AutoLaunchBot;
-import cn.com.vortexa.script_node.config.AutoBotConfig;
-import cn.com.vortexa.script_node.service.BotApi;
-import lombok.extern.slf4j.Slf4j;
-
-import org.springframework.context.annotation.Bean;
-
-import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
 @Slf4j
-@BotApplication(
-        name = "klok_bot",
-        accountParams = {KlokBot.PRIMARY_KEY}
-)
-public class KlokBot extends AutoLaunchBot<KlokBot> {
+@BotApplication(name = "NodeGO", describe = "NodeGo自动机器人")
+public class NodeGoBot extends AnnoDriveAutoBot<NodeGoBot> {
 
-    public static final String PRIMARY_KEY = "primary_key";
-    public static final String ETH_ADDRESS = "eth_address";
-    public static final String SESSION_TOKEN = "session_token";
-    public static final String DAILY_TIMES = "daily_times";
-    public static final String DAILY_LIMIT = "daily_limit";
+    private static final int KEEP_ALIVE_INTERVAL = 60 * 10;
 
-    private KlokApi klokApi;
+    private static final int DAILY_CHECK_IN_INTERVAL = 60 * 60 * 20;
 
-    @Override
-    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
-        klokApi = new KlokApi(this);
+    private final NodeGoApi nodeGoApi;
+
+    public NodeGoBot(AutoBotConfig autoBotConfig, BotApi botApi) {
+        super(autoBotConfig, botApi);
+        this.nodeGoApi = new NodeGoApi(this, autoBotConfig.getConfig("2_CAPTCHA_API_KEY"));
     }
 
     @Override
-    protected KlokBot getInstance() {
+    protected NodeGoBot getInstance() {
         return this;
     }
 
+    @BotMethod(jobType = BotJobType.REGISTER)
+    public Result autoRegister(AccountContext exampleAC, List<AccountContext> sameABIIdList, String inviteCode) {
+        return nodeGoApi.register(exampleAC,sameABIIdList, inviteCode);
+    }
+
+
     @BotMethod(jobType = BotJobType.LOGIN)
-    public Result login(AccountContext accountContext) {
-        if (accountContext.getId() != 1) return Result.fail("test error");
-        return klokApi.login(accountContext);
+    public Result login(AccountContext exampleAC) {
+        return nodeGoApi.login(exampleAC);
     }
 
-    @BotMethod(jobType = BotJobType.QUERY_REWARD, intervalInSecond = 24 * 60 * 60)
-    public Result rewordQuery(AccountContext exampleAC, List<AccountContext> sameBAIDList) {
-        return klokApi.rewordQuery(exampleAC);
+
+    @BotMethod(
+            jobType = BotJobType.TIMED_TASK,
+            intervalInSecond = 60 * 10,
+            concurrentCount = 10
+    )
+    public void keepAlivePing(AccountContext accountContext) {
+        nodeGoApi.ping(accountContext);
     }
 
-    @BotMethod(jobType = BotJobType.TIMED_TASK, intervalInSecond = 6 * 60 * 60)
-    public void dailyTask(AccountContext accountContext) throws ExecutionException, InterruptedException {
-        klokApi.dailyTask(accountContext);
+    @BotMethod(
+            jobType = BotJobType.TIMED_TASK,
+            intervalInSecond = 60 * 60 * 20,
+            concurrentCount = 2
+    )
+    public void checkIn(AccountContext accountContext) throws ExecutionException, InterruptedException {
+        nodeGoApi.checkIn(accountContext);
     }
 
-    public static void main(String[] args) throws BotStartException, BotInitException {
-        List<String> list = new ArrayList<>(java.util.List.of(args));
-        list.add("--vortexa.botKey=klok_test");
-        list.add("--vortexa.customConfig.invite_code=KMDiFtp9");
-        list.add("--vortexa.accountConfig.configFilePath=klok_google.xlsx");
-        list.add("--add-opens java.base/java.lang=ALL-UNNAMED");
-
-        ScriptNodeLauncher.launch(KlokBot.class, list.toArray(new String[0]));
+    @BotMethod(
+            jobType = BotJobType.ONCE_TASK,
+            concurrentCount = 2
+    )
+    public void autoCompleteTask(AccountContext accountContext) {
+        nodeGoApi.completeTask(accountContext);
     }
 }
+package cn.com.helei.bot.app.nodego;
 
-package cn.com.vortexa.script_node;
+import cn.com.helei.bot.core.bot.anno.BotApplication;
+import cn.com.helei.bot.core.bot.anno.BotMethod;
+import cn.com.helei.bot.core.bot.base.AnnoDriveAutoBot;
+import cn.com.helei.bot.core.bot.constants.BotJobType;
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.dto.config.AutoBotConfig;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import lombok.extern.slf4j.Slf4j;
 
-import cn.com.vortexa.script_node.config.AutoBotConfig;
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.typehandler.JsonTypeHandler;
-import cn.com.vortexa.common.util.typehandler.LocalDateTimeTypeHandler;
-import cn.com.vortexa.common.util.typehandler.MapTextTypeHandler;
-import cn.com.vortexa.db_layer.DBLayerAutoConfig;
-import cn.com.vortexa.db_layer.plugn.table_shard.TableShardInterceptor;
-import cn.com.vortexa.db_layer.plugn.table_shard.strategy.BotIdBasedTableShardStrategy;
-import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
-import cn.com.vortexa.job.JobAutoConfig;
+import java.util.List;
+import java.util.concurrent.ExecutionException;
+
+@Slf4j
+@BotApplication(name = "NodeGO", describe = "NodeGo自动机器人")
+public class NodeGoBot extends AnnoDriveAutoBot<NodeGoBot> {
+
+    private static final int KEEP_ALIVE_INTERVAL = 60 * 10;
+
+    private static final int DAILY_CHECK_IN_INTERVAL = 60 * 60 * 20;
+
+    private final NodeGoApi nodeGoApi;
+
+    public NodeGoBot(AutoBotConfig autoBotConfig, BotApi botApi) {
+        super(autoBotConfig, botApi);
+        this.nodeGoApi = new NodeGoApi(this, autoBotConfig.getConfig("2_CAPTCHA_API_KEY"));
+    }
+
+    @Override
+    protected NodeGoBot getInstance() {
+        return this;
+    }
+
+    @BotMethod(jobType = BotJobType.REGISTER)
+    public Result autoRegister(AccountContext exampleAC, List<AccountContext> sameABIIdList, String inviteCode) {
+        return nodeGoApi.register(exampleAC,sameABIIdList, inviteCode);
+    }
+
+
+    @BotMethod(jobType = BotJobType.LOGIN)
+    public Result login(AccountContext exampleAC) {
+        return nodeGoApi.login(exampleAC);
+    }
+
+
+    @BotMethod(
+            jobType = BotJobType.TIMED_TASK,
+            intervalInSecond = 60 * 10,
+            concurrentCount = 10
+    )
+    public void keepAlivePing(AccountContext accountContext) {
+        nodeGoApi.ping(accountContext);
+    }
+
+    @BotMethod(
+            jobType = BotJobType.TIMED_TASK,
+            intervalInSecond = 60 * 60 * 20,
+            concurrentCount = 2
+    )
+    public void checkIn(AccountContext accountContext) throws ExecutionException, InterruptedException {
+        nodeGoApi.checkIn(accountContext);
+    }
+
+    @BotMethod(
+            jobType = BotJobType.ONCE_TASK,
+            concurrentCount = 2
+    )
+    public void autoCompleteTask(AccountContext accountContext) {
+        nodeGoApi.completeTask(accountContext);
+    }
+}
+package cn.com.helei.bot.app.unich;
+
+import cn.com.helei.bot.core.bot.anno.BotApplication;
+import cn.com.helei.bot.core.bot.anno.BotMethod;
+import cn.com.helei.bot.core.bot.base.AnnoDriveAutoBot;
+import cn.com.helei.bot.core.bot.constants.BotJobType;
+import cn.com.helei.bot.core.dto.Result;
+import cn.com.helei.bot.core.dto.config.AutoBotConfig;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.entity.ProxyInfo;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import cn.com.helei.bot.core.util.captcha.TwoCaptchaSolverFactory;
+import cn.com.helei.bot.core.util.exception.LoginException;
 import cn.hutool.core.util.StrUtil;
-import com.zaxxer.hikari.HikariDataSource;
-import org.apache.ibatis.plugin.Interceptor;
-import org.apache.ibatis.session.SqlSessionFactory;
-import org.mybatis.spring.SqlSessionFactoryBean;
-import org.mybatis.spring.annotation.MapperScan;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.ComponentScan;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.transaction.PlatformTransactionManager;
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+import com.twocaptcha.TwoCaptcha;
+import com.twocaptcha.captcha.GeeTestV4;
+import io.netty.handler.codec.http.HttpMethod;
+import lombok.extern.slf4j.Slf4j;
 
-import javax.sql.DataSource;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.*;
 
-@Configuration
-@ImportAutoConfiguration({DBLayerAutoConfig.class, JobAutoConfig.class})
-@ComponentScan({"cn.com.vortexa.script_node.service.impl", "cn.com.vortexa.script_node.config"})
-@MapperScan(basePackages = "cn.com.vortexa.script_node.mapper")
-public class ScriptNodeAutoConfig {
+@Slf4j
+@BotApplication(name = "Unich_Bot")
+public class UnichClaimBot extends AnnoDriveAutoBot<UnichClaimBot> {
 
-    @Autowired
-    private JsonTypeHandler jsonTypeHandler;
+    private static final String TOKEN_EXPIRE_TIME_KEY = "token_expire_time";
 
-    @Autowired
-    private MapTextTypeHandler mapTextTypeHandler;
+    private static final String TOKEN_KEY = "token";
 
-    @Autowired
-    private LocalDateTimeTypeHandler localDateTimeTypeHandler;
+    private static final String CAPTCHA_ID = "e7baa772ac1ae5dceccd7273ad5f57bd";
 
-    @Autowired
-    private AutoBotConfig botConfig;
+    private static final String CAPTCHA_URL = "https://unich.com/en/airdrop/sign-in";
+
+    private static final String PASSWORD_KEY = "password";
+
+    private final String captcha2ApiKey;
+
+    public UnichClaimBot(AutoBotConfig autoBotConfig, BotApi botApi) {
+        super(autoBotConfig, botApi);
+        this.captcha2ApiKey = autoBotConfig.getConfig("2_CAPTCHA_API_KEY");
+    }
 
 
-    @Bean("vortexaDataSource")
-    public DataSource vortexaDataSource() {
-        String botKey = botConfig.getBotKey();
-        if (StrUtil.isBlank(botKey)) {
-            throw new IllegalArgumentException("botKey is empty");
+    @BotMethod(jobType = BotJobType.LOGIN)
+    public Result login(AccountContext accountContext) {
+
+        String expireStr = accountContext.getParam(TOKEN_EXPIRE_TIME_KEY);
+        String originToken = accountContext.getParam(TOKEN_KEY);
+
+        if (StrUtil.isNotBlank(originToken)) {
+            try {
+                long expire = Long.parseLong(expireStr);
+                if (System.currentTimeMillis() < expire) {
+                    log.info("{} 已有token无需打码", expireStr);
+                    return Result.ok();
+                }
+            } catch (Exception e) {
+                accountContext.removeParam(TOKEN_EXPIRE_TIME_KEY);
+                accountContext.removeParam(TOKEN_KEY);
+            }
         }
+
+        CompletableFuture<String> future = CompletableFuture
+                // Step 1 打码，获取参数
+                .supplyAsync(() -> {
+                    TwoCaptcha solver = TwoCaptchaSolverFactory
+                            .getTwoCaptchaSolver(captcha2ApiKey, accountContext.getProxy());
+
+                    GeeTestV4 captcha = new GeeTestV4();
+                    captcha.setCaptchaId(CAPTCHA_ID);
+                    captcha.setUrl(CAPTCHA_URL);
+
+                    try {
+                        log.info("{} 开始打码", accountContext.getSimpleInfo());
+                        solver.solve(captcha);
+
+                        String code = captcha.getCode();
+                        if (StrUtil.isNotBlank(code)) {
+                            log.info("{} 打码成功,", accountContext.getSimpleInfo());
+                            return code;
+                        } else {
+                            throw new LoginException("打码失败");
+                        }
+                    } catch (Exception e) {
+                        throw new LoginException("打码失败", e);
+                    }
+                }, getExecutorService())
+                .thenApplyAsync(code -> {
+                    // Step 2 构造参数请求登录
+                    JSONObject body = JSONObject.parseObject(code);
+                    body.remove("captcha_id");
+                    body.put("email", accountContext.getAccountBaseInfo().getEmail());
+                    String password = accountContext.getParam(PASSWORD_KEY);
+
+                    body.put("password", password);
+
+                    Map<String, String> headers = accountContext.getBrowserEnv().getHeaders();
+                    headers.put("Origin", "https://unich.com");
+                    headers.put("referer", "https://unich.com/");
+
+                    try {
+                        return syncRequest(
+                                accountContext.getProxy(),
+                                "https://api.unich.com/airdrop/user/v1/auth/sign-in",
+                                HttpMethod.POST,
+                                headers,
+                                null,
+                                body,
+                                () -> accountContext.getSimpleInfo() + " 正在登录获取token"
+                        ).thenApplyAsync(response -> {
+                            JSONObject result = JSONObject.parseObject(response);
+
+                            if (result.getString("code").equals("OK")) {
+                                JSONObject data = result.getJSONObject("data");
+                                String token = data.getString("accessToken");
+                                log.info("{} 获取token成功, {}", accountContext.getSimpleInfo(), token);
+
+                                accountContext.setParam(TOKEN_EXPIRE_TIME_KEY, String.valueOf(data.getLong("accessTokenExpireAt")));
+                                accountContext.setParam(TOKEN_KEY, token);
+
+                                return token;
+                            } else {
+                                throw new LoginException(String.format("获取token失败, %s", response));
+                            }
+                        }).get();
+                    } catch (InterruptedException | ExecutionException e) {
+                        throw new LoginException("登录获取token发生异常", e);
+                    }
+                });
+
 
         try {
-            String path = tryCreateDBFile(botKey);
-            HikariDataSource dataSource = new HikariDataSource();
-            dataSource.setJdbcUrl("jdbc:sqlite:/" + path);
-            return dataSource;
-        } catch (IOException e) {
-            throw new RuntimeException("create Bot[%s]DB file error".formatted(botKey), e);
+            future.get();
+            return Result.ok();
+        } catch (InterruptedException | ExecutionException e) {
+            log.error("{} 登录发生异常", accountContext.getSimpleInfo(), e.getCause());
+            return Result.fail("%s 登录发生异常，%s".formatted(accountContext.getSimpleInfo(), e.getCause().getMessage()));
         }
     }
 
+    @BotMethod(
+            jobType = BotJobType.TIMED_TASK,
+            intervalInSecond = 60 * 60 * 12,
+            concurrentCount = 2
+    )
+    public boolean doAccountClaim(AccountContext accountContext) {
+        String token = accountContext.getParam(TOKEN_KEY);
 
-    @Bean
-    public SqlSessionFactory sqlSessionFactory() throws Exception {
-        SqlSessionFactoryBean factoryBean = new SqlSessionFactoryBean();
+        if (StrUtil.isBlank(token)) {
+            log.error("{} 没有token", accountContext.getSimpleInfo());
+            return false;
+        }
 
-        factoryBean.setDataSource(vortexaDataSource());
-        factoryBean.setMapperLocations(new PathMatchingResourcePatternResolver()
-                .getResources("classpath:/mapper/*.xml"));
+        String listUrl = "https://api.unich.com/airdrop/user/v1/mining/start";
 
-        factoryBean.addTypeHandlers(jsonTypeHandler, mapTextTypeHandler, localDateTimeTypeHandler);
-        factoryBean.addPlugins(tableShardInterceptor());
+        ProxyInfo proxy = accountContext.getProxy();
 
-        return factoryBean.getObject();
+        Map<String, String> headers = accountContext.getBrowserEnv().getHeaders();
+        headers.put("Authorization", "Bearer " + token);
+
+        String printPrefix = String.format("id[%s]-账户[%s]-token[%s]-proxy[%s]",
+                accountContext.getAccountBaseInfo().getId(), accountContext.getName(),
+                token.substring(0, Math.min(16, token.length())), proxy.getHost() + ":" + proxy.getPort());
+
+
+        syncRequest(proxy, listUrl, HttpMethod.POST, headers, null, new JSONObject(),
+                () -> String.format("%s 开始mining", printPrefix))
+                // Step 1.1 处理响应结果
+                .thenAcceptAsync(responseStr -> {
+                    if (responseStr != null) {
+                        JSONObject result = JSONObject.parseObject(responseStr);
+                        if (result.getString("code").equalsIgnoreCase("ok")) {
+                            log.info("{} mining成功", printPrefix);
+
+                            Long startAt = result.getJSONObject("data").getLong("submittedAt");
+                            accountContext.setParam("submittedAt", String.valueOf(startAt));
+                        } else {
+                            log.error("{} mining失败", printPrefix);
+                        }
+                    } else {
+                        log.error("{} mining请求失败", printPrefix);
+                    }
+                }, getExecutorService()).exceptionally(throwable -> {
+                    log.error("{} mining请求失败, {}", printPrefix, throwable.getMessage());
+                    return null;
+                });
+
+        return false;
     }
 
-    // 配置事务管理器
-    @Bean(name = "transactionManager")
-    public PlatformTransactionManager transactionManager() {
-        return new DataSourceTransactionManager(vortexaDataSource());
+    /**
+     * 开始领取社交任务
+     *
+     * @return print str
+     */
+    private String startClaimSocialReward(AccountContext accountContext) {
+        ProxyInfo proxy = accountContext.getProxy();
+        String token = accountContext.getParam("token");
+
+        Map<String, String> headers = accountContext.getBrowserEnv().getHeaders();
+        headers.put("Authorization", "Bearer " + token);
+
+        String printPrefix = String.format("账户[%s]-token[%s]-proxy[%s]", accountContext.getName(),
+                token.substring(0, Math.min(16, token.length())), proxy.getHost() + ":" + proxy.getPort());
+
+        // Step 1 获取用户的社交任务列表
+        CompletableFuture<List<String>> taskListFuture = null;
+        String unclaimedTaskIdsStr = accountContext.getParam("unclaimed_task_ids");
+
+        if (unclaimedTaskIdsStr != null) {
+            taskListFuture = CompletableFuture.completedFuture(JSONObject.parseArray(unclaimedTaskIdsStr, String.class));
+        } else {
+            taskListFuture = queryAccountUnClaimedTaskIds(proxy, headers, printPrefix);
+        }
+
+
+        // Step 2 开始领取任务
+        taskListFuture.
+                thenApply(taskList -> claimAccountTasks(accountContext, taskList, headers))
+                // Step 3 处理结果,未领取的标记一下
+                .thenAcceptAsync(errorIds -> {
+                    if (errorIds == null || !errorIds.isEmpty()) {
+                        accountContext.setParam("unclaimed_task_ids", JSONObject.toJSONString(errorIds));
+                    } else {
+                        accountContext.setParam("social_completed", "true");
+                    }
+                }, getExecutorService())
+                .exceptionallyAsync(throwable -> {
+                    log.error("{} 领取社交奖励发生异常", printPrefix, throwable);
+                    accountContext.setParam("social_completed", "false");
+                    return null;
+                });
+
+        return "已开始领取账户社交奖励任务";
     }
 
-    @Bean
-    public ITableShardStrategy tableShardStrategy() {
-        return new BotIdBasedTableShardStrategy();
-    }
 
-    @Bean
-    public Interceptor tableShardInterceptor() {
-        return new TableShardInterceptor(tableShardStrategy());
+    private CompletableFuture<List<String>> queryAccountUnClaimedTaskIds(ProxyInfo proxy, Map<String, String> headers, String printPrefix) {
+        String listUrl = "https://api.unich.com/airdrop/user/v1/social/list-by-user";
+
+
+        return syncRequest(proxy, listUrl, HttpMethod.POST, headers, null, null,
+                () -> String.format("%s 开始领取社交奖励", printPrefix))
+                // Step 1.1 处理响应结果
+                .thenApplyAsync(responseStr -> {
+                    if (responseStr != null) {
+                        JSONObject result = JSONObject.parseObject(responseStr);
+
+                        // Step 1.2 过滤出未领取的任务
+                        List<String> ids = new ArrayList<>();
+                        JSONArray taskList = result.getJSONObject("data").getJSONArray("items");
+                        for (int i = 0; i < taskList.size(); i++) {
+                            JSONObject item = taskList.getJSONObject(i);
+                            if (!item.getBoolean("claimed")) {
+                                ids.add(item.getString("id"));
+                            }
+                        }
+
+                        log.info("{} }获取任务列表成功", printPrefix);
+                        return ids;
+                    } else {
+                        throw new RuntimeException(String.format("%s 任务列表失败", printPrefix));
+                    }
+                }, getExecutorService());
     }
 
 
     /**
-     * 尝试创建DB File
+     * 领取账户taskId的任务
      *
-     * @param botKey botKey
-     * @return db file absolutePath
-     * @throws IOException IOException
+     * @param accountContext  accountContext
+     * @param unclaimedTaskId unclaimedTaskId
+     * @param headers         headers
+     * @return List<String> 未完成的任务
      */
-    private static String tryCreateDBFile(String botKey) throws IOException {
-        // 创建BotKey对应的数据库文件
-        Path absolutePath = Paths.get(FileUtil.getBotAppConfigPath(), botKey, "bot_" + botKey + ".db");
+    private List<String> claimAccountTasks(AccountContext accountContext, List<String> unclaimedTaskId, Map<String, String> headers) {
+        ProxyInfo proxy = accountContext.getProxy();
+        String proxyAddress = proxy.getHost() + ":" + proxy.getPort();
+        String token = accountContext.getParam("token");
 
-        if (Files.notExists(absolutePath)) {
-            if (Files.notExists(absolutePath.getParent())) {
-                Files.createDirectories(absolutePath.getParent());
-            }
-            Files.createFile(absolutePath);
+        log.info("账户[{}]共[{}]个未领取的任务", accountContext.getName(), unclaimedTaskId.size());
+        if (unclaimedTaskId.isEmpty()) {
+            return new ArrayList<>();
         }
 
-        return absolutePath.toString();
+        // Step 2.2 开始领取任务
+        String claimUrl = "https://api.unich.com/airdrop/user/v1/social/claim/";
+
+        List<CompletableFuture<String>> subTaskFutures = unclaimedTaskId.stream().map(taskId -> {
+            JSONObject body = new JSONObject();
+            body.put("evidence", taskId);
+
+            return syncRequest(proxy, claimUrl + taskId, HttpMethod.POST, headers, null, body,
+                    () -> String.format("账户[%s]-token[%s]-proxy[%s]-taskId[%s]开始领取", accountContext.getName(), token, proxyAddress, taskId))
+                    .thenApplyAsync(responseStr -> {
+
+                        if (responseStr != null) {
+                            log.info("账户[{}]-token[{}]-proxy[{}]-taskId-[{}]领取成功, {}",
+                                    accountContext.getName(), token, proxyAddress, taskId, responseStr);
+                            return responseStr;
+                        } else {
+                            log.error("获取账户[{}]-token[{}]-taskId[{}]任务领取失败",
+                                    accountContext.getName(), token, taskId);
+                        }
+                        return taskId;
+                    });
+        }).toList();
+
+        // Step 2.3 等待所有任务完成
+        CompletableFuture.allOf(subTaskFutures.toArray(new CompletableFuture[0])).join();
+
+        ArrayList<String> result = new ArrayList<>();
+        for (int i = 0; i < subTaskFutures.size(); i++) {
+            CompletableFuture<String> future = subTaskFutures.get(i);
+            try {
+                future.get();
+                result.add(unclaimedTaskId.get(i));
+            } catch (ExecutionException | InterruptedException e) {
+                log.error("获取账户[{}]-token[{}]-taskId[{}]任务领取发生系统错误, {}",
+                        accountContext.getName(), token, result.add(unclaimedTaskId.get(i)), e.getMessage());
+                result.add(unclaimedTaskId.get(i));
+            }
+        }
+
+        return result;
+    }
+
+
+    @Override
+    protected UnichClaimBot getInstance() {
+        return this;
+    }
+}
+package cn.com.helei.bot.app.keitokun;
+
+import cn.com.helei.bot.core.bot.anno.BotApplication;
+import cn.com.helei.bot.core.bot.anno.BotMethod;
+import cn.com.helei.bot.core.bot.anno.BotWSMethodConfig;
+import cn.com.helei.bot.core.bot.base.AnnoDriveAutoBot;
+import cn.com.helei.bot.core.bot.constants.BotJobType;
+import cn.com.helei.bot.core.dto.config.AutoBotConfig;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.botapi.BotApi;
+import cn.com.helei.bot.core.supporter.netty.BotJsonWSClient;
+import cn.hutool.core.util.StrUtil;
+import lombok.extern.slf4j.Slf4j;
+
+import java.time.LocalDate;
+import java.util.List;
+
+
+@Slf4j
+@BotApplication(name = "keitokun_bot")
+public class KeiToKunBot extends AnnoDriveAutoBot<KeiToKunBot> {
+
+    public static final String UID_KEY = "uid";
+
+    public static final String TODAY_KEY = "today";
+
+    public static final String TODAY_REMAINING_TAP_KEY = "today_remaining_tap";
+
+    private static final String TAP_BASE_URL = "wss://game.keitokun.com/api/v1/ws";
+
+
+    public KeiToKunBot(AutoBotConfig autoBotConfig, BotApi botApi) {
+        super(autoBotConfig, botApi);
+    }
+
+
+    @Override
+    protected KeiToKunBot getInstance() {
+        return this;
+    }
+
+
+    @Override
+    protected void accountsLoadedHandler(List<AccountContext> accountContexts) {
+        String today = LocalDate.now().toString();
+
+        accountContexts.forEach(accountContext -> {
+            // 判断今日的有没有点击完成
+            String remainingTapStr = accountContext.getParam(TODAY_REMAINING_TAP_KEY);
+            String accountSaveDay = accountContext.getParam(TODAY_KEY);
+
+            // 今天还有没点击的,或者就没点击
+            if (accountSaveDay == null || remainingTapStr == null
+                    || !accountSaveDay.equals(today) || Integer.parseInt(remainingTapStr) >= 0
+            ) {
+                accountContext.setParam(TODAY_KEY, LocalDate.now().toString());
+                accountContext.setParam(TODAY_REMAINING_TAP_KEY,
+                        StrUtil.isBlank(remainingTapStr) ? "500" : remainingTapStr);
+            } else {
+                accountContext.setParam(TODAY_REMAINING_TAP_KEY, "0");
+            }
+        });
+    }
+
+
+    @BotMethod(
+            jobType = BotJobType.WEB_SOCKET_CONNECT,
+            jobName = "ws-keep-alive-task",
+            bowWsConfig = @BotWSMethodConfig(
+                    isRefreshWSConnection = true,
+                    heartBeatIntervalSecond = 5,
+                    wsConnectCount = 10
+            ),
+            intervalInSecond = 60 * 60 * 12
+    )
+    public BotJsonWSClient tapConnection(AccountContext accountContext) {
+        String prefix = accountContext.getSimpleInfo();
+
+        // Step 1 检查是否有uid
+        String uid = accountContext.getParam("uid");
+
+        if (StrUtil.isBlank(uid)) {
+            log.warn("{} uid不可用", prefix);
+            return null;
+        }
+
+        // Step 2 判断今天的点击是否完成
+        String today = LocalDate.now().toString();
+        String remainingTapStr = accountContext.getParam(TODAY_REMAINING_TAP_KEY);
+        String accountSaveDay = accountContext.getParam(TODAY_KEY);
+
+        // 新的一天
+//        if (accountSaveDay == null || !accountSaveDay.equals(today)
+//                || StrUtil.isBlank(remainingTapStr)) {
+            accountContext.setParam(TODAY_KEY, LocalDate.now().toString());
+            accountContext.setParam(TODAY_REMAINING_TAP_KEY, "500");
+//        } else if (Integer.parseInt(remainingTapStr) > 0) { // 日内没点击完
+//            log.info("{} 没点击完，剩余: {}", prefix, remainingTapStr);
+//        } else {
+//             今天点击完的
+//            log.warn("{} 今日点击已完成", prefix);
+//            return null;
+//        }
+
+        log.info("{}-uid[{}] 开始创建ws客户端", prefix, uid);
+
+        String connectUrl = TAP_BASE_URL + "?uid=" + accountContext.getParam(UID_KEY);
+
+        return new KeiToKunWSClient(accountContext, connectUrl);
+    }
+}
+package cn.com.helei.bot.app.keitokun;
+
+import cn.com.helei.bot.core.dto.ConnectStatusInfo;
+import cn.com.helei.bot.core.entity.AccountContext;
+import cn.com.helei.bot.core.supporter.netty.BaseBotWSClient;
+import cn.com.helei.bot.core.supporter.netty.BotJsonWSClient;
+import cn.com.helei.bot.core.supporter.netty.constants.WebsocketClientStatus;
+import com.alibaba.fastjson.JSONObject;
+import lombok.extern.slf4j.Slf4j;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
+
+import static cn.com.helei.bot.app.keitokun.KeiToKunBot.TODAY_KEY;
+import static cn.com.helei.bot.app.keitokun.KeiToKunBot.TODAY_REMAINING_TAP_KEY;
+
+
+@Slf4j
+public class KeiToKunWSClient extends BotJsonWSClient {
+
+    private final static Map<BaseBotWSClient<JSONObject, JSONObject>, Integer> clientNoResponsePingCount = new ConcurrentHashMap<>();
+
+    private final static Map<BaseBotWSClient<JSONObject, JSONObject>, Integer> requestIdMap = new ConcurrentHashMap<>();
+
+    private final static int noResponsePingLimit = 10;
+
+    private final Random random = new Random();
+
+    public KeiToKunWSClient(AccountContext accountContext, String connectUrl) {
+        super(accountContext, connectUrl);
+    }
+
+    @Override
+    public void whenAccountClientStatusChange(WebsocketClientStatus clientStatus) {
+        AccountContext accountContext = this.getAccountContext();
+
+        String printPrefix = accountContext.getSimpleInfo() + "-" + accountContext.getParam(KeiToKunBot.UID_KEY);
+
+        switch (clientStatus) {
+            case RUNNING -> {
+                log.info("{} 连接ws服务器[{}]成功", printPrefix, url);
+
+            }
+            case STOP -> {
+                log.info("{} 连接到ws服务器[{}]失败", printPrefix, url);
+
+                accountContext.getConnectStatusInfo().getRestart().incrementAndGet();
+            }
+            case SHUTDOWN -> {
+                log.info("{} ws连接已断开", printPrefix);
+                requestIdMap.remove(this);
+            }
+        }
+    }
+
+    @Override
+    public JSONObject getHeartbeatMessage() {
+        Integer count = clientNoResponsePingCount.compute(this, (k, v) -> {
+            if (v != null && v >= noResponsePingLimit) {
+                return null;
+            }
+            return v == null ? 1 : v + 1;
+        });
+
+        if (count == null) {
+            log.warn("{} 长时间未收到pong，关闭客户端", this.getAccountContext().getSimpleInfo());
+            this.close();
+            return null;
+        }
+
+
+        JSONObject frame = new JSONObject();
+        frame.put("cmd", 1001);
+        frame.put("id", requestIdMap.compute(this, (k, v) -> v == null ? 1 : v + 1));
+        frame.put("uid", getAccountContext().getParam("uid"));
+
+        JSONObject data = new JSONObject();
+        int randomClickTimes = getRandomClickTimes();
+
+        data.put("amount", randomClickTimes);
+        data.put("collectNum", randomClickTimes);
+        data.put("timestamp", System.currentTimeMillis());
+        frame.put("data", data);
+
+        log.info("[{}] 发送心跳[{}]", getAccountContext().getSimpleInfo(), frame);
+        getAccountContext().getConnectStatusInfo().getHeartBeat().getAndIncrement();
+
+        return frame;
+    }
+
+    @Override
+    public void whenAccountReceiveResponse(
+            Object id,
+            JSONObject response
+    ) {
+        Integer cmd = response.getInteger("cmd");
+        JSONObject data = response.getJSONObject("data");
+
+        AccountContext accountContext = this.getAccountContext();
+        ConnectStatusInfo connectStatusInfo = accountContext.getConnectStatusInfo();
+
+        String prefix = accountContext.getSimpleInfo() + "-" + accountContext.getParam("uid");
+
+        log.info("{} 收到消息 {}", prefix, response);
+        if (cmd == 1001) {
+            Integer totalNum = data.getInteger("totalNum");
+            Integer collectNum = data.getInteger("collectNum");
+
+            accountContext.setParam(TODAY_REMAINING_TAP_KEY,
+                    String.valueOf(Math.max(0, totalNum - collectNum)));
+
+            // 今日的领完了, 关闭
+            if (totalNum <= collectNum) {
+                log.info("{} 今日keitokun点击已完成，断开ws连接", prefix);
+                accountContext.setParam(TODAY_KEY, LocalDate.now().toString());
+                this.shutdown();
+            }
+
+            log.info("{} 收到响应,[{}/{}](已点击/剩余)", prefix,
+                    collectNum, totalNum);
+
+            accountContext.getRewordInfo().setTotalPoints(data.getInteger("keitoAmount") * 1.0);
+            accountContext.getRewordInfo().setTotalPoints(collectNum * 1.0);
+
+            connectStatusInfo.getHeartBeat().incrementAndGet();
+        } else {
+            log.warn("{} 收到未知响应[{}]", prefix, response);
+            connectStatusInfo.getErrorHeartBeat().incrementAndGet();
+        }
+
+        connectStatusInfo.setUpdateDateTime(LocalDateTime.now());
+    }
+
+    @Override
+    public void whenAccountReceiveMessage(
+            JSONObject message
+    ) {
+
+    }
+
+
+    private int getRandomClickTimes() {
+        return random.nextInt(5) + 1;
     }
 }
