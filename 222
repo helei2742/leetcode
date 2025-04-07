@@ -1,869 +1,485 @@
-import request from '@/util/request.ts'
-import type {PageQuery} from "@/types/vortexa-type-common.ts";
+package cn.com.vortexa.script_node.websocket;
 
-/**
- * 分页查询浏览器环境
- * @param pageQuery pageQuery
- * @returns {*}
- */
-export function pageQueryBotInfoNetwork(pageQuery: PageQuery) {
-  return request({
-    url: '/bot/pageQuery',
-    method: 'post',
-    data: pageQuery
-  })
-}
+import cn.com.vortexa.script_node.bot.AnnoDriveAutoBot;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.dto.job.AutoBotJobParam;
+import cn.com.vortexa.common.dto.job.AutoBotJobWSParam;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.common.util.NamedThreadFactory;
+import cn.com.vortexa.websocket.netty.constants.WebsocketClientStatus;
+import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
 
-/**
- * 创建bot
- * @param botId
- * @param botKey
- * @param accountIds
- */
-export function createBot({botId, botKey, accountIds}) {
-  return request({
-    url: '/bot/create',
-    method: 'post',
-    data: {
-      botId,
-      botKey,
-      accountIds
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.Map;
+import java.util.concurrent.*;
+
+
+@Slf4j
+public class WebSocketClientLauncher {
+
+    public static final Method lanuchMethod;
+
+    static {
+        try {
+            lanuchMethod = WebSocketClientLauncher.class.getMethod("launchWSClient",
+                    Object.class, Object.class, Object.class);
+        } catch (NoSuchMethodException e) {
+            throw new RuntimeException(e);
+        }
     }
-  })
-}
 
-/**
- * 分页查询bot实例
- * @param pageQuery
- */
-export function pageQueryBotInstanceNetwork(pageQuery: PageQuery) {
-  return request({
-    url: '/botInstance/pageQuery',
-    method: 'post',
-    data: pageQuery
-  })
-}
+    /**
+     * 线程池
+     */
+    private final ExecutorService executorService;
 
+    /**
+     * bot 对象
+     */
+    private final AnnoDriveAutoBot<?> bot;
 
-bot.js
+    /**
+     * 控制并发数量的信号量
+     */
+    private final Map<String, Semaphore> wsCCSemapthoreMap = new ConcurrentHashMap<>();
 
+    /**
+     * 已启动的ws客户端
+     */
+    private final Map<String, BaseBotWSClient<?>> launchedWSClientMap = new ConcurrentHashMap<>();
 
-components\horizontal-scroll-bar
-
-<script setup lang="ts">
-import {CaretLeft, CaretRight} from "@element-plus/icons-vue";
-import {ref} from "vue";
-
-const props = withDefaults(defineProps<{step:number}>(), {
-  step: 50
-});
-
-const scrollWrapper = ref(null)
-
-const scrollRight = () => {
-  if (scrollWrapper.value) {
-    console.log(scrollWrapper.value.scrollLeft)
-    scrollWrapper.value.wrapRef.scrollLeft += props.step
-  }
-}
-
-const scrollLeft = () => {
-  if (scrollWrapper.value) {
-    scrollWrapper.value.wrapRef.scrollLeft -= props.step
-  }
-}
-</script>
-
-<template>
-  <div class="horizontal-scroll-bar">
-    <el-icon class="control-left" @click="scrollLeft">
-      <CaretLeft/>
-    </el-icon>
-    <div style="width: calc(100% - 20px)">
-      <el-scrollbar ref="scrollWrapper">
-        <div  style="display: flex; width: fit-content">
-          <slot></slot>
-        </div>
-      </el-scrollbar>
-    </div>
-    <el-icon class="control-right" @click="scrollRight">
-      <CaretRight/>
-    </el-icon>
-  </div>
-</template>
-
-<style scoped>
-.horizontal-scroll-bar {
-  height: 100%;
-  display: flex;
-}
-
-.control-left {
-  font-size: 18px;
-}
-
-.control-left:hover {
-  font-weight: 700;
-  font-size: 22px;
-  cursor: pointer;
-}
-
-.control-right {
-  font-size: 18px;
-}
-
-.control-right:hover {
-  font-weight: 700;
-  font-size: 22px;
-  cursor: pointer;
-}
-</style>
-
-vortexa-config.tx
-export enum BotInstanceStatus {
-  ALL='',
-  RUNNING='RUNNING',
-  STOPPED='STOPPED',
-  UN_USABLE='UN_USABLE'
-}
-
-
-export const API_BASE_URL:string = 'http://localhost:10110'
-export const API_TIME_OUT:number = 5000
-
-export const API_DEFAULT_PAGE:number = 1
-export const API_DEFAULT_PAGE_SIZE:number = 20
-
-export const PAGINATION_PAGE_SIZES:number[] = [20, 50, 100, 200, 400];
-
-
-vortexa-tpe-common.ts
-
-import {API_DEFAULT_PAGE, API_DEFAULT_PAGE_SIZE} from "@/config/vortexa-config.ts";
-
-/**
- * 上传实体
- */
-export class UploadEntry {
-  rawLines: Array<Map<string, object>>
-
-  constructor(rawLines: Array<Map<string, object>>) {
-    this.rawLines = rawLines
-  }
-}
-
-/**
- * Http 响应实体
- */
-export class Result<T> {
-  success: boolean
-  errorMsg: string
-  data: T
-
-  constructor({success, errorMsg, data}) {
-    this.success = success
-    this.errorMsg = errorMsg
-    this.data = data
-  }
-}
-
-export class PageQuery {
-  page: number = API_DEFAULT_PAGE
-  limit: number = API_DEFAULT_PAGE_SIZE
-  filterMap?: Map<string, object>
-
-  constructor({page, limit, filterMap}:{page?:number, limit?:number, filterMap?:Map<string,object>}) {
-    this.page = page == undefined ? API_DEFAULT_PAGE : page
-    this.limit = limit == undefined ? API_DEFAULT_PAGE_SIZE : limit
-    this.filterMap = filterMap
-  }
-}
-
-/**
- * 分页响应实体
- */
-export class PageResult<T> {
-  total: number;
-  list: Array<T>;
-  pages: number;
-  pageNum: number;
-  pageSize: number;
-
-  constructor({total, pages, pageNum, pageSize, list}) {
-    this.total = total
-    this.pages = pages
-    this.pageNum = pageNum
-    this.pageSize = pageSize
-    this.list = list
-  }
-}
-
-
-common.ts
-
-export function flattenObject(obj: never): Record<string, never> {
-  const result: Record<string, never> = {}
-
-  for (const key in obj) {
-    if (obj[key] instanceof Map) {
-      // 处理 Map 类型
-      obj[key].forEach((value: never, mapKey: never) => {
-        result[mapKey] = value
-      })
-    } else if (typeof obj[key] === 'object' && obj[key] !== null) {
-      // 递归处理嵌套对象
-      Object.assign(result, flattenObject(obj[key]))
-    } else {
-      // 普通属性
-      result[key] = obj[key]
+    public WebSocketClientLauncher(
+            AnnoDriveAutoBot<?> bot
+    ) {
+        this.bot = bot;
+        this.executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("ws-client-launcher"));
     }
-  }
 
-  return result
-}
+    /**
+     * 构建ws客户端
+     *
+     * @param accountContextObj accountContextObj
+     * @param jobParamObj       jobParamObj
+     * @return BaseBotWSClient < Req, Resp>
+     */
+    public final CompletableFuture<Result> launchWSClient(
+            Object accountContextObj,
+            Object jobParamObj,
+            Object wsClientBuilderObj
+    ) {
+        // 参数处理
+        AccountContext accountContext = (AccountContext) accountContextObj;
+        AutoBotJobParam jobParam = (AutoBotJobParam) jobParamObj;
+        AccountWSClientBuilder wsClientBuilder = (AccountWSClientBuilder) wsClientBuilderObj;
+
+        String key = generateAccountKey(accountContext, jobParam.getJobName());
+
+        String prefix = String.format("bot[%s]-job[%s]-account[%s]-[%s]",
+                bot.getBotInstance().getBotKey(), jobParam.getJobName(), accountContext.getId(), accountContext.getName());
+
+        AutoBotJobWSParam autoBotJobWSParam = jobParam.getAutoBotJobWSParam();
 
 
-export function stringToEnum(value: string, enumValues: { [key: string]: any }): any {
-  for (let key in enumValues) {
-    if (enumValues[key] === value) {
-      return key;
+        // 已经启动的，不再创建
+        if (launchedWSClientMap.containsKey(key)) {
+            if (!autoBotJobWSParam.getIsRefreshWSConnection()) {
+                log.warn("{} ws client already created", prefix);
+                return CompletableFuture.completedFuture(Result.fail(prefix + "ws client already created"));
+            } else {
+                log.warn(prefix + " 移除旧ws客户端");
+                launchedWSClientMap.remove(key).shutdown();
+            }
+        }
+
+        return buildAndConnectWebSocket(accountContext, autoBotJobWSParam, key, wsClientBuilder, prefix);
     }
-  }
-  return undefined;
-}
-
-export function generateRandomGreenColor(): string {
-  const g = Math.floor(Math.random() * 156) + 100;
-  const r = Math.floor(Math.random() * 100);
-  const b = Math.floor(Math.random() * 100);
-  return `rgb(${r}, ${g}, ${b})`
-}
 
 
-view\homepage\script\component\bot-job-detail
-<script setup lang="ts">
-import {CaretLeft, EditPen, SemiSelect} from "@element-plus/icons-vue";
-import {ref} from "vue";
+    /**
+     * 构建并连接ws客户端
+     *
+     * @param accountContext    accountContext
+     * @param autoBotJobWSParam autoBotJobWSParam
+     * @param key               key
+     * @param wsClientBuilder   wsClientBuilder
+     * @param prefix            prefix
+     * @return CompletableFuture<Result>
+     */
+    private @NotNull CompletableFuture<Result> buildAndConnectWebSocket(
+            AccountContext accountContext,
+            AutoBotJobWSParam autoBotJobWSParam,
+            String key,
+            AccountWSClientBuilder wsClientBuilder,
+            String prefix
+    ) {
 
-const props = defineProps<{
-  jobName: string,
-  jobParams: object,
-  isRunning: boolean
-}>()
+        // Step 1 ws 连接数量控制
+        Semaphore wsConnectSemaphore;
+        try {
+            wsConnectSemaphore = wsCCSemapthoreMap.computeIfAbsent(key, k -> new Semaphore(autoBotJobWSParam.getWsConnectCount()));
+            wsConnectSemaphore.acquire();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
 
+        //  Step 2 启动
+        BaseBotWSClient<?> wsClient = null;
 
-const editJobParamsDialogVisible = ref(false)
+        // Step 3 创建ws client
+        try {
+            wsClient = wsClientBuilder.build(accountContext);
 
-// 事件
-const emit = defineEmits([
-  'start-task',
-  'stop-task'
-])
+            if (wsClient == null) {
+                return CompletableFuture.completedFuture(Result.fail("ws client create failed"));
+            }
+            launchedWSClientMap.put(key, wsClient);
+        } catch (InvocationTargetException | IllegalAccessException e) {
+            log.error("build account ws client error", e);
+            return CompletableFuture.completedFuture(Result.fail(prefix + "build account ws client error"));
+        }
 
-const startTaskHandler = () => {
-  emit('start-task', {jobName: jobName})
-}
+        // Step 4 设置handler
+        init(wsClient, autoBotJobWSParam, wsConnectSemaphore);
 
-const stopTaskHandler = () => {
-  emit('stop-task', {instanceId: jobName})
-}
-</script>
-
-<template>
-  <div>
-    <div v-if="jobName==''">
-      概况图
-    </div>
-    <div v-else>
-      <el-descriptions
-        class="margin-top"
-        :title="jobName"
-        border
-        :column="1"
-      >
-        <template #extra>
-          <el-button-group class="ml-4">
-            <el-button
-              v-if="!props.isRunning"
-              size="small"
-              @click="startTaskHandler">
-              <el-icon>
-                <CaretLeft/>
-              </el-icon>
-            </el-button>
-            <el-button
-              v-else
-              size="small"
-              @click="stopTaskHandler"
-            >
-              <el-icon>
-                <SemiSelect/>
-              </el-icon>
-            </el-button>
-            <el-button
-              size="small"
-              @click="editJobParamsDialogVisible = true"
-            >
-              <el-icon>
-                <EditPen/>
-              </el-icon>
-            </el-button>
-          </el-button-group>
-        </template>
-        <el-descriptions-item label="Launch Times">1</el-descriptions-item>
-        <el-descriptions-item label="Last Start">2024-03-28 22:12:33</el-descriptions-item>
-        <el-descriptions-item label="Job Type">
-          <el-tag size="small">Timed Job</el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="Description">
-          <el-text line-clamp="2">
-            The -webkit-line-clamp CSS property<br/>
-            allows limiting of the contents of<br/>
-            a block to the specified number of lines.
-          </el-text>
-        </el-descriptions-item>
-      </el-descriptions>
-    </div>
-
-    <el-dialog v-model="editJobParamsDialogVisible" title="Edit Job Params" width="480">
-      <template #footer>
-        <div>
-          {{jobParams}}
-        </div>
-        <div class="dialog-footer">
-          <el-button @click="editJobParamsDialogVisible = false">Cancel</el-button>
-          <el-button type="primary" @click="editJobParamsDialogVisible = false">
-            Confirm
-          </el-button>
-        </div>
-      </template>
-    </el-dialog>
-  </div>
-</template>
-
-<style scoped>
-
-</style>
-
-bo-runtime-display-card
-<script lang="ts" setup>
-import {SwitchButton, Setting} from '@element-plus/icons-vue'
-import {ElMessage, ElMessageBox} from "element-plus";
-import type {BotInstanceInfo} from "@/types/vortexa-type.ts";
-import {computed, ref} from "vue";
-import {stringToEnum} from "@/util/common.ts";
-import {BotInstanceStatus} from "@/config/vortexa-config.ts";
-import HorizontalScrollBar from "@/components/horizontal-scroll-bar/horizontal-scroll-bar.vue";
-import BotJobDetiail from "@/views/homepage/script/components/bot-job-detiail.vue";
+        // Step 5 检查当前状态，如果为new或stop才进行启动
+        WebsocketClientStatus currentStatus = wsClient.getClientStatus();
 
 
-const props = defineProps<{
-  botInstance: BotInstanceInfo
-}>();
-
-// 运行状态
-const botInstanceStatus = computed(() => {
-  return stringToEnum(props.botInstance.params['bot_instance_status'], BotInstanceStatus)
-})
-
-// 基本任务
-const botInstanceBasicTask = computed(() => {
-  return props.botInstance.params['basic_job_list']
-})
-// 任务
-const botInstanceTask = computed(() => {
-  return props.botInstance.jobParams
-})
-// 当前显示的job
-const activeJobName = ref('')
-const activeJobParams = computed(()=>{
-  if (activeJobName.value) {
-    return props.botInstance.jobParams[activeJobName.value]
-  }
-  return {}
-})
-// 当前显示的job 变化
-const activeJobChangeHandler = (newJobName: string) => {
-  activeJobName.value = newJobName
-}
-
-// 事件
-const emit = defineEmits([
-  'start-script',
-  'stop-script',
-  'delete-script',
-])
-
-const startScriptHandler = () => {
-  emit('start-script', {instanceId: props.botInstance.id})
-}
-
-const stopScriptHandler = () => {
-  emit('stop-script', {instanceId: props.botInstance.id})
-}
-
-const deleteInstanceHandler = () => {
-  ElMessageBox.confirm(
-    'delete the script instance. Continue?',
-    'Warning',
-    {
-      confirmButtonText: 'OK',
-      cancelButtonText: 'Cancel',
-      type: 'danger',
+        return switch (currentStatus) {
+            // 新创建，停止状态，需要建立连接
+            case WebsocketClientStatus.NEW, WebsocketClientStatus.STOP -> wsClient
+                    .connect() // 异步连接
+                    .thenApplyAsync(connectResult -> {
+                        if (connectResult) {
+                            // 连接成功
+                            return Result.ok(prefix + "connect success");
+                        } else if (autoBotJobWSParam.getWsUnlimitedRetry()) {
+                            // TODO ws需要加入shutdown后的恢复机制
+                            // 连接失败，且允许无限重连, 返回ok，ws内部会自动重连
+                            return Result.ok(prefix + "connect fail, restarting...");
+                        } else {
+                            return Result.fail(prefix + "ws client can not connect");
+                        }
+                    }, executorService)
+                    .exceptionallyAsync(throwable -> {
+                        log.error("ws client connect error", throwable);
+                        return Result.fail(prefix + "connect error, " + throwable.getMessage());
+                    }, executorService);
+            case WebsocketClientStatus.STARTING, WebsocketClientStatus.RUNNING ->
+                    CompletableFuture.completedFuture(Result.ok());
+            // 被禁止使用，抛出异常
+            case WebsocketClientStatus.SHUTDOWN ->
+                    CompletableFuture.completedFuture(Result.fail(prefix + " ws client can not connect"));
+        };
     }
-  )
-    .then(() => {
-      emit('delete-task', {instanceId: props.botInstance.id})
-    })
-    .catch(() => {
-      ElMessage({
-        type: 'info',
-        message: 'Delete canceled',
-      })
-    })
-}
 
-</script>
-
-<template>
-  <div class="bot-runtime-display-card">
-    <div class="card-header clearfix">
-      <div style="display:flex; align-items: start">
-        <div style="width: 60px;">
-          <el-image class="head-image"/>
-        </div>
-        <div
-          style="flex: 1;overflow: hidden;font-weight: 700; cursor: pointer"
-          @click="activeJobName=''"
-        >
-          <el-text truncated>{{ botInstance.botKey }}</el-text>
-          <div style="font-weight: 400;">
-            <el-text truncated>
-              {{ botInstance.insertDatetime ? botInstance.insertDatetime : 'unknown start time' }}
-            </el-text>
-          </div>
-        </div>
-
-        <el-dropdown placement="bottom-end">
-          <el-icon class="setting-button">
-            <Setting/>
-          </el-icon>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item>Account edit</el-dropdown-item>
-              <el-dropdown-item
-                @click="deleteInstanceHandler"
-              >
-                <span  style="color: red">delete</span>
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
-      </div>
-    </div>
-
-
-    <div class="data-print-line">
-      <horizontal-scroll-bar :step="180">
-          <el-button
-            v-for="basicTaskName in botInstanceBasicTask"
-            size="small"
-            :key="basicTaskName"
-            class="button-morandi"
-            :class="{'active-job-button': activeJobName==basicTaskName}"
-            @click="activeJobChangeHandler(basicTaskName)"
-            plain
-          >
-            {{ basicTaskName }}
-          </el-button>
-          <el-button
-            v-for="task in botInstanceTask"
-            size="small"
-            :key="task.jobName"
-            class="button-morandi"
-            :class="{'active-job-button': activeJobName==task.jobName}"
-            @click="activeJobChangeHandler(task.jobName)"
-            plain
-          >
-            {{ task.jobName }}
-          </el-button>
-      </horizontal-scroll-bar>
-    </div>
-
-
-    <div class="card-detail">
-      <el-scrollbar class="card-detail-content">
-        <bot-job-detiail
-          :job-name="activeJobName"
-          :job-params="activeJobParams"
-          :is-running="false"
-        />
-      </el-scrollbar>
-
-      <el-button v-if="botInstanceStatus==BotInstanceStatus.RUNNING"
-                 @click="stopScriptHandler"
-                 class="opt-button"
-                 type="danger"
-                 plain
-      >
-        <el-icon>
-          <SwitchButton/>
-        </el-icon>
-        Stop Task
-      </el-button>
-      <el-button
-        v-else
-        class="opt-button"
-        type="success"
-        @click="startScriptHandler"
-        plain
-      >
-        <el-icon>
-          <SwitchButton/>
-        </el-icon>
-        Start Script
-      </el-button>
-    </div>
-  </div>
-</template>
-
-<style scoped>
-.bot-runtime-display-card {
-  width: 300px;
-  min-width: 300px;
-  //max-width: 500px;
-  height: 350px;
-  background-color: rgba(110, 110, 110, 0.1);
-  padding: 24px;
-
-  margin-left: 12px;
-
-  color: #9da3ae;
-  border-radius: 10px;
-}
-
-.card-header {
-  height: 48px;
-}
-
-.data-print-line {
-  height: 28px;
-  margin-top: 4px;
-  border-bottom: 1px solid #9da3ae;
-}
-
-.card-detail {
-  height: 222px;
-  margin-top: 16px;
-}
-
-.head-image {
-  height: 48px;
-  width: 48px;
-  margin-right: 8px;
-}
-
-.icon-button {
-  width: 24px;
-  height: 24px;
-  color: #9da3ae;
-  font-size: 20px;
-
-  cursor: pointer;
-}
-
-.icon-button:hover {
-  transform: scale(1.2); /* 鼠标悬浮时放大 */
-  color: #007BFF; /* 鼠标悬浮时改变颜色 */
-}
-
-.card-detail-content {
-  height: 222px;
-}
-
-.opt-button {
-  margin-top: 4px;
-  width: 100%;
-  font-size: 16px;
-  font-weight: 600;
-  text-align: center;
-}
-
-.setting-button {
-  font-size: 23px;
-  cursor: pointer;
-}
-
-.setting-button:hover {
-  color: #000000;
-}
-
-.active-job-button {
-  background-color: aquamarine !important;
-  color: #000000 !important;
-}
-
-:deep(.el-descriptions__body), :deep(.el-descriptions__label.el-descriptions__cell.is-bordered-label) {
-  background-color: transparent!important;
-}
-</style>
-
-
-vortexa-script-ciew
-<script setup lang="ts">
-import {Filter, RefreshRight} from '@element-plus/icons-vue'
-import BotRuntimeDisplayCard from "@/views/homepage/script/components/bot-runtime-display-card.vue";
-import {BotInstanceInfo} from "@/types/vortexa-type.ts";
-import {onMounted, ref, nextTick, computed, reactive} from "vue";
-import ContentBlock from "@/components/content-block/content-block.vue";
-import {BotInstanceStatus} from "@/config/vortexa-config.ts";
-import {pageQueryBotInstanceNetwork} from "@/api/bot.ts";
-import {PageQuery, PageResult} from "@/types/vortexa-type-common.ts";
-import {ElMessage} from "element-plus";
-
-const filters = ref<{
-  status: BotInstanceStatus
-}>({status: BotInstanceStatus.ALL})
-
-const botInstanceList = ref<Array<BotInstanceInfo>>([])
-
-const displayInstanceList = computed(() => {
-  console.log(botInstanceList.value)
-  return botInstanceList.value.filter(info => {
-    let filter: boolean = true
-    if (filterValue.value != null) {
-      filter = info.botName.includes(filterValue.value) || info.botKey.includes(filterValue.value)
+    /**
+     * 生成账户key
+     *
+     * @param accountContext accountContext
+     * @param jobName        jobName
+     * @return String
+     */
+    private static @NotNull String generateAccountKey(AccountContext accountContext, String jobName) {
+        return jobName + accountContext.getName();
     }
-    if (filters.value.status != BotInstanceStatus.ALL) {
-      filter = info.params['bot_instance_status'] == filters.value.status
+
+
+    /**
+     * 添加ws状态改变的handler
+     *
+     * @param <T>               t
+     * @param wsClient          wsClient
+     * @param autoBotJobWSParam autoBotJobWSParam
+     */
+    private <T> void init(cn.com.vortexa.script_node.websocket.BaseBotWSClient<T> wsClient, AutoBotJobWSParam autoBotJobWSParam, Semaphore wsConnectSemaphore) {
+        // 设置参数
+        wsClient.setAllIdleTimeSecond(autoBotJobWSParam.getHeartBeatIntervalSecond());
+        wsClient.setReconnectCountDownSecond(autoBotJobWSParam.getReconnectCountDownSecond());
+        wsClient.setReconnectLimit(autoBotJobWSParam.getReconnectLimit());
+        wsClient.setEventLoopGroupThreads(autoBotJobWSParam.getNioEventLoopGroupThreads());
+
+        //设置相关回调
+        wsClient.setClientStatusChangeHandler(newStatus -> {
+            wsClient.whenClientStatusChange(newStatus);
+            // 释放资源
+            if (newStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+                // 记录完成的ws数量
+                wsConnectSemaphore.release();
+            }
+        });
     }
-    return filter
-  })
-})
 
-const isLoading = ref(false)
-// 分页查询数据
-const totalCount = ref(0)
-const pageQuery = reactive(new PageQuery({
-  page: 1,
-  limit: 10,
-  filterMap: new Map<string, object>()
-}))
-
-
-// 1. 过滤
-// 过滤下拉框宽度
-const dropdownWidth = ref(0)
-const filterValue = ref('')
-
-
-function filterByStatus(filterStatus: BotInstanceStatus) {
-  filters.value.status = filterStatus
+    public void clear() {
+        for (Map.Entry<String, BaseBotWSClient<?>> entry : launchedWSClientMap.entrySet()) {
+            BaseBotWSClient<?> client = entry.getValue();
+            client.close();
+        }
+        launchedWSClientMap.clear();
+        wsCCSemapthoreMap.clear();
+    }
 }
+package cn.com.vortexa.script_node;
 
-// 2.BotInstance
-// 网络请求获取实例
-const scrolQueryDisabled = ref(false)
-const pageQueryBotInstance = () => {
-  if (isLoading.value) return
-  isLoading.value = true
-  pageQueryBotInstanceNetwork(pageQuery)
-    .then(result => {
-      const pageResult: PageResult<BotInstanceInfo> = result.data
-      botInstanceList.value.push(...pageResult.list)
-      totalCount.value = pageResult.total
-      pageQuery.page += 1
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.typehandler.JsonTypeHandler;
+import cn.com.vortexa.common.util.typehandler.LocalDateTimeTypeHandler;
+import cn.com.vortexa.common.util.typehandler.MapTextTypeHandler;
+import cn.com.vortexa.db_layer.DBLayerAutoConfig;
+import cn.com.vortexa.db_layer.plugn.table_shard.TableShardInterceptor;
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.BotIdBasedTableShardStrategy;
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
+import cn.com.vortexa.job.JobAutoConfig;
+import cn.com.vortexa.script_node.config.ScriptNodeConfiguration;
+import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.config.GlobalConfig;
+import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
+import com.zaxxer.hikari.HikariDataSource;
+import org.apache.ibatis.plugin.Interceptor;
+import org.apache.ibatis.session.SqlSessionFactory;
+import org.mybatis.spring.SqlSessionFactoryBean;
+import org.mybatis.spring.annotation.MapperScan;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.PlatformTransactionManager;
 
-      if (pageResult.total == botInstanceList.value.length) {
-        ElMessage({
-          message: 'Total script loaded',
-          type: 'warning',
-        })
-        scrolQueryDisabled.value = true
-      }
-    })
-    .catch(() => {
-      scrolQueryDisabled.value = true
-    })
-    .finally(() => {
-      isLoading.value = false
-    })
+import javax.sql.DataSource;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+@Configuration
+@ImportAutoConfiguration({DBLayerAutoConfig.class, JobAutoConfig.class})
+@ComponentScan({"cn.com.vortexa.script_node.service.impl", "cn.com.vortexa.script_node.config"})
+@MapperScan(basePackages = "cn.com.vortexa.script_node.mapper")
+public class ScriptNodeAutoConfig {
+
+    @Autowired
+    private JsonTypeHandler jsonTypeHandler;
+
+    @Autowired
+    private MapTextTypeHandler mapTextTypeHandler;
+
+    @Autowired
+    private LocalDateTimeTypeHandler localDateTimeTypeHandler;
+
+    @Autowired
+    private ScriptNodeConfiguration scriptNodeConfiguration;
+
+    @Bean("vortexaDataSource")
+    public DataSource vortexaDataSource() {
+        String botGroup = scriptNodeConfiguration.getBotGroup();
+        if (StrUtil.isBlank(botGroup)) {
+            throw new IllegalArgumentException("botGroup is empty");
+        }
+
+        try {
+            String path = tryCreateDBFile(botGroup);
+            HikariDataSource dataSource = new HikariDataSource();
+            dataSource.setJdbcUrl("jdbc:sqlite:/" + path);
+            return dataSource;
+        } catch (IOException e) {
+            throw new RuntimeException("create Bot[%s]DB file error".formatted(botGroup), e);
+        }
+    }
+
+
+    // @Bean
+    // public SqlSessionFactory sqlSessionFactory(@Qualifier("vortexaDataSource") DataSource dataSource) throws Exception {
+    //     MybatisSqlSessionFactoryBean factoryBean = new MybatisSqlSessionFactoryBean();
+    //     factoryBean.setDataSource(dataSource);
+    //     factoryBean.setMapperLocations(new PathMatchingResourcePatternResolver().getResources("classpath:/mapper/*.xml"));
+    //     factoryBean.setTypeHandlers(
+    //             jsonTypeHandler, mapTextTypeHandler, localDateTimeTypeHandler
+    //     );
+    //     factoryBean.setTypeAliasesPackage("cn.com.vortexa.entity");
+    //     MybatisConfiguration configuration = new MybatisConfiguration();
+    //     factoryBean.setConfiguration(configuration);
+    //     configuration.setMapUnderscoreToCamelCase(true);
+    //
+    //     GlobalConfig globalConfig = new GlobalConfig();
+    //     GlobalConfig.DbConfig dbConfig = new GlobalConfig.DbConfig();
+    //     dbConfig.setLogicDeleteField("isValid");
+    //     dbConfig.setLogicDeleteValue("0");
+    //     dbConfig.setLogicNotDeleteValue("1");
+    //     globalConfig.setDbConfig(dbConfig);
+    //     factoryBean.setGlobalConfig(globalConfig);
+    //     factoryBean.setPlugins(tableShardInterceptor());
+    //     return factoryBean.getObject();
+    // }
+
+    // 配置事务管理器
+    @Bean(name = "transactionManager")
+    public PlatformTransactionManager transactionManager() {
+        return new DataSourceTransactionManager(vortexaDataSource());
+    }
+
+    @Bean
+    public ITableShardStrategy tableShardStrategy() {
+        return new BotIdBasedTableShardStrategy();
+    }
+
+    @Bean
+    public Interceptor tableShardInterceptor() {
+        return new TableShardInterceptor(tableShardStrategy());
+    }
+
+
+    /**
+     * 尝试创建DB File
+     *
+     * @param scriptNodeGroup scriptNodeGroup
+     * @return db file absolutePath
+     * @throws IOException IOException
+     */
+    private static String tryCreateDBFile(String scriptNodeGroup) throws IOException {
+        // 创建BotKey对应的数据库文件
+        Path absolutePath = Paths.get(
+                FileUtil.getBotAppConfigPath(),
+                scriptNodeGroup,
+                "script_node_" + scriptNodeGroup + ".db"
+        );
+
+        if (Files.notExists(absolutePath)) {
+            if (Files.notExists(absolutePath.getParent())) {
+                Files.createDirectories(absolutePath.getParent());
+            }
+            Files.createFile(absolutePath);
+        }
+
+        return absolutePath.toString();
+    }
 }
+package cn.com.vortexa.script_node;
 
+import cn.com.vortexa.common.dto.config.ClassInfo;
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.com.vortexa.common.exception.BotStartException;
+import cn.com.vortexa.common.util.DynamicJavaLoader;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.script_node.config.ScriptNodeConfiguration;
+import cn.com.vortexa.script_node.constants.BotStatus;
+import cn.com.vortexa.script_node.scriptagent.BotScriptAgent;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.com.vortexa.script_node.util.ScriptBotLauncher;
+import lombok.extern.slf4j.Slf4j;
 
-const reload = () => {
-  totalCount.value = 0
-  pageQuery.page = 1
-  pageQuery.limit = 10
-  pageQuery.filterMap = new Map()
-  botInstanceList.value = []
-  pageQueryBotInstance()
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.ApplicationListener;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+@Slf4j
+@Component
+public class ScriptNodeStartupListener implements ApplicationListener<ApplicationReadyEvent> {
+
+    @Autowired
+    private ScriptNodeConfiguration scriptNodeConfiguration;
+
+    @Autowired
+    private BotApi botApi;
+
+    @Autowired
+    private BotScriptAgent botScriptAgent;
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public void onApplicationEvent(ApplicationReadyEvent event) {
+        log.info("start launch script bot...");
+
+        Set<String> autoLaunchBotKeys = scriptNodeConfiguration.getAutoLaunchBotKeys();
+
+        // 启动配置的bot
+        for (Map.Entry<String, AutoBotConfig> entry : scriptNodeConfiguration.getBotKeyConfigMap().entrySet()) {
+            String botKey = entry.getKey();
+            AutoBotConfig botConfig = entry.getValue();
+
+            log.info("[{}] start launch...", botKey);
+            try {
+                // 加载extra class
+                List<ClassInfo> extraClass = botConfig.getExtraClass();
+                if (extraClass != null && !extraClass.isEmpty()) {
+                    for (ClassInfo classInfo : extraClass) {
+                        loadScriptNodeResourceClass(classInfo.getClassFilePath(), classInfo.getClassName());
+                    }
+                }
+
+                // 1 不是class，编译位class
+                String classFilePath = botConfig.getClassFilePath();
+
+                // 2 加载class
+                Class<?> aClass = loadScriptNodeResourceClass(classFilePath, botConfig.getClassName());
+
+                log.info("[{}] class load success ", botKey);
+
+                if (AutoLaunchBot.class.equals(aClass.getSuperclass())) {
+                    Class<AutoLaunchBot<?>> botClass = (Class<AutoLaunchBot<?>>) aClass;
+
+                    boolean launch = autoLaunchBotKeys.contains(botKey);
+
+                    // Step 3 启动bot
+                    AutoLaunchBot<?> autoLaunchBot = ScriptBotLauncher.launch(botClass, botConfig, botApi, bot -> {
+                        bot.setBotStatusChangeHandler((oldStatus, newStatus) -> {
+                            // 3.1 添加监听， bot状态改变时上报
+                            if (newStatus == BotStatus.RUNNING) {
+                                botScriptAgent.addRunningBot(bot.getBotInfo().getName(), botKey, bot);
+                            }
+
+                            if (newStatus == BotStatus.STOPPED || newStatus == BotStatus.SHUTDOWN) {
+                                botScriptAgent.removeRunningBot(bot.getBotInfo().getName(), botKey);
+                            }
+                        });
+                        return true;
+                    }, launch);
+
+                    // Step 4 添加进菜单
+                    if (botConfig.isCommandMenu()) {
+                        ScriptBotLauncher.addBotInMenu(botKey, autoLaunchBot);
+                    }
+                } else {
+                    log.info("[{}] class[{}} illegal, must extends AutoLaunchBot.class", botKey, classFilePath);
+                }
+
+            } catch (BotStartException | BotInitException e) {
+                log.error("script botKey[{}] auto launch error", botKey, e);
+            } catch (Exception e) {
+                throw new RuntimeException("load class error", e);
+            }
+        }
+
+        // 启动CMD
+        ScriptBotLauncher.startCommandLineMenu();
+    }
+
+    /**
+     * 加载script bot的class文件
+     *
+     * @param classFilePath classFilePath
+     * @param className className
+     * @return 已加载的BotClass文件
+     * @throws Exception Exception
+     */
+    private Class<?> loadScriptNodeResourceClass(String classFilePath, String className) throws Exception {
+        if (classFilePath.endsWith(".java") && !DynamicJavaLoader.compileJavaFile(classFilePath)) {
+            throw new RuntimeException(classFilePath + " compile to class error");
+        }
+        classFilePath = classFilePath.replace(".java", ".class");
+
+        return DynamicJavaLoader.loadClassFromFile(classFilePath, className);
+    }
 }
-
-onMounted(async () => {
-  await nextTick()
-  dropdownWidth.value = document.querySelector('.filter-button').offsetWidth
-})
-</script>
-
-<template>
-  <div class="vortexa-script-view">
-
-    <!--    搜索块-->
-    <content-block class="vortexa-script-viw-block-1">
-      <div>
-        <el-input v-model="filterValue" placeholder="Search by name"/>
-        <div>
-          <el-button
-            style="width: 90px"
-            @click="reload"
-          >
-            <el-icon>
-              <RefreshRight/>
-            </el-icon>
-            Fresh
-          </el-button>
-          <el-dropdown
-            trigger="click"
-            placement="bottom"
-            style="width:calc(100% - 90px); "
-            :hide-on-click="false"
-          >
-            <el-button class="filter-button">
-              <el-icon>
-                <Filter/>
-              </el-icon>
-              Filter
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu class="filter-menu" :style="{'width': dropdownWidth + 'px'}">
-                <el-dropdown-item>The Action 1st</el-dropdown-item>
-                <el-dropdown-item>The Action 2st</el-dropdown-item>
-                <el-dropdown-item>The Action 3st</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-        </div>
-      </div>
-    </content-block>
-
-    <!--展示块-->
-    <content-block class="vortexa-script-viw-block-2">
-      <template #header>
-        <el-button-group style="margin-bottom: 12px">
-          <el-button
-            type="info"
-            @click="filterByStatus(BotInstanceStatus.ALL)"
-            :disabled="filters.status == BotInstanceStatus.ALL"
-          >
-            All
-          </el-button>
-          <el-button
-            type="success"
-            @click="filterByStatus(BotInstanceStatus.RUNNING)"
-            :disabled="filters.status == BotInstanceStatus.RUNNING"
-          >
-            Running
-          </el-button>
-          <el-button
-            type="danger"
-            @click="filterByStatus(BotInstanceStatus.STOPPED)"
-            :disabled="filters.status == BotInstanceStatus.STOPPED"
-          >
-            Stopped
-          </el-button>
-        </el-button-group>
-      </template>
-      <div class="scroll-bar-wrapper" v-loading="isLoading">
-        <div
-          class="vortexa-script-display-content"
-          v-infinite-scroll="pageQueryBotInstance"
-          :infinite-scroll-disabled="scrolQueryDisabled"
-        >
-          <bot-runtime-display-card
-            v-for="botInstance in displayInstanceList"
-            :key="botInstance.botKey"
-            :bot-instance="botInstance"
-            class="vortexa-script-item"
-          />
-        </div>
-        <el-backtop target=".scroll-bar-wrapper" :bottom="100" :right="100">
-        </el-backtop>
-      </div>
-
-      <span style="float: right;font-size: 14px; font-weight: 600">
-        Total:{{ totalCount }}
-      </span>
-    </content-block>
-  </div>
-</template>
-
-<style scoped>
-
-.vortexa-script-view {
-  display: flex;
-  flex-direction: column;
-  height: calc(100vh - 130px);
-}
-
-.vortexa-script-viw-block-1 {
-  max-width: 500px;
-  height: 70px;
-}
-
-.vortexa-script-viw-block-2 {
-  padding-bottom: 60px;
-}
-
-.scroll-bar-wrapper {
-  height: calc(100vh - 260px);
-  overflow-y: scroll;
-}
-
-.vortexa-script-display-content {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  justify-items: start;
-}
-
-.scroll-bar-wrapper::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-}
-
-.scroll-bar-wrapper {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-
-
-.vortexa-script-item {
-  flex: 1 0 calc((100% - 30px) / 5);
-}
-
-.filter-button {
-  width: 100%;
-}
-
-.filter-menu {
-  min-width: 200px;
-}
-
-@media (min-width: 1980px) {
-  .vortexa-script-view {
-    display: flex;
-    flex-direction: row-reverse;
-    height: calc(100vh - 100px);
-    gap: 10px;
-  }
-
-  .vortexa-script-viw-block-2 {
-    width: calc(100% - 250px);
-    height: calc(100vh - 100px);
-  }
-}
-</style>
-
-
-
