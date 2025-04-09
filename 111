@@ -1,928 +1,378 @@
-package cn.com.vortexa.script_node.bot;
+package cn.com.vortexa.browser_control.driver;
 
-import static cn.com.vortexa.script_node.service.impl.BotAccountContextServiceImpl.BOT_ACCOUNT_CONTEXT_TABLE_PREFIX;
-import static cn.com.vortexa.common.entity.BotInfo.BASIC_JOB_LIST_KEY;
-
-import cn.com.vortexa.script_node.service.BotApi;
-import cn.com.vortexa.script_node.constants.BotStatus;
-import cn.com.vortexa.common.config.SystemConfig;
-import cn.com.vortexa.common.constants.BotJobType;
-import cn.com.vortexa.common.constants.HttpMethod;
-import cn.com.vortexa.common.dto.job.AutoBotJobParam;
-import cn.com.vortexa.script_node.util.log.AppendLogger;
-import cn.com.vortexa.common.dto.AutoBotRuntimeInfo;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.common.entity.BotInfo;
-import cn.com.vortexa.common.entity.BotInstance;
-import cn.com.vortexa.common.entity.ProxyInfo;
-import cn.com.vortexa.common.exception.BotInitException;
-import cn.com.vortexa.common.exception.BotStatusException;
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.NamedThreadFactory;
-import cn.com.vortexa.common.util.http.RestApiClientFactory;
-import cn.hutool.core.util.RandomUtil;
-import cn.hutool.core.util.StrUtil;
-
-import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 
-import lombok.Getter;
-import lombok.Setter;
+import cn.com.vortexa.browser_control.exception.BrowserRequestException;
+import cn.com.vortexa.browser_control.dto.QueryEntity;
+import cn.com.vortexa.common.constants.HttpMethod;
+import cn.com.vortexa.common.util.http.RestApiClientFactory;
 
-import java.sql.SQLException;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.*;
-import java.util.function.Supplier;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
-public abstract class AbstractAutoBot {
+/**
+ * @author helei
+ * @since 2025/3/26 9:25
+ */
+public abstract class FingerprintBrowserDriver {
 
-    private static final ProxyInfo DEFAULT_PROXY = new ProxyInfo();
+    private final String connectUrl;
 
-    public final AppendLogger logger = new AppendLogger(getClass());
-
-    /**
-     * 代理并发控制
-     */
-    private final Map<ProxyInfo, Semaphore> networkSyncControllerMap;
-
-    /**
-     * bot api
-     */
-    @Getter
-    private BotApi botApi;
-
-    /**
-     * bot运行时信息
-     */
-    @Getter
-    private final AutoBotRuntimeInfo autoBotRuntimeInfo;
-
-    /**
-     * 请求并发数量
-     */
-    @Getter
-    @Setter
-    private int requestConcurrentCount = 5;
-
-    /**
-     * bot信息
-     */
-    @Getter
-    private BotInfo botInfo;
-
-    @Getter
-    private BotInstance botInstance;
-
-    /**
-     * 配置
-     */
-    @Getter
-    private AutoBotConfig autoBotConfig;
-
-    /**
-     * 执行异步任务的线程池
-     */
-    @Getter
-    private ExecutorService executorService;
-
-    /**
-     * 状态
-     */
-    @Getter
-    private BotStatus status = BotStatus.NEW;
-
-    public AbstractAutoBot() {
-        this.networkSyncControllerMap = new ConcurrentHashMap<>();
-        this.autoBotRuntimeInfo = new AutoBotRuntimeInfo();
+    public FingerprintBrowserDriver(String connectUrl) {
+        this.connectUrl = connectUrl;
     }
 
     /**
-     * 初始化方法
+     * 检查健康状态
+     */
+    public JSON health() {
+        try {
+            QueryEntity<JSON> queryEntity = healthBody();
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("page query window error", e);
+        }
+    }
+
+    /**
+     * 构建分页查询窗口的请求
      *
-     * @param autoBotConfig autoBotConfig
-     * @throws BotInitException BotInitException
+     * @return QueryEntity
      */
-    public final void init(BotApi botApi, AutoBotConfig autoBotConfig) throws BotInitException {
-        this.botApi = botApi;
-
-        // Step 1 参数校验
-        if (StrUtil.isBlank(autoBotConfig.getBotKey())) {
-            throw new IllegalArgumentException("bot key is empty!");
-        }
-
-        // Step 2 进入INIT状态，获取参数
-        updateState(BotStatus.INIT);
-        this.autoBotConfig = autoBotConfig;
-        try {
-            // Step 2.1 获取BotInfo,解析Bot Job
-            botInfo = buildBotInfo();
-            resolveBotJobMethod();
-        } catch (Exception e) {
-            throw new BotInitException("resolve bot job error", e);
-        }
-
-        // Step 2.2 保存bot info
-        try {
-            if (botApi.getBotInfoRPC().insertOrUpdateRPC(botInfo) == 1) {
-                Map<String, Object> query = new HashMap<>();
-                query.put("name", botInfo.getName());
-                // 保存成还需查询botId
-                Integer id = botApi.getBotInfoRPC().conditionQueryRPC(query).getFirst().getId();
-                botInfo.setId(id);
-                logger.info("save bot info success, id:" + botInfo.getId());
-            }
-        } catch (SQLException e) {
-            throw new BotInitException("save bot info error", e);
-        }
-
-        this.botInstance = BotInstance.builder()
-            .botId(botInfo.getId())
-            .botName(botInfo.getName())
-            .botKey(autoBotConfig.getBotKey())
-            .build();
-
-        // Step 2.3 设置logger前缀与线程池
-        String botName = runtimeBotName();
-        logger.append(botName);
-        this.executorService = Executors.newThreadPerTaskExecutor(
-            new NamedThreadFactory(botInfo.getName() + "-executor"));
-
-        try {
-            // Step 2.4 初始化存储的Table
-            logger.info("start init database table");
-            // 检查对应分表是否存在
-            if (!botApi.getBotAccountService()
-                .checkAndCreateShardedTable(botInfo.getId(), getAutoBotConfig().getBotKey(), true)) {
-                throw new RuntimeException("bot account table create error");
-            }
-            logger.info("database table init finish");
-
-            // Step 2.5 初始化BotInstance实例
-            logger.info("start init bot instance");
-
-            BotInstance dbInstance = getBotApi().getBotInstanceRPC().selectOneRPC(botInstance);
-            // 数据库存在bot instance实例信息并且job信息没变化，用数据库的。 否则用BotInfo信息生成BotInstance信息写入库
-            if (dbInstance != null && !compareBotJobParamsChanged(botInfo, dbInstance)) {
-                this.botInstance = dbInstance;
-                logger.info("exist botInstance, use exist instance config");
-            } else {
-                logger.info("no instance or instance job update, create it...");
-
-                String tableName = getBotApi().getTableShardStrategy().generateTableName(
-                    BOT_ACCOUNT_CONTEXT_TABLE_PREFIX,
-                    new Object[] {botInstance.getBotId(), botInstance.getBotKey()}
-                );
-                botInstance.setBotName(botInfo.getName());
-                botInstance.setAccountTableName(tableName);
-                botInstance.setJobParams(botInfo.getJobParams());
-                botInstance.setParams(botInfo.getParams());
-
-                if (botApi.getBotInstanceRPC().insertOrUpdateRPC(botInstance) > 0) {
-                    logger.info("new bot instance create success");
-                } else {
-                    throw new BotInitException("new bot instance create error");
-                }
-            }
-
-            // Step 2.5 子类初始化
-            doInit();
-
-            // Step 2。6 更新状态
-            updateState(BotStatus.INIT_FINISH);
-        } catch (Exception e) {
-            logger.error("init error", e);
-            updateState(BotStatus.INIT_ERROR);
-        }
-    }
+    protected abstract QueryEntity<JSON> healthBody();
 
     /**
-     * 初始化方法
-     */
-    protected abstract void doInit() throws BotInitException;
-
-    /**
-     * 停止Bot
-     */
-    public void stop() {
-        updateState(BotStatus.STOPPING);
-        try {
-            networkSyncControllerMap.clear();
-            doStop();
-            updateState(BotStatus.STOPPED);
-        } catch (Exception e) {
-            logger.error("stop bot error, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
-            updateState(BotStatus.SHUTDOWN);
-        }
-    }
-
-    protected abstract void doStop();
-
-    /**
-     * 同步请求，使用syncController控制并发
+     * 分页查询窗口
      *
-     * @param proxy proxy
-     * @param url url
-     * @param method method
-     * @param headers headers
      * @param params params
-     * @param body body
-     * @return CompletableFuture<String> response str
      */
-    public CompletableFuture<String> syncRequest(
-        ProxyInfo proxy,
-        String url,
-        HttpMethod method,
-        Map<String, String> headers,
-        JSONObject params,
-        JSONObject body
-    ) {
-        return syncRequest(proxy, url, method, headers, params, body, 1);
+    public JSON pageQueryWindow(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = buildPageQueryWindowBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("page query window error", e);
+        }
     }
 
     /**
-     * 同步请求，使用syncController控制并发
+     * 构建分页查询窗口的请求
      *
-     * @param proxy proxy
-     * @param url url
-     * @param method method
-     * @param headers headers
-     * @param params params
-     * @param body body
-     * @return CompletableFuture<String> response str
+     * @return QueryEntity
      */
-    public CompletableFuture<String> syncRequest(
-        ProxyInfo proxy,
-        String url,
-        HttpMethod method,
-        Map<String, String> headers,
-        JSONObject params,
-        JSONObject body,
-        int retryTimes
-    ) {
-        return syncRequest(proxy, url, method, headers, params, body, null, retryTimes);
+    protected abstract QueryEntity<JSON> buildPageQueryWindowBody(JSONObject params);
+
+    /**
+     * 打开浏览器窗口
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON openBrowserWindow(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = buildOpenBrowserWindowBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("open browser window error", e);
+        }
     }
 
     /**
-     * 同步请求，使用syncController控制并发
+     * 构建打开窗口窗口的请求
      *
-     * @param proxy proxy
-     * @param url url
-     * @param method method
-     * @param headers headers
-     * @param params params
-     * @param body body
-     * @return CompletableFuture<Response> String
+     * @return QueryEntity
      */
-    public CompletableFuture<String> syncRequest(
-        ProxyInfo proxy,
-        String url,
-        HttpMethod method,
-        Map<String, String> headers,
-        JSONObject params,
-        JSONObject body,
-        Supplier<String> requestStart
-    ) {
-        return syncRequest(
-            proxy,
-            url,
-            method,
-            headers,
-            params,
-            body,
-            requestStart,
-            1
+    protected abstract QueryEntity<JSON> buildOpenBrowserWindowBody(JSONObject params);
+
+    /**
+     * 关闭浏览器窗口
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON closeBrowserWindow(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = buildCloseBrowserWindowBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("close browser window error", e);
+        }
+    }
+
+    /**
+     * 构建关闭窗口的请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> buildCloseBrowserWindowBody(JSONObject params);
+
+    /**
+     * 关闭所有浏览器窗口
+     *
+     * @return JSON
+     */
+    public JSON closeAllBrowserWindow() {
+        try {
+            QueryEntity<JSON> queryEntity = closeAllBrowserWindowBody();
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("close all browser window error", e);
+        }
+    }
+
+    /**
+     * 构建关闭所有浏览器窗口的请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> closeAllBrowserWindowBody();
+
+    /**
+     * 删除浏览器窗口
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON deleteBrowserWindow(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = deleteCloseBrowserWindowBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("delete browser window error", e);
+        }
+    }
+
+    /**
+     * 构建删除窗口的请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> deleteCloseBrowserWindowBody(JSONObject params);
+
+    /**
+     * 删除批量浏览器窗口
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON deleteBrowserWindowBatch(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = deleteBrowserWindowBatchBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("batch delete browser window error", e);
+        }
+    }
+
+    /**
+     * 构建批量删除窗口的请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> deleteBrowserWindowBatchBody(JSONObject params);
+
+    /**
+     * 浏览器窗口详情查询
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON browserWindowDetail(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = browserWindowDetailBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("query browser window detail error", e);
+        }
+    }
+
+    /**
+     * 构建窗口详情查询请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> browserWindowDetailBody(JSONObject params);
+
+    /**
+     * 排列已打开窗口
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON boundsBrowserWindow(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = boundsBrowserWindowBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("bounds browser window error", e);
+        }
+    }
+
+    /**
+     * 构建排列已打开窗口请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> boundsBrowserWindowBody(JSONObject params);
+
+    /**
+     * 自适应排列窗口
+     *
+     * @return JSON
+     */
+    public JSON autoFlexWindow() {
+        try {
+            QueryEntity<JSON> queryEntity = autoFlexWindowBody();
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("auto flex browser window error", e);
+        }
+    }
+
+    /**
+     * 构建自适应排列窗口窗口请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> autoFlexWindowBody();
+
+    /**
+     * 修改浏览器窗口分组
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON updateWindowGroup(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = updateWindowGroupBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("update browser window group error", e);
+        }
+    }
+
+    /**
+     * 修改浏览器窗口分组请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> updateWindowGroupBody(JSONObject params);
+
+    /**
+     * 修改窗口备注
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON updateWindowRemark(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = updateWindowRemarkBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("update browser window remark error", e);
+        }
+    }
+
+    /**
+     * 修改窗口备注请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> updateWindowRemarkBody(JSONObject params);
+
+    /**
+     * 检查代理
+     *
+     * @param params params
+     * @return JSON
+     */
+    public JSON proxyCheckOut(JSONObject params) {
+        try {
+            QueryEntity<JSON> queryEntity = proxyCheckOutBody(params);
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("update browser window remark error", e);
+        }
+    }
+
+    /**
+     * 检查代理请求
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> proxyCheckOutBody(JSONObject params);
+
+    /**
+     * 查询显示器列表
+     *
+     * @return JSON
+     */
+    public JSON displayListQuery() {
+        try {
+            QueryEntity<JSON> queryEntity = displayListQueryBody();
+            CompletableFuture<String> request = request(queryEntity);
+            String str = request.get();
+            return queryEntity.getResultStrHandler().apply(str);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new BrowserRequestException("query display list error", e);
+        }
+    }
+
+    /**
+     * 查询显示器列表
+     *
+     * @return QueryEntity
+     */
+    protected abstract QueryEntity<JSON> displayListQueryBody();
+
+    protected CompletableFuture<String> request(QueryEntity<JSON> queryEntity) {
+        if (queryEntity.getMethod() == null) {
+            queryEntity.setMethod(HttpMethod.POST);
+        }
+        return RestApiClientFactory.getClient(null).request(
+                connectUrl + queryEntity.getContentPath(),
+                queryEntity.getMethod(),
+                new HashMap<>(),
+                queryEntity.getMethod() == HttpMethod.POST ? null : queryEntity.getBody(),
+                queryEntity.getMethod() == HttpMethod.POST ? (queryEntity.getBody() != null ? queryEntity.getBody() : new JSONObject()) : new JSONObject()
         );
     }
 
     /**
-     * 同步请求，使用syncController控制并发
+     * 根据序号启动，返回窗口debugAddress
      *
-     * @param proxy proxy
-     * @param url url
-     * @param method method
-     * @param headers headers
-     * @param params params
-     * @param body body
-     * @return CompletableFuture<Response> String
+     * @param fingerSeq fingerSeq
+     * @return  String
      */
-    public CompletableFuture<String> syncRequest(
-        ProxyInfo proxy,
-        String url,
-        HttpMethod method,
-        Map<String, String> headers,
-        JSONObject params,
-        JSONObject body,
-        Supplier<String> requestStart,
-        int retryTimes
-    ) {
-        return syncCCHandler(proxy, requestStart, () -> {
-            try {
-                return RestApiClientFactory.getClient(proxy).request(
-                    url,
-                    method,
-                    headers,
-                    params,
-                    body,
-                    retryTimes
-                ).get();
-            } catch (InterruptedException | ExecutionException e) {
-                throw new RuntimeException(e);
-            }
-        });
-    }
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy proxy
-     * @param url url
-     * @param method method
-     * @param headers headers
-     * @param params params
-     * @param body body
-     * @return CompletableFuture<Response> String
-     */
-    public CompletableFuture<List<String>> syncStreamRequest(
-        ProxyInfo proxy,
-        String url,
-        HttpMethod method,
-        Map<String, String> headers,
-        JSONObject params,
-        JSONObject body,
-        Supplier<String> requestStart
-    ) {
-        return syncCCHandler(proxy, requestStart, () -> {
-            try {
-                return RestApiClientFactory.getClient(proxy).streamRequest(
-                    url,
-                    method,
-                    headers,
-                    params,
-                    body
-                ).get();
-            } catch (InterruptedException | ExecutionException e) {
-                throw new RuntimeException(e);
-            }
-        });
-    }
-
-    public <R> CompletableFuture<R> syncCCHandler(
-        ProxyInfo proxy,
-        Supplier<String> requestStart,
-        Supplier<R> request
-    ) {
-
-        Semaphore networkController = networkSyncControllerMap
-            .compute(proxy == null ? DEFAULT_PROXY : proxy, (k, v) -> {
-                if (v == null) {
-                    v = new Semaphore(requestConcurrentCount);
-                }
-                return v;
-            });
-
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                networkController.acquire();
-                // 随机延迟
-                TimeUnit.MILLISECONDS.sleep(RandomUtil.randomLong(1000, 3000));
-
-                String str = "start network request";
-                if (requestStart != null) {
-                    str = requestStart.get();
-                }
-                logger.debug("同步器允许发送请求 - " + str);
-
-                return request.get();
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            } finally {
-                networkController.release();
-            }
-        }, executorService);
-    }
-
-    /**
-     * 打印BotRuntimeInfo
-     *
-     * @return string
-     */
-    public String printBotRuntimeInfo() {
-        StringBuilder sb = new StringBuilder();
-        getAutoBotRuntimeInfo().getKeyValueInfoMap().forEach((k, v) -> {
-            sb.append(k).append(": ").append(v).append("\n");
-        });
-        return sb.toString();
-    }
-
-    /**
-     * 获取app的配置目录
-     *
-     * @return String
-     */
-    public String getAppConfigDir() {
-        return FileUtil.getConfigDirResourcePath(SystemConfig.CONFIG_DIR_APP_PATH, getBotInstance().getBotKey());
-    }
-
-    /**
-     * 更新BotStatus
-     *
-     * @param newStatus 新状态
-     */
-    public synchronized void updateState(BotStatus newStatus) throws BotStatusException {
-
-        boolean b = switch (status) {
-            //当前为NEW，新状态才能为NEW,SHUTDOWN
-            case NEW -> BotStatus.INIT.equals(newStatus);
-            //当前为INIT，新状态只能为INIT_FINISH、INIT_ERROR,SHUTDOWN
-            case INIT -> newStatus.equals(BotStatus.INIT_FINISH)
-                || newStatus.equals(BotStatus.INIT_ERROR);
-            //当前为INIT_ERROR,新状态只能为ACCOUNT_LOADING, SHUTDOWN
-            case INIT_ERROR -> newStatus.equals(BotStatus.INIT);
-            //当前状态为INIT_FINISH，新状态只能为ACCOUNT_LIST_CONNECT, SHUTDOWN
-            case INIT_FINISH -> newStatus.equals(BotStatus.STARTING);
-            //当前状态为STARING，新状态只能为RUNNING,SHUTDOWN
-            case STARTING -> newStatus.equals(BotStatus.RUNNING);
-            //RUNNING，新状态只能为 SHUTDOWN
-            case RUNNING -> newStatus.equals(BotStatus.STOPPING);
-            case STOPPING -> newStatus.equals(BotStatus.STOPPED) || newStatus.equals(BotStatus.SHUTDOWN);
-            case STOPPED -> newStatus.equals(BotStatus.INIT);
-            case SHUTDOWN -> throw new BotStatusException("bot already shutdown");
-        };
-
-        if (b) {
-            logger.info("Status change [%s] => [%s]".formatted(status, newStatus));
-            this.status = newStatus;
-        } else {
-            throw new BotStatusException(
-                String.format("%s status can't from[%s] -> to[%s]", runtimeBotName(), status, newStatus));
-        }
-    }
-
-    public String runtimeBotName() {
-        return "Bot[%s]-[%s]".formatted(botInstance.getBotName(), autoBotConfig.getBotKey());
-    }
-
-    protected synchronized Map<String, AutoBotJobParam> getJobParams() {
-        return this.botInstance == null ? new HashMap<>() : this.botInstance.getJobParams();
-    }
-
-    protected synchronized AutoBotJobParam getJobParam(String jobName) {
-        return this.botInfo.getJobParams() == null ? null : this.botInfo.getJobParams().get(jobName);
-    }
-
-    protected synchronized void setJobParam(String jobKey, AutoBotJobParam jobParam) {
-        this.botInfo.getJobParams().put(jobKey, jobParam);
-    }
-
-    protected synchronized void addBasicJob(BotJobType jobType) {
-        if (this.botInfo.getParams() == null) {
-            this.botInfo.setParams(new HashMap<>());
-        }
-
-        this.botInfo.getParams().compute(BASIC_JOB_LIST_KEY, (k, v) -> {
-            if (v == null) {
-                v = new HashSet<String>();
-            }
-            if (v instanceof JSONArray t) {
-                v = new HashSet<String>();
-                for (int i = 0; i < t.size(); i++) {
-                    ((HashSet<String>) v).add(t.getString(i));
-                }
-            }
-            Set<String> set = (HashSet<String>) v;
-            set.add(jobType.name());
-            return v;
-        });
-    }
-
-    protected abstract BotInfo buildBotInfo() throws BotInitException;
-
-    protected abstract void resolveBotJobMethod();
-
-    /**
-     * 比较botInfo 和 BotInstance是否发生变化
-     *
-     * @param botInfo botInfo
-     * @param dbInstance dbInstance
-     * @return boolean
-     */
-    private boolean compareBotJobParamsChanged(BotInfo botInfo, BotInstance dbInstance) {
-        Map<String, AutoBotJobParam> botJobParam = botInfo.getJobParams();
-        Map<String, AutoBotJobParam> botInstanceParam = dbInstance.getJobParams();
-
-        if (botJobParam.size() != botInstanceParam.size()) return true;
-
-        if (!botJobParam.keySet().containsAll(botInstanceParam.keySet())) {
-            return true;
-        }
-
-        for (Map.Entry<String, AutoBotJobParam> entry : botJobParam.entrySet()) {
-            String jobName = entry.getKey();
-            AutoBotJobParam param = entry.getValue();
-            AutoBotJobParam instanceParam = botInstanceParam.get(jobName);
-
-            if (!param.equals(instanceParam)) {
-                return true;
-            }
-        }
-        return false;
-    }
-}
-package cn.com.vortexa.websocket.netty.base;
-
-import cn.com.vortexa.common.entity.ProxyInfo;
-import cn.com.vortexa.websocket.netty.constants.NettyConstants;
-import cn.com.vortexa.websocket.netty.constants.WebsocketClientStatus;
-import io.netty.bootstrap.Bootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.handler.codec.http.HttpHeaders;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
-
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.Consumer;
-
-import javax.net.ssl.SSLException;
-
-/**
- * @author helei
- * @since 2025/3/18 10:52
- */
-@Slf4j
-@Setter
-@Getter
-public abstract class AutoConnectWSService implements IWSService {
-    public static final int UN_LIMIT_RECONNECT_MARK = -1;   // 无限重连标记
-    private static final AtomicReferenceFieldUpdater<AutoConnectWSService, Channel> CHANNEL_ATOMIC_UPDATER
-            = AtomicReferenceFieldUpdater.newUpdater(AutoConnectWSService.class, Channel.class, "channel");
-    private static volatile EventLoopGroup eventLoopGroup;    //netty线程组
-    private final AtomicInteger reconnectTimes = new AtomicInteger(0);  //重链接次数
-    private final ReentrantLock reconnectLock = new ReentrantLock();    //重连锁
-    private final Condition startingWaitCondition = reconnectLock.newCondition();   //启动中阻塞的condition
-    private final String url; //websocket的url字符串
-    private Bootstrap bootstrap; //netty bootstrap
-    private volatile Channel channel;    //连接channel
-    private String host;    //连接host
-    private int port;    //连接port
-    private boolean useSSL; //是否ssl
-    private HttpHeaders headers;    //请求头
-    private ProxyInfo proxy = null; //代理
-    private int reconnectCountDownSecond = 180; //重连次数减少的间隔
-    private int reconnectLimit = 3; //重连次数限制
-    private int eventLoopGroupThreads = 1; // 线程数
-    private volatile WebsocketClientStatus clientStatus = WebsocketClientStatus.NEW;    //客户端当前状态
-    private Consumer<WebsocketClientStatus> clientStatusChangeHandler = socketCloseStatus -> {
-    };    //clientStatus更新的回调
-
-    protected AutoConnectWSService(String url) {
-        this.url = url;
-    }
-
-    protected abstract void init() throws SSLException, URISyntaxException;
-
-    /**
-     * 连接
-     *
-     * @return CompletableFuture<Boolean>
-     */
-    public final CompletableFuture<Boolean> connect() {
-        return switch (clientStatus) {
-            case NEW, STOP -> reconnect();
-            case STARTING -> waitForStarting();
-            case RUNNING -> {
-                log.warn("ws service [{}] in running, clientStatus[{}]", getName(), clientStatus);
-                yield CompletableFuture.supplyAsync(() -> true);
-            }
-            case SHUTDOWN -> throw new RuntimeException("");
-        };
-    }
-
-    /**
-     * 重连接
-     *
-     * @return CompletableFuture<Boolean>
-     */
-    public CompletableFuture<Boolean> reconnect() {
-        return switch (clientStatus) {
-            case NEW, STOP -> reconnectLogic();
-            case STARTING -> waitForStarting().thenApplyAsync(success -> {
-                if (success) {
-                    return true;
-                }
-                try {
-                    return reconnectLogic().get();
-                } catch (InterruptedException | ExecutionException e) {
-                    throw new RuntimeException(e);
-                }
-            });
-            case RUNNING -> {
-                log.warn("ws service [{}] in running, can't reconnect. clientStatus[{}]", getName(), clientStatus);
-                yield CompletableFuture.supplyAsync(() -> true);
-            }
-            case SHUTDOWN -> CompletableFuture.supplyAsync(() -> {
-                log.error("client[{}] already shutdown", getName());
-                return false;
-            });
-        };
-    }
-
-    /**
-     * 重连接逻辑
-     *
-     * @return CompletableFuture<Boolean>
-     */
-    private CompletableFuture<Boolean> reconnectLogic() {
-        updateClientStatus(WebsocketClientStatus.STARTING);
-
-        String name = getName();
-
-        return CompletableFuture.supplyAsync(() -> {
-            //Step 1 重连次数超过限制，关闭
-            if (reconnectLimit != UN_LIMIT_RECONNECT_MARK && reconnectTimes.get() >= reconnectLimit) {
-                log.error("reconnect times out of limit [{}], close websocket client", reconnectLimit);
-                shutdown();
-                return false;
-            }
-
-            AtomicBoolean isSuccess = new AtomicBoolean(false);
-
-            //Step 2 重连逻辑
-            //Step 2.1 加锁保证只要一个线程进行重连
-            reconnectLock.lock();
-            try {
-                //Step 2.2 已经再running状态，直接返回true。变为shutdown、stop状态，直接返回false
-                if (clientStatus.equals(WebsocketClientStatus.RUNNING)) {
-                    log.info("client started by other thread");
-                    return true;
-                } else if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
-                    log.error("clint {} when client starting", clientStatus);
-                    return false;
-                }
-
-                //Step 3 初始化
-                log.info("start init Websocket client");
-                try {
-                    resolveParamFromUrl();
-
-                    init();
-                } catch (SSLException | URISyntaxException e) {
-                    throw new RuntimeException("init websocket client error", e);
-                }
-                log.info("init Websocket finish，start connect server [{}]", url);
-
-                //Step 4 链接服务器
-                if (reconnectLimit == UN_LIMIT_RECONNECT_MARK || reconnectTimes.incrementAndGet() <= reconnectLimit) {
-
-                    //Step 4.1 每进行重连都会先将次数加1并设置定时任务将重连次数减1
-                    getEventLoopGroup().schedule(() -> {
-                        reconnectTimes.decrementAndGet();
-                    }, reconnectCountDownSecond, TimeUnit.SECONDS);
-
-                    long waitingConnectTime = reconnectTimes.get() == 1 ? 0 : NettyConstants.RECONNECT_DELAY_SECONDS;
-                    log.info("start connect client [{}], url[{}], current times [{}], start after [{}]s",
-                            name, url, reconnectTimes.get(), waitingConnectTime);
-
-                    //Step 4.2 latch用于同步等等链接完成
-                    CountDownLatch latch = new CountDownLatch(1);
-
-                    //Step 4.3 延迟再进行连接
-                    getEventLoopGroup().schedule(() -> {
-                        try {
-                            ChannelFuture connect = bootstrap.connect(host, port);
-                            connect.addListener(future -> {
-                                try {
-                                    if (future.isSuccess()) {
-                                        setChannel(connect.channel());
-                                        afterBoostrapConnected(getChannel());
-
-                                        log.info("success connect to {}", url);
-                                        //Step 4.4 连接成功设置标识
-                                        isSuccess.set(true);
-                                    } else {
-                                        log.error("connect client [{}], url[{}] error, times [{}]",
-                                                name, url, reconnectTimes.get(), future.cause());
-
-                                        isSuccess.set(false);
-                                    }
-                                } finally {
-                                    if (latch.getCount() != 0) {
-                                        latch.countDown();
-                                    }
-                                }
-                            });
-                        } catch (Exception e) {
-                            log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(),
-                                    e);
-                            isSuccess.set(false);
-                            latch.countDown();
-                        }
-                    }, waitingConnectTime, TimeUnit.SECONDS);
-
-                    //Step 4.5 等待链接完成
-                    try {
-                        latch.await();
-                    } catch (InterruptedException e) {
-                        log.error("connect client [{}], url[{}] interrupted, times [{}]", name, url,
-                                reconnectTimes.get(), e);
-                    }
-
-                    //Step 6 未成功启动，关闭
-                    if (!isSuccess.get()) {
-                        log.info("connect client [{}], url[{}] fail, current times [{}]", name, url,
-                                reconnectTimes.get());
-
-                        close();
-                    } else {
-                        log.info("connect client [{}], url[{}] success, current times [{}]", name, url,
-                                reconnectTimes.get());
-
-                        updateClientStatus(WebsocketClientStatus.RUNNING);
-                        reconnectTimes.set(0);
-                    }
-                }
-            } catch (Exception e) {
-                //exception 遇到未处理异常，直接关闭
-                log.error("connect client [{}] appear unknown error", name, e);
-                close();
-                throw new RuntimeException(String.format("connect client [%s] appear unknown error", name), e);
-            } finally {
-                //Step 5 释放等待启动的线程
-                startingWaitCondition.signalAll();
-                reconnectLock.unlock();
-            }
-
-            return isSuccess.get();
-        }, getCallbackInvoker());
-    }
-
-    /**
-     * 关闭
-     */
-    public void close() {
-        if (clientStatus.equals(WebsocketClientStatus.STOP)
-                || clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
-            return;
-        }
-
-        updateClientStatus(WebsocketClientStatus.STOP);
-
-        log.info("closing websocket client [{}], [{}]", getName(), channel == null ? "null" : getChannel().hashCode());
-        if (channel != null) {
-            channel.close();
-            setChannel(null);
-        }
-        log.warn("web socket client [{}] closed", getName());
-    }
-
-    /**
-     * 终止
-     */
-    public final void shutdown() {
-        updateClientStatus(WebsocketClientStatus.SHUTDOWN);
-
-        if (channel != null) {
-            channel.close();
-            setChannel(null);
-        }
-        getEventLoopGroup().shutdownGracefully();
-        log.warn("web socket client [{}] already shutdown !", getName());
-    }
-
-    /**
-     * 更新status
-     *
-     * @param newStatus newStatus
-     */
-    protected void updateClientStatus(WebsocketClientStatus newStatus) {
-        synchronized ("CLIENT_STATUS_LOCK") {
-            if (clientStatus.equals(newStatus)) {
-                return;
-            }
-
-            if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
-                throw new IllegalArgumentException("client status is shutdown，new status can not be " + newStatus);
-            }
-
-            try {
-                if (newStatus != clientStatus && clientStatusChangeHandler != null) {
-                    clientStatusChangeHandler.accept(newStatus);
-                }
-            } finally {
-                log.debug("client[{}] status [{}] -> [{}]", getName(), clientStatus, newStatus);
-                clientStatus = newStatus;
-            }
-        }
-    }
-
-    protected EventLoopGroup getEventLoopGroup() {
-        if (eventLoopGroup == null) {
-            synchronized (AutoConnectWSService.class) {
-                if (eventLoopGroup == null) {
-                    eventLoopGroup = new NioEventLoopGroup(eventLoopGroupThreads);
-                }
-            }
-        }
-        return eventLoopGroup;
-    }
-
-    /**
-     * 获取回调执行线程池
-     *
-     * @return ExecutorService
-     */
-    public abstract ExecutorService getCallbackInvoker();
-
-    /**
-     * 每次netty bootstrap 连接后调用
-     *
-     * @throws InterruptedException InterruptedException
-     */
-    protected abstract void afterBoostrapConnected(Channel channel) throws InterruptedException;
-
-    /**
-     * 等待启动完成
-     *
-     * @return CompletableFuture<Void>
-     */
-    private CompletableFuture<Boolean> waitForStarting() {
-        return CompletableFuture.supplyAsync(() -> {
-            log.warn("client [{}] is starting, waiting for complete", getName());
-            reconnectLock.lock();
-            try {
-                while (clientStatus.equals(WebsocketClientStatus.STARTING)) {
-                    startingWaitCondition.await();
-                }
-
-                if (clientStatus.equals(WebsocketClientStatus.STOP) || clientStatus.equals(
-                        WebsocketClientStatus.SHUTDOWN)) {
-                    log.error("启动WS客户端[{}]失败, ClientStatus [{}}", getName(), clientStatus);
-                    return false;
-                }
-                return true;
-            } catch (InterruptedException e) {
-                log.error("waiting for start client [{}] error", getName());
-                throw new RuntimeException(e);
-            } finally {
-                reconnectLock.unlock();
-            }
-        }, getCallbackInvoker());
-    }
-
-    public Channel getChannel() {
-        return CHANNEL_ATOMIC_UPDATER.get(this);
-    }
-
-    public void setChannel(Channel channel) {
-        CHANNEL_ATOMIC_UPDATER.set(this, channel);
-    }
-
-    /**
-     * 解析参数
-     *
-     * @throws URISyntaxException url解析错误
-     */
-    private void resolveParamFromUrl() throws URISyntaxException {
-        URI uri = new URI(url);
-        String scheme = uri.getScheme() == null ? "ws" : uri.getScheme();
-        host = uri.getHost() == null ? "127.0.0.1" : uri.getHost();
-        if (uri.getPort() == -1) {
-            if ("ws".equalsIgnoreCase(scheme)) {
-                port = 80;
-            } else if ("wss".equalsIgnoreCase(scheme)) {
-                port = 443;
-            } else {
-                port = -1;
-            }
-        } else {
-            port = uri.getPort();
-        }
-
-        if (!"ws".equalsIgnoreCase(scheme) && !"wss".equalsIgnoreCase(scheme)) {
-            log.error("Only WS(S) is supported.");
-            throw new IllegalArgumentException("url error, Only WS(S) is supported.");
-        }
-
-        useSSL = "wss".equalsIgnoreCase(scheme);
-    }
+    public abstract String startWebDriverBySeq(Integer fingerSeq);
 }
 package cn.com.vortexa.script_bot.depin.optimai;
 
@@ -1159,7 +609,12 @@ public class OptimAIAPI {
         String browser = accountContext.getParam(BROWSER_KEY);
         String timeZone = accountContext.getParam(TIMEZONE_KEY);
         if (accessToken == null) {
-            throw new IllegalArgumentException("access token is empty");
+            Result result = refreshAccessToken(accountContext);
+            if (result.getSuccess()) {
+                accessToken = accountContext.getParam(ACCESS_TOKEN_KEY);
+            } else {
+                throw new RuntimeException("get access token error");
+            }
         }
         if (browser == null) {
             browser = BROWSER_LIST.get(random.nextInt(BROWSER_LIST.size()));
@@ -1297,477 +752,137 @@ public class OptimAIAPI {
     }
 
 }
-package cn.com.vortexa.script_bot.depin.optimai;
+package cn.com.vortexa.script_node.bot.selenium;
 
-import cn.com.vortexa.script_node.anno.BotApplication;
-import cn.com.vortexa.script_node.anno.BotMethod;
-import cn.com.vortexa.script_node.anno.BotWSMethodConfig;
-import cn.com.vortexa.script_node.bot.AutoLaunchBot;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.script_node.service.BotApi;
-import cn.com.vortexa.common.constants.BotJobType;
-import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.browser_control.OptSeleniumInstance;
+import cn.com.vortexa.browser_control.dto.SeleniumParams;
 import cn.com.vortexa.common.entity.AccountContext;
-import io.netty.handler.codec.http.DefaultHttpHeaders;
 
-import java.util.List;
-import java.util.Map;
+import java.io.IOException;
+
+public class AccountFingerBrowserSelenium extends OptSeleniumInstance {
+
+    private final AccountContext accountContext;
+
+    public AccountFingerBrowserSelenium(AccountContext accountContext, SeleniumParams params) throws IOException {
+        super(accountContext.getSimpleInfo(), params);
+        this.accountContext = accountContext;
+    }
+
+
+}package cn.com.vortexa.script_node.bot.selenium;
+
+import cn.com.vortexa.common.entity.AccountContext;
+
+public class AccountRuntimeSeleniumParams {
+        private AccountContext accountContext;
+        
+        private AccountFingerBrowserSelenium browserSelenium;
+        
+        private List<>
+    }
+
+package cn.com.vortexa.browser_control.constants;
 
 /**
- * @author helei
- * @since 2025/3/24 17:14
+ * @author h30069248
+ * @since 2025/4/9 17:21
  */
-@BotApplication(name = "optim_ai", configParams = {OptimAIBot.TWO_CAPTCHA_API_KEY})
-public class OptimAIBot extends AutoLaunchBot<OptimAIBot> {
+public enum BrowserDriverType {
+    /**
+     * 比特浏览器
+     */
+    BIT_BROWSER,
+}
+package cn.com.vortexa.script_node.bot.selenium;
 
-    private static final String WS_CONNECT_URL = "wss://ws.optimai.network/?token=%s";
-    public static final String TWO_CAPTCHA_API_KEY = "two_captcha_api_key";
-    public static final String PASSWORD_KEY = "password";
+import cn.com.vortexa.browser_control.constants.BrowserDriverType;
+import cn.com.vortexa.browser_control.driver.BitBrowserDriver;
+import cn.com.vortexa.browser_control.driver.FingerprintBrowserDriver;
+import cn.com.vortexa.browser_control.dto.SeleniumParams;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.script_node.anno.BotMethod;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.hutool.core.lang.Pair;
 
-    private final int WS_RECONNECT_INTERVAL_SECOND = 60 * 60 * 24;
+import java.io.IOException;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
-    private OptimAIAPI optimAIAPI;
+/**
+ * @author h30069248
+ * @since 2025/4/9 14:35
+ */
+public abstract class FingerBrowserBot extends AutoLaunchBot<FingerBrowserBot> {
+
+    public static final int BROWSER_BATCH_SIZE = 8; //  浏览器批大小
+    public static final String DEFAULT_WEB_SITE_URL = "default_web_site_url";   // 默认打开地址Key
+    public static final String FINGER_BROWSER_API_URL_KEY = "finger_browser_api_url"; // 指纹浏览器api地址Key
+    public static final String CHROME_DRIVER_URL_KEY = "chrome_driver_url"; // chromedriver连接地址Key
+    public static final String FINGER_BROWSER_SEQ_KEY = "finger_browser_seq";   //  指纹浏览器序号Key
+
+    private static final ConcurrentHashMap<AccountContext, AccountFingerBrowserSelenium> accountFBSeleniumMap = new ConcurrentHashMap<>();
+    private FingerprintBrowserDriver browserDriver;
+    private String chromeDriverUrl;
+    private String fingerBrowserApiUrl;
+
+    public FingerBrowserBot(FingerprintBrowserDriver browserDriver) {
+        this.browserDriver = browserDriver;
+    }
 
     @Override
     protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
-        this.optimAIAPI = new OptimAIAPI(this);
+        chromeDriverUrl = (String) botConfig.getCustomConfig().get(CHROME_DRIVER_URL_KEY);
+        fingerBrowserApiUrl = (String) botConfig.getCustomConfig().get(FINGER_BROWSER_API_URL_KEY);
+        browserDriver = buildBrowserDriver();
     }
 
     @Override
-    protected OptimAIBot getInstance() {
+    protected FingerBrowserBot getInstance() {
         return this;
     }
 
-    @BotMethod(
-        jobType = BotJobType.REGISTER
-    )
-    public Result registry(AccountContext uniAC, List<AccountContext> sameIdACList, String inviteCode) {
-        return optimAIAPI.registry(uniAC, inviteCode);
-    }
-
-    @BotMethod(
-        jobType = BotJobType.LOGIN
-    )
-    public Result login(AccountContext accountContext) throws Exception {
-        return optimAIAPI.login(accountContext);
-    }
-
-    @BotMethod(jobType = BotJobType.QUERY_REWARD, concurrentCount = 10)
-    public Result queryReword(AccountContext accountContext, List<AccountContext> sameAC) {
-        return optimAIAPI.queryReword(accountContext);
-    }
-
-    @BotMethod(jobType = BotJobType.TIMED_TASK, intervalInSecond = 60 * 60, concurrentCount = 5)
-    public void tokenRefresh(AccountContext accountContext) {
-        Result result = optimAIAPI.refreshAccessToken(accountContext);
-        if (result.getSuccess()) {
-            logger.info(accountContext.getSimpleInfo() + " refresh token success");
-        } else {
-            logger.error(accountContext.getSimpleInfo() + " refresh token error, " + result.getErrorMsg());
-        }
-    }
-
-    @BotMethod(
-        jobType = BotJobType.WEB_SOCKET_CONNECT,
-        intervalInSecond = WS_RECONNECT_INTERVAL_SECOND,
-        bowWsConfig = @BotWSMethodConfig(
-            wsUnlimitedRetry = true,
-            isRefreshWSConnection = true,
-            reconnectLimit = -1,
-            heartBeatIntervalSecond = 15 * 60,
-            nioEventLoopGroupThreads = 1,
-            wsConnectCount = 50
-        )
-    )
-    public OptimAIWSClient buildKeepAliveWSClient(AccountContext accountContext) {
-        String simpleInfo = accountContext.getSimpleInfo();
-
-        String wsToken = accountContext.getParam(OptimAIAPI.WS_TOKEN);
-        if (wsToken == null) {
-            logger.warn(simpleInfo + "ws token is empty... try to generate");
-            try {
-                wsToken = optimAIAPI.registryNode2GetWSToken(accountContext);
-                accountContext.setParam(OptimAIAPI.WS_TOKEN, wsToken);
-            } catch (Exception e) {
-                logger.error(simpleInfo + " generate ws token error", e);
-                throw new RuntimeException("generate ws token error");
-            }
-        }
-
-        OptimAIWSClient client = new OptimAIWSClient(this, accountContext, WS_CONNECT_URL.formatted(wsToken));
-
-        DefaultHttpHeaders httpHeaders = new DefaultHttpHeaders();
-        for (Map.Entry<String, String> entry : accountContext.getBrowserEnv().generateHeaders().entrySet()) {
-            httpHeaders.add(entry.getKey(), entry.getValue());
-        }
-
-        httpHeaders.add("Accept-Language", "en-US,en;q=0.9,id;q=0.8");
-        httpHeaders.add("Cache-Control", "no-cache");
-        httpHeaders.add("Connection", "Upgrade");
-        httpHeaders.add("Host", "ws.optimai.network");
-        httpHeaders.add("Origin", "chrome-extension://njlfcjdojmopagogfpjgcbnpmiknapnd");
-        httpHeaders.add("Pragma", "no-cache");
-        httpHeaders.add("Sec-WebSocket-Extensions", "permessage-deflate; client_max_window_bits");
-        httpHeaders.add("Sec-WebSocket-Key", "YlDqUSX4RQ86eTGWUR1Ynw===");
-        httpHeaders.add("Sec-WebSocket-Version", "13");
-        httpHeaders.add("Upgrade", "websocket");
-
-        client.setHeaders(httpHeaders);
-
-        return client;
-    }
-}
-package cn.com.vortexa.script_node.view;
-
-import cn.com.vortexa.common.exception.BotInitException;
-import cn.com.vortexa.common.exception.BotStartException;
-import cn.com.vortexa.script_node.bot.AutoLaunchBot;
-import cn.com.vortexa.script_node.util.AccountInfoPrinter;
-import cn.com.vortexa.script_node.util.ScriptBotLauncher;
-import cn.com.vortexa.script_node.view.commandMenu.CommandMenuNode;
-import cn.com.vortexa.script_node.view.commandMenu.DefaultMenuType;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.script_node.view.commandMenu.PageMenuNode;
-import cn.com.vortexa.common.dto.ACListOptResult;
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.common.entity.AccountContext;
-import cn.com.vortexa.common.entity.BrowserEnv;
-import cn.com.vortexa.common.entity.ProxyInfo;
-import cn.com.vortexa.common.entity.RewordInfo;
-import cn.com.vortexa.job.constants.JobStatus;
-
-import com.alibaba.fastjson.JSON;
-
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
-
-import org.quartz.SchedulerException;
-
-import java.sql.SQLException;
-import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.function.Consumer;
-import java.util.stream.Collectors;
-
-import static cn.com.vortexa.script_node.constants.MapConfigKey.*;
-
-@Slf4j
-public class ScriptNodeCMDLineMenu extends CommandLineMenu {
-    /**
-     * 刷新节点
-     */
-    public static final CommandMenuNode REFRESH_NODE = new CommandMenuNode(true, "刷新", "当前数据已刷新");
-
-    private final List<DefaultMenuType> defaultMenuTypes;
-
-    @Setter
-    private Consumer<CommandMenuNode> addCustomMenuNode;
-
-    public ScriptNodeCMDLineMenu(List<DefaultMenuType> defaultMenuTypes) {
-        super();
-        this.defaultMenuTypes = new ArrayList<>(defaultMenuTypes);
-
-        this.defaultMenuTypes.add(DefaultMenuType.IMPORT);
-        this.defaultMenuTypes.add(DefaultMenuType.ACCOUNT_LIST);
-        this.defaultMenuTypes.add(DefaultMenuType.PROXY_LIST);
-        this.defaultMenuTypes.add(DefaultMenuType.BROWSER_ENV_LIST);
-    }
-
-    @Override
-    public final void buildBotMenuNode(CommandMenuNode botMenuNode, AutoLaunchBot<?> bot) {
-        if (addCustomMenuNode != null) {
-            addCustomMenuNode.accept(botMenuNode);
-        }
-
-        for (DefaultMenuType menuType : defaultMenuTypes) {
-            botMenuNode.addSubMenu(switch (menuType) {
-                case REGISTER -> buildRegisterMenuNode();
-                case VERIFIER -> buildVerifierMenuNode();
-                case LOGIN -> buildQueryTokenMenuNode();
-                case ACCOUNT_LIST -> buildAccountListMenuNode();
-                case PROXY_LIST -> buildProxyListMenuNode();
-                case BROWSER_ENV_LIST -> buildBrowserListMenuNode();
-                case START_BOT_TASK -> buildStartBotTaskMenuNode(bot);
-                case IMPORT -> buildImportMenuNode();
-                case LAUNCH_SCRIPT -> buildLaunchScriptMenuNode(bot);
-            });
+    @BotMethod(jobType = BotJobType.ONCE_TASK, concurrentCount = BROWSER_BATCH_SIZE)
+    public void accountBrowserTask(AccountContext accountContext) {
+        try {
+            accountFBSeleniumMap.putIfAbsent(accountContext, new AccountFingerBrowserSelenium(
+                accountContext,
+                buildSeleniumParams((Integer) accountContext.getParams().get(FINGER_BROWSER_SEQ_KEY)))
+            );
+        } catch (IOException e) {
+            logger.error(accountContext.getSimpleInfo() + " - start selenium task error", e);
         }
     }
 
     /**
-     * 启动bot菜单
+     * 构建selenium参数
      *
-     * @return CommandMenuNode
+     * @return SeleniumParams
      */
-    private CommandMenuNode buildLaunchScriptMenuNode(AutoLaunchBot<?> bot) {
-        String botKey = bot.getBotKey();
+    private SeleniumParams buildSeleniumParams(Integer seq) {
+        String debuggerAddress = browserDriver.startWebDriverBySeq(seq);
 
-        CommandMenuNode commandMenuNode = new CommandMenuNode("启动/关闭 Bot", "启动或关闭Bot",
-                () -> "当前选择的Bot[%s][%s]\n状态[%s]".formatted(
-                        bot.getBotName(),
-                        botKey,
-                        bot.getStatus()
-                ));
-
-        return commandMenuNode.addSubMenu(new CommandMenuNode(true, "启动", null, () -> {
-            try {
-                ScriptBotLauncher.launchResolvedScriptBot(botKey);
-                return botKey + " launch finish...Current status: " + bot.getStatus();
-            } catch (BotStartException | BotInitException e) {
-                log.error("start bot[{}] error", botKey, e);
-                return "";
-            }
-        })).addSubMenu(new CommandMenuNode(true, "关闭", null, () -> {
-            bot.stop();
-            return "";
-        }));
+        return SeleniumParams
+            .builder()
+            .driverPath(chromeDriverUrl)
+            .experimentalOptions(List.of(new Pair<>("debuggerAddress", debuggerAddress)))
+            .targetWebSite((String) getAutoBotConfig().getCustomConfig().get(DEFAULT_WEB_SITE_URL))
+            .build();
     }
 
     /**
-     * 构建注册菜单节点
+     * 构建指纹浏览器driver
      *
-     * @return CommandMenuNode
+     * @return  FingerprintBrowserDriver
      */
-    private CommandMenuNode buildRegisterMenuNode() {
-        CommandMenuNode registerMenu = new CommandMenuNode("注册",
-                "请确认设置后运行", this::printCurrentRegisterConfig);
-
-        CommandMenuNode interInvite = new CommandMenuNode(
-                "填入邀请码",
-                "请输入邀请码：",
-                this::printCurrentRegisterConfig
-        );
-        interInvite.setResolveInput(input -> {
-            AutoBotConfig autoBotConfig = getBot().getAutoBotConfig();
-            log.info("邀请码修改[{}]->[{}]", autoBotConfig.getConfig(INVITE_CODE_KEY), input);
-            autoBotConfig.setConfig(INVITE_CODE_KEY, input);
-        });
-
-        return registerMenu
-                .addSubMenu(interInvite)
-                .addSubMenu(new CommandMenuNode(
-                        true,
-                        "开始注册",
-                        "开始注册所有账号...",
-                        () -> {
-                            try {
-
-                                return getBot().registerAccount().get().toString();
-                            } catch (Exception e) {
-                                return "registry error, " + e.getMessage();
-                            }
-                        }
-                ));
+    private FingerprintBrowserDriver buildBrowserDriver() {
+        return switch (browserDriverType()) {
+            case BIT_BROWSER -> new BitBrowserDriver(fingerBrowserApiUrl);
+        };
     }
 
-    private CommandMenuNode buildVerifierMenuNode() {
-        return new CommandMenuNode("验证邮箱", "请选择验证的账户类型",
-                () -> "当前的邮箱类型：" + getBot().getAutoBotConfig().getConfig(EMAIL_VERIFIER_TYPE));
-    }
-
-    /**
-     * 获取token
-     *
-     * @return CommandMenuNode
-     */
-    private CommandMenuNode buildQueryTokenMenuNode() {
-        return new CommandMenuNode("获取token", "开始获取token", () -> {
-            CompletableFuture<ACListOptResult> getToken = getBot().loginAndTakeTokenAccount();
-            try {
-                ACListOptResult acListOptResult = getToken.get();
-
-                return acListOptResult.printStr();
-            } catch (InterruptedException | ExecutionException e) {
-                getBot().logger.error("获取token异常, " +
-                        (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()), e);
-                return "";
-            }
-        });
-    }
-
-    /**
-     * 构建查看代理列表的菜单节点
-     *
-     * @return 查看代理列表菜单节点
-     */
-    private CommandMenuNode buildProxyListMenuNode() {
-        return new PageMenuNode<>("查看代理列表", "当前代理列表:", (pageNum, pageSize) -> {
-            try {
-                return getBot().getBotApi().getProxyInfoRPC().conditionPageQueryRPC(pageNum, pageSize, new HashMap<>());
-            } catch (SQLException e) {
-                getBot().logger.error(
-                        "查询代理列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
-                return null;
-            }
-        }, ProxyInfo.class);
-    }
-
-    /**
-     * 构建查看浏览器环境列表的菜单节点
-     *
-     * @return 查看浏览器环境列表菜单节点
-     */
-    private CommandMenuNode buildBrowserListMenuNode() {
-        return new PageMenuNode<>("查看浏览器环境列表", "当前浏览器环境:", (pageNum, pageSize) -> {
-            try {
-                return getBot().getBotApi()
-                        .getBrowserEnvRPC()
-                        .conditionPageQueryRPC(pageNum, pageSize, new HashMap<>());
-            } catch (SQLException e) {
-                getBot().logger.error(
-                        "查询浏览器环境列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
-                return null;
-            }
-        }, BrowserEnv.class);
-    }
-
-    /**
-     * 账户列表菜单节点
-     *
-     * @return 账户列表节点
-     */
-    private CommandMenuNode buildAccountListMenuNode() {
-        CommandMenuNode accountListMenuNode = new PageMenuNode<>("查看账号", "当前账户详情列表:",
-                (pageNum, pageSize) -> {
-                    try {
-                        HashMap<String, Object> filter = new HashMap<>();
-                        filter.put("botId", getBot().getBotInstance().getBotId());
-                        filter.put("botKey", getBot().getAutoBotConfig().getBotKey());
-
-                        PageResult<AccountContext> pageResult = getBot().getBotApi()
-                                .getBotAccountService()
-                                .conditionPageQuery(pageNum, pageSize, filter);
-                        getBot().getPersistenceManager().fillAccountInfos(pageResult.getList());
-                        return pageResult;
-                    } catch (Exception e) {
-                        getBot().logger.error(
-                                "查询账号列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
-                        return new PageResult<>();
-                    }
-                }, AccountContext.class);
-
-        return accountListMenuNode
-                .addSubMenu(buildAccountRewardMenuNode())
-                .addSubMenu(buildAccountConnectStatusMenuNode())
-                .addSubMenu(REFRESH_NODE);
-    }
-
-    /**
-     * 查看账户收益菜单节点
-     *
-     * @return 账户收益节点
-     */
-    private CommandMenuNode buildAccountRewardMenuNode() {
-        return new PageMenuNode<>("查看账号收益", "账号收益详情列表:", (pageNum, pageSize) -> {
-            try {
-                return getBot().getBotApi()
-                        .getRewordInfoService()
-                        .conditionPageQuery(pageNum, pageSize, new HashMap<>());
-            } catch (SQLException e) {
-                getBot().logger.error(
-                        "查询账号收益列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
-                return null;
-            }
-        }, RewordInfo.class);
-    }
-
-    /**
-     * 查看账户连接情况菜单节点
-     *
-     * @return 账户收益节点
-     */
-    private CommandMenuNode buildAccountConnectStatusMenuNode() {
-        return new CommandMenuNode(
-                "查看账号连接情况",
-                "账号连接情况列表:",
-                () -> AccountInfoPrinter.printAccountConnectStatusList(getBot().getAccountContexts())
-        ).addSubMenu(REFRESH_NODE);
-    }
-
-    /**
-     * 开始账户连接菜单节点
-     *
-     * @return 连接账户菜单节点
-     */
-    private CommandMenuNode buildStartBotTaskMenuNode(AutoLaunchBot<?> bot) {
-        CommandMenuNode menuNode = new CommandMenuNode(
-                "启动任务",
-                "选择任务类型",
-                node -> {
-                    Set<String> existJobs = node.getSubNodeList()
-                        .stream()
-                        .map(CommandMenuNode::getDescribe)
-                        .collect(Collectors.toSet());
-
-                    for (String jobName : bot.botJobNameList()) {
-                        if (existJobs.contains(jobName)) continue;
-                        CommandMenuNode typeInput = new CommandMenuNode(true, null, jobName,
-                                () -> JSON.toJSONString(bot.startBotJob(jobName))
-                        );
-
-                        typeInput.setTittleBuilder(() -> {
-                            JobStatus status = null;
-                            try {
-                                status = getBot().getBotApi()
-                                        .getBotJobService()
-                                        .queryJobStatus(getBot().getAutoBotConfig().getBotKey(), jobName);
-                                return "%s 任务 (%s)".formatted(jobName, status);
-                            } catch (SchedulerException e) {
-                                throw new RuntimeException(e);
-                            }
-                        });
-
-                        node.addSubMenu(typeInput);
-                    }
-                    return "";
-                }
-        );
-        return menuNode;
-    }
-
-    /**
-     * 导入菜单节点
-     *
-     * @return CommandMenuNode
-     */
-    private CommandMenuNode buildImportMenuNode() {
-        return new CommandMenuNode("导入", "请选择要导入的数据")
-                .addSubMenu(buildImportBotAccountContextMenuNode());
-    }
-
-    /**
-     * 导入bot使用的账号菜单节点
-     *
-     * @return CommandMenuNode
-     */
-    private CommandMenuNode buildImportBotAccountContextMenuNode() {
-        return new CommandMenuNode(true, "导入bot运行账号", null, () -> {
-
-            try {
-                Integer i = getBot().getBotApi().getBotAccountService().importFromExcel(
-                        getBot().getBotInfo().getId(),
-                        getBot().getBotInstance().getBotKey(),
-                        getBot().getAutoBotConfig().getAccountConfig().getConfigFilePath()
-                );
-                getBot().initAccounts();
-                return "bot运行账号导入完成," + i;
-            } catch (Exception e) {
-                return "import bot account context error," + e.getMessage();
-            }
-        });
-    }
-
-    /**
-     * 打印当前的邀请码
-     *
-     * @return 邀请码
-     */
-    private String printCurrentRegisterConfig() {
-        String inviteCode = (String) getBot().getAutoBotConfig().getCustomConfig().get(INVITE_CODE_KEY);
-        String registerType = (String) getBot().getAutoBotConfig().getCustomConfig().get(REGISTER_TYPE_KEY);
-
-        return "(当前邀请码为:" + inviteCode + ")\n"
-                + "(当前注册类型为:" + registerType + ")\n";
-    }
+    protected abstract BrowserDriverType browserDriverType();
 }
