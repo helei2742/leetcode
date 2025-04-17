@@ -1,888 +1,1882 @@
-package cn.com.vortexa.browser_control.driver;
+package cn.com.vortexa.common.dto.config;
 
-import com.alibaba.fastjson.JSON;
-import com.alibaba.fastjson.JSONObject;
+import lombok.Data;
+import lombok.ToString;
 
-import cn.com.vortexa.browser_control.exception.BrowserRequestException;
-import cn.com.vortexa.browser_control.dto.QueryEntity;
-import cn.com.vortexa.common.constants.HttpMethod;
-import cn.com.vortexa.common.util.http.RestApiClientFactory;
-
+import java.io.Serial;
+import java.io.Serializable;
 import java.util.HashMap;
+import java.util.Map;
+
+@Data
+@ToString
+public class AutoBotConfig implements Serializable {
+
+    @Serial
+    private static final long serialVersionUID = -3278263726328378273L;
+
+    public static int LOG_CACHE_COUNT = 50; // 日志缓存数量
+
+    private String botName;
+
+    /**
+     * 标识bot，不同于bot id， botKey是由用户定义的
+     */
+    private String botKey;
+
+    /**
+     * 是否开启命令行菜单
+     */
+    private boolean commandMenu = true;
+
+    /**
+     * 资源文件dir, 运行时写入，为class文件所在目录(bot-instance-config所在目录)
+     */
+    private String resourceDir;
+
+    /**
+     * 类名， 必填，还需包含包路径
+     */
+    private String className;
+
+    /**
+     * 账户配置
+     */
+    private AutoBotAccountConfig accountConfig = new AutoBotAccountConfig();
+
+    /**
+     * 自定义配置
+     */
+    private Map<String, Object> customConfig = new HashMap<>();
+
+
+    public String getConfig(String key) {
+        return String.valueOf(customConfig.get(key));
+    }
+
+    public void setConfig(String key, String value) {
+        this.customConfig.put(key, value);
+    }
+}
+package cn.com.vortexa.common.util.classloader;
+
+import lombok.extern.slf4j.Slf4j;
+
+import javax.tools.*;
+
+import java.io.File;
+import java.io.IOException;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+
+@Slf4j
+public class DynamicJavaLoader {
+
+    /**
+     * 编译java文件夹
+     *
+     * @param sourceDir sourceDir
+     * @param outputDir outputDir
+     * @return boolean
+     * @throws IOException IOException
+     */
+    public static boolean compileJavaDir(String sourceDir, String outputDir) throws IOException {
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        if (compiler == null) {
+            throw new IllegalStateException("no usable compiler, please use JDK compile");
+        }
+
+        File sourceFolder = new File(sourceDir);
+        File[] javaFiles = sourceFolder.listFiles(f -> f.getName().endsWith(".java"));
+        if (javaFiles == null || javaFiles.length == 0) {
+            log.warn("there is no any .java file in {}", sourceDir);
+            return false;
+        }
+
+        try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null,
+            StandardCharsets.UTF_8)) {
+            fileManager.setLocation(StandardLocation.CLASS_OUTPUT, List.of(new File(outputDir)));
+
+            String classpath = System.getProperty("java.class.path");
+            List<String> options = List.of(
+                "-Xlint:-options",
+                "-cp", classpath
+            );
+
+            Iterable<? extends JavaFileObject> compilationUnits = fileManager.getJavaFileObjects(javaFiles);
+            JavaCompiler.CompilationTask task = compiler.getTask(null, fileManager, null, options, null,
+                compilationUnits);
+
+            return task.call();
+        }
+    }
+
+    /**
+     * 编译java文件
+     *
+     * @param javaFilePath javaFilePath
+     * @param classOutputDir classOutputDir
+     * @return boolean
+     * @throws IOException IOException
+     */
+    public static boolean compileJavaFile(String javaFilePath, String classOutputDir) throws IOException {
+        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+        if (compiler == null) {
+            throw new IllegalStateException("no usable compiler, please use JDK compile");
+        }
+        try (StandardJavaFileManager fileManager = compiler.getStandardFileManager(null, null, null)) {
+            fileManager.setLocation(StandardLocation.CLASS_OUTPUT, List.of(new File(classOutputDir)));
+
+            Iterable<? extends JavaFileObject> compilationUnits = fileManager.getJavaFileObjects(
+                new File(javaFilePath));
+
+            // 编译参数，可以添加 -Xlint:-options 或 -proc:none
+            String classpath = System.getProperty("java.class.path");
+            List<String> options = List.of(
+                "-Xlint:-options",
+                "-cp", classpath
+            );
+
+            JavaCompiler.CompilationTask task = compiler.getTask(null, fileManager, null, options, null,
+                compilationUnits);
+            return task.call();
+        }
+    }
+
+    public static Class<?> loadClassFromFile(
+        String outputDir,
+        String className
+    ) throws Exception {
+        return loadClassFromDir(outputDir, className);
+    }
+
+    public static Class<?> loadClassFromDir(String outputDir, String className)
+        throws Exception {
+        // 加载 class
+        URL[] urls = {new File(outputDir ).toURI().toURL()};
+        try (URLClassLoader classLoader = new URLClassLoader(urls);){
+            return classLoader.loadClass(className);
+        }
+    }
+}
+package cn.com.vortexa.common.util;
+
+import cn.com.vortexa.common.constants.FilePathType;
+
+import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+
+public class FileUtil {
+
+    public static final List<String> CONFIG_DIR_BOT_PATH = List.of("config", "bot");
+
+    public static final List<String> CONFIG_DIR_APP_PATH = List.of("config", "app");
+
+    /**
+     * app资源根目录
+     */
+    public static final String RESOURCE_ROOT_DIR = System.getProperty("user.dir") + File.separator + "botData";
+
+    /**
+     * class资源
+     *
+     * @return path
+     * @throws IOException exception
+     */
+    public static String getCompileClassResourceDir() throws IOException {
+        Path path = Paths.get(RESOURCE_ROOT_DIR + File.separator + "classes");
+        if (Files.notExists(path)) {
+            Files.createDirectories(path);
+        }
+        return path.toString();
+    }
+
+    /**
+     * class资源
+     *
+     * @return path
+     * @throws IOException exception
+     */
+    public static String getCompileClassResource(String subDir) throws IOException {
+        String dir = getCompileClassResourceDir();
+        Path path = Paths.get(dir + File.separator + subDir);
+        if (Files.notExists(path)) {
+            Files.createDirectories(path);
+        }
+        return path.toString();
+    }
+
+    /**
+     * 获取数据库文件的dir
+     *
+     * @return String
+     */
+    public static String getDBResourceDir() {
+        return RESOURCE_ROOT_DIR + File.separator + "db";
+    }
+
+    /**
+     * 获取资源路径
+     *
+     * @param path 子路径
+     * @param fileName 文件名
+     * @return 绝对路径
+     */
+    public static String getAppResourcePath(List<String> path, String fileName) {
+        StringBuilder sb = new StringBuilder(RESOURCE_ROOT_DIR);
+
+        for (String p : path) {
+            sb.append(File.separator).append(p);
+        }
+        return sb.append(File.separator).append(fileName).toString();
+    }
+
+    /**
+     * 获取app配置目录
+     *
+     * @return 配置目录绝对路径
+     */
+    public static String getAppResourceConfigPath() {
+        return RESOURCE_ROOT_DIR + File.separator + "config";
+    }
+
+    /**
+     * 获取app配置目录
+     *
+     * @return 配置目录绝对路径
+     */
+    public static String getAppResourceAppConfigPath() {
+        return RESOURCE_ROOT_DIR + File.separator + String.join(File.separator, CONFIG_DIR_APP_PATH);
+    }
+
+    /**
+     * 获取系统配置目录
+     *
+     * @return 配置目录绝对路径
+     */
+    public static String getAppResourceSystemConfigPath() {
+        return RESOURCE_ROOT_DIR + File.separator + String.join(File.separator, CONFIG_DIR_BOT_PATH);
+    }
+
+    /**
+     * 获取data目录
+     *
+     * @return 配置目录绝对路径
+     */
+    public static String getAppResourceDataPath() {
+        return RESOURCE_ROOT_DIR + File.separator + "data";
+    }
+
+    /**
+     * 生成绝对路径
+     *
+     * @param patternPath patternPath
+     * @param botInstanceResourcePath botInstanceResourcePath
+     * @return 绝对路径
+     */
+    public static String generateAbsPath(String patternPath, String botInstanceResourcePath) {
+        FilePathType filePathType = FilePathType.resolveFilePathType(patternPath);
+        return switch (filePathType) {
+            case absolute -> {
+                if (patternPath.startsWith(filePathType.name())) {
+                    yield patternPath.replace("absolute:", "");
+                }
+                yield patternPath;
+            }
+            case instance_resource ->
+                patternPath.replace("instance_resource:", botInstanceResourcePath + File.separator);
+            case app_resource -> patternPath.replace("app_resource:", RESOURCE_ROOT_DIR + File.separator);
+            case app_resource_config ->
+                patternPath.replace("app_resource_config:", getAppResourceAppConfigPath() + File.separator);
+            case app_resource_data ->
+                patternPath.replace("app_resource_data:", getAppResourceDataPath() + File.separator);
+        };
+    }
+
+    /**
+     * 保存
+     */
+    public static void saveJSONStringContext(Path filePath, String jsonContext) {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(filePath.toFile()))) {
+            writer.write(jsonContext);
+            writer.flush();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 创建日志目录
+     *
+     * @param scriptNodeName scriptNodeName
+     * @param botKey botKey
+     */
+    public static String createLogsDir(String scriptNodeName, String botKey) throws IOException {
+        Path path = Paths.get(RESOURCE_ROOT_DIR, "logs", scriptNodeName, botKey);
+        if (Files.notExists(path)) {
+            Files.createDirectories(path);
+        }
+        return path.toString();
+    }
+}
+package cn.com.vortexa.websocket.netty.base;
+
+import cn.com.vortexa.common.entity.ProxyInfo;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import cn.com.vortexa.websocket.netty.constants.WebsocketClientStatus;
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.handler.codec.http.HttpHeaders;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
+
+import javax.net.ssl.SSLException;
 
 /**
  * @author helei
- * @since 2025/3/26 9:25
+ * @since 2025/3/18 10:52
  */
-public abstract class FingerprintBrowserDriver {
+@Slf4j
+@Setter
+@Getter
+public abstract class AutoConnectWSService implements IWSService {
+    public static final int UN_LIMIT_RECONNECT_MARK = -1;   // 无限重连标记
+    private static final AtomicReferenceFieldUpdater<AutoConnectWSService, Channel> CHANNEL_ATOMIC_UPDATER
+            = AtomicReferenceFieldUpdater.newUpdater(AutoConnectWSService.class, Channel.class, "channel");
+    private static volatile EventLoopGroup eventLoopGroup;    //netty线程组
+    private final AtomicInteger reconnectTimes = new AtomicInteger(0);  //重链接次数
+    private final ReentrantLock reconnectLock = new ReentrantLock();    //重连锁
+    private final AtomicLong lastConnectTime = new AtomicLong(-1);   //  上次启动时间
+    private final Condition startingWaitCondition = reconnectLock.newCondition();   //启动中阻塞的condition
+    private final String url; //websocket的url字符串
+    private Bootstrap bootstrap; //netty bootstrap
+    private volatile Channel channel;    //连接channel
+    private String host;    //连接host
+    private int port;    //连接port
+    private boolean useSSL; //是否ssl
+    private HttpHeaders headers;    //请求头
+    private ProxyInfo proxy = null; //代理
+    private int reconnectCountDownSecond = 180; //重连次数减少的间隔
+    private int reconnectLimit = 3; //重连次数限制
+    private int eventLoopGroupThreads = 1; // 线程数
+    private volatile WebsocketClientStatus clientStatus = WebsocketClientStatus.NEW;    //客户端当前状态
+    private Consumer<WebsocketClientStatus> clientStatusChangeHandler = socketCloseStatus -> {
+    };    //clientStatus更新的回调
 
-    private final String connectUrl;
+    protected AutoConnectWSService(String url) {
+        this.url = url;
+    }
 
-    public FingerprintBrowserDriver(String connectUrl) {
-        this.connectUrl = connectUrl;
+    protected abstract void init() throws SSLException, URISyntaxException;
+
+    /**
+     * 连接
+     *
+     * @return CompletableFuture<Boolean>
+     */
+    public final CompletableFuture<Boolean> connect() {
+        return switch (clientStatus) {
+            case NEW, STOP -> reconnect();
+            case STARTING -> waitForStarting();
+            case RUNNING -> {
+                log.warn("ws service [{}] in running, clientStatus[{}]", getName(), clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN -> throw new RuntimeException("");
+        };
     }
 
     /**
-     * 检查健康状态
+     * 重连接
+     *
+     * @return CompletableFuture<Boolean>
      */
-    public JSON health() {
+    public CompletableFuture<Boolean> reconnect() {
+        return switch (clientStatus) {
+            case NEW, STOP -> reconnectLogic();
+            case STARTING -> waitForStarting().thenApplyAsync(success -> {
+                if (success) {
+                    return true;
+                }
+                try {
+                    return reconnectLogic().get();
+                } catch (InterruptedException | ExecutionException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            case RUNNING -> {
+                log.warn("ws service [{}] in running, can't reconnect. clientStatus[{}]", getName(), clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN -> CompletableFuture.supplyAsync(() -> {
+                log.error("client[{}] already shutdown", getName());
+                return false;
+            });
+        };
+    }
+
+    /**
+     * 重连接逻辑
+     *
+     * @return CompletableFuture<Boolean>
+     */
+    private CompletableFuture<Boolean> reconnectLogic() {
+        updateClientStatus(WebsocketClientStatus.STARTING);
+
+        String name = getName();
+
+        return CompletableFuture.supplyAsync(() -> {
+            //Step 1 重连次数超过限制，关闭
+            if (reconnectLimit != UN_LIMIT_RECONNECT_MARK && reconnectTimes.get() >= reconnectLimit) {
+                log.error("reconnect times out of limit [{}], close websocket client", reconnectLimit);
+                shutdown();
+                return false;
+            }
+
+            AtomicBoolean isSuccess = new AtomicBoolean(false);
+
+            //Step 2 重连逻辑
+            //Step 2.1 加锁保证只要一个线程进行重连
+            reconnectLock.lock();
+            try {
+                //Step 2.2 已经再running状态，直接返回true。变为shutdown、stop状态，直接返回false
+                if (clientStatus.equals(WebsocketClientStatus.RUNNING)) {
+                    log.info("client started by other thread");
+                    return true;
+                } else if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+                    log.error("clint {} when client starting", clientStatus);
+                    return false;
+                }
+
+                //Step 3 初始化
+                log.info("start init Websocket client");
+                try {
+                    resolveParamFromUrl();
+
+                    init();
+                } catch (SSLException | URISyntaxException e) {
+                    throw new RuntimeException("init websocket client error", e);
+                }
+                log.info("init Websocket finish，start connect server [{}]", url);
+
+                //Step 4 链接服务器
+                if (reconnectLimit == UN_LIMIT_RECONNECT_MARK || reconnectTimes.incrementAndGet() <= reconnectLimit) {
+
+                    //Step 4.1 每进行重连都会先将次数加1并设置定时任务将重连次数减1
+                    getEventLoopGroup().schedule(() -> {
+                        reconnectTimes.decrementAndGet();
+                    }, reconnectCountDownSecond, TimeUnit.SECONDS);
+
+                    long waitingConnectTime = getWaitingConnectTime();
+                    log.info("start connect client [{}], url[{}], current times [{}], start after [{}]s",
+                            name, url, reconnectTimes.get(), waitingConnectTime);
+
+                    //Step 4.2 latch用于同步等等链接完成
+                    CountDownLatch latch = new CountDownLatch(1);
+
+                    //Step 4.3 延迟再进行连接
+                    getEventLoopGroup().schedule(() -> {
+                        try {
+                            ChannelFuture connect = bootstrap.connect(host, port);
+                            connect.addListener(future -> {
+                                try {
+                                    if (future.isSuccess()) {
+                                        setChannel(connect.channel());
+                                        afterBoostrapConnected(getChannel());
+
+                                        log.info("success connect to {}", url);
+                                        //Step 4.4 连接成功设置标识
+                                        isSuccess.set(true);
+                                    } else {
+                                        log.error("connect client [{}], url[{}] error, times [{}]",
+                                                name, url, reconnectTimes.get(), future.cause());
+
+                                        isSuccess.set(false);
+                                    }
+                                } finally {
+                                    if (latch.getCount() != 0) {
+                                        latch.countDown();
+                                    }
+                                }
+                            });
+                        } catch (Exception e) {
+                            log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(),
+                                    e);
+                            isSuccess.set(false);
+                            latch.countDown();
+                        }
+                    }, waitingConnectTime, TimeUnit.SECONDS);
+
+                    //Step 4.5 等待链接完成
+                    try {
+                        latch.await();
+                    } catch (InterruptedException e) {
+                        log.error("connect client [{}], url[{}] interrupted, times [{}]", name, url,
+                                reconnectTimes.get(), e);
+                    }
+
+                    //Step 6 未成功启动，关闭
+                    if (!isSuccess.get()) {
+                        log.info("connect client [{}], url[{}] fail, current times [{}]", name, url,
+                                reconnectTimes.get());
+
+                        close();
+                    } else {
+                        log.info("connect client [{}], url[{}] success, current times [{}]", name, url,
+                                reconnectTimes.get());
+
+                        updateClientStatus(WebsocketClientStatus.RUNNING);
+                        reconnectTimes.set(0);
+                    }
+                }
+            } catch (Exception e) {
+                //exception 遇到未处理异常，直接关闭
+                log.error("connect client [{}] appear unknown error", name, e);
+                close();
+                throw new RuntimeException(String.format("connect client [%s] appear unknown error", name), e);
+            } finally {
+                //Step 5 释放等待启动的线程
+                startingWaitCondition.signalAll();
+                reconnectLock.unlock();
+            }
+
+            return isSuccess.get();
+        }, getCallbackInvoker());
+    }
+
+    private long getWaitingConnectTime() {
+        if (reconnectTimes.get() <= 1) {
+            if (lastConnectTime.get() != -1) {
+                return Math.ceilDiv(System.currentTimeMillis() - lastConnectTime.get(), 1000);
+            } else {
+                return 5;
+            }
+        }
+        return NettyConstants.RECONNECT_DELAY_SECONDS;
+    }
+
+    /**
+     * 关闭
+     */
+    public void close() {
+        if (clientStatus.equals(WebsocketClientStatus.STOP)
+                || clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+            return;
+        }
+
+        updateClientStatus(WebsocketClientStatus.STOP);
+
+        log.info("closing websocket client [{}], [{}]", getName(), channel == null ? "null" : getChannel().hashCode());
+        if (channel != null) {
+            channel.close();
+            setChannel(null);
+        }
+        log.warn("web socket client [{}] closed", getName());
+    }
+
+    /**
+     * 终止
+     */
+    public final void shutdown() {
+        updateClientStatus(WebsocketClientStatus.SHUTDOWN);
+
+        if (channel != null) {
+            channel.close();
+            setChannel(null);
+        }
+        getEventLoopGroup().shutdownGracefully();
+        log.warn("web socket client [{}] already shutdown !", getName());
+    }
+
+    /**
+     * 更新status
+     *
+     * @param newStatus newStatus
+     */
+    protected void updateClientStatus(WebsocketClientStatus newStatus) {
+        synchronized ("CLIENT_STATUS_LOCK") {
+            if (clientStatus.equals(newStatus)) {
+                return;
+            }
+
+            if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+                throw new IllegalArgumentException("client status is shutdown，new status can not be " + newStatus);
+            }
+
+            try {
+                if (newStatus != clientStatus && clientStatusChangeHandler != null) {
+                    clientStatusChangeHandler.accept(newStatus);
+                }
+            } finally {
+                log.debug("client[{}] status [{}] -> [{}]", getName(), clientStatus, newStatus);
+                clientStatus = newStatus;
+            }
+        }
+    }
+
+    protected EventLoopGroup getEventLoopGroup() {
+        if (eventLoopGroup == null) {
+            synchronized (AutoConnectWSService.class) {
+                if (eventLoopGroup == null) {
+                    eventLoopGroup = new NioEventLoopGroup(eventLoopGroupThreads);
+                }
+            }
+        }
+        return eventLoopGroup;
+    }
+
+    /**
+     * 获取回调执行线程池
+     *
+     * @return ExecutorService
+     */
+    public abstract ExecutorService getCallbackInvoker();
+
+    /**
+     * 每次netty bootstrap 连接后调用
+     *
+     * @throws InterruptedException InterruptedException
+     */
+    protected abstract void afterBoostrapConnected(Channel channel) throws InterruptedException;
+
+    /**
+     * 等待启动完成
+     *
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Boolean> waitForStarting() {
+        return CompletableFuture.supplyAsync(() -> {
+            log.warn("client [{}] is starting, waiting for complete", getName());
+            reconnectLock.lock();
+            try {
+                while (clientStatus.equals(WebsocketClientStatus.STARTING)) {
+                    startingWaitCondition.await();
+                }
+
+                if (clientStatus.equals(WebsocketClientStatus.STOP) || clientStatus.equals(
+                        WebsocketClientStatus.SHUTDOWN)) {
+                    log.error("启动WS客户端[{}]失败, ClientStatus [{}}", getName(), clientStatus);
+                    return false;
+                }
+                return true;
+            } catch (InterruptedException e) {
+                log.error("waiting for start client [{}] error", getName());
+                throw new RuntimeException(e);
+            } finally {
+                reconnectLock.unlock();
+            }
+        }, getCallbackInvoker());
+    }
+
+    public Channel getChannel() {
+        return CHANNEL_ATOMIC_UPDATER.get(this);
+    }
+
+    public void setChannel(Channel channel) {
+        CHANNEL_ATOMIC_UPDATER.set(this, channel);
+    }
+
+    /**
+     * 解析参数
+     *
+     * @throws URISyntaxException url解析错误
+     */
+    private void resolveParamFromUrl() throws URISyntaxException {
+        URI uri = new URI(url);
+        String scheme = uri.getScheme() == null ? "ws" : uri.getScheme();
+        host = uri.getHost() == null ? "127.0.0.1" : uri.getHost();
+        if (uri.getPort() == -1) {
+            if ("ws".equalsIgnoreCase(scheme)) {
+                port = 80;
+            } else if ("wss".equalsIgnoreCase(scheme)) {
+                port = 443;
+            } else {
+                port = -1;
+            }
+        } else {
+            port = uri.getPort();
+        }
+
+        if (!"ws".equalsIgnoreCase(scheme) && !"wss".equalsIgnoreCase(scheme)) {
+            log.error("Only WS(S) is supported.");
+            throw new IllegalArgumentException("url error, Only WS(S) is supported.");
+        }
+
+        useSSL = "wss".equalsIgnoreCase(scheme);
+    }
+}
+package cn.com.vortexa.bot_platform.script_control.service;
+
+import cn.com.vortexa.bot_platform.service.IScriptNodeService;
+import cn.com.vortexa.common.dto.control.RegisteredScriptNode;
+import cn.com.vortexa.common.dto.control.ServiceInstance;
+import cn.com.vortexa.common.entity.ScriptNode;
+import cn.com.vortexa.control.constant.RegistryState;
+import cn.com.vortexa.control.service.IRegistryService;
+import cn.com.vortexa.control.util.ControlServerUtil;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
+
+/**
+ * 数据库注册服务
+ *
+ * @author h30069248
+ * @since 2025/4/8 17:37
+ */
+@Slf4j
+public class DBRegistryService implements IRegistryService {
+
+    private final IScriptNodeService scriptNodeService;
+    private final LinkedBlockingQueue<RegisteredScriptNode> updatedCache = new LinkedBlockingQueue<>();
+    private boolean running = true;
+
+    public DBRegistryService(IScriptNodeService scriptNodeService, ExecutorService executorService) {
+        this.scriptNodeService = scriptNodeService;
+
+        executorService.execute(() -> {
+            while (running) {
+                try {
+                    saveRegistryInfo();
+                } catch (InterruptedException e) {
+                    log.warn("save registry info task interrupted");
+                    running = false;
+                } catch (Exception e) {
+                    log.error("save registry error", e);
+                }
+            }
+        });
+    }
+
+    @Override
+    public RegistryState registryService(ServiceInstance serviceInstance) {
+        if (serviceInstance == null) {
+            return RegistryState.PARAM_ERROR;
+        }
+        if (serviceInstance instanceof ScriptNode scriptNode) {
+            if (!scriptNode.usable()) {
+                return RegistryState.PARAM_ERROR;
+            }
+            try {
+                scriptNodeService.insertOrUpdate(scriptNode);
+                return RegistryState.OK;
+            } catch (Exception e) {
+                log.error("update registry error", e);
+                return RegistryState.UNKNOWN_ERROR;
+            }
+        }
+
+        return RegistryState.STORE_ERROR;
+    }
+
+    @Override
+    public Boolean saveRegistryInfo() throws InterruptedException {
+        RegisteredScriptNode take = updatedCache.take();
+        log.debug("start save registry info - [{}]", take);
+        return  scriptNodeService.insertOrUpdate(take.getScriptNode());
+    }
+
+    @Override
+    public List<RegisteredScriptNode> queryServiceInstance(ServiceInstance query) {
+        List<ScriptNode> list = null;
+        if (query == null) {
+            list = scriptNodeService.list();
+        } else if (query instanceof ScriptNode scriptNode) {
+            list = scriptNodeService.list(new QueryWrapper<>(scriptNode));
+        } else {
+            ScriptNode scriptNode = new ScriptNode();
+            scriptNode.setGroupId(query.getGroupId());
+            scriptNode.setServiceId(query.getServiceId());
+            scriptNode.setInstanceId(query.getInstanceId());
+
+            list = scriptNodeService.list(new QueryWrapper<>(
+                    scriptNode
+            ));
+        }
+
+        return list.stream().map(scriptNode -> new RegisteredScriptNode(scriptNode, true)).toList();
+    }
+
+    @Override
+    public List<RegisteredScriptNode> queryServiceInstance(String key) {
+        String[] split = key.split(ControlServerUtil.SERVICE_INSTANCE_KEY_DISPATCHER);
+        return queryServiceInstance(
+                ServiceInstance.builder().groupId(split[0]).serviceId(split[1]).instanceId(split[2]).build()
+        );
+    }
+
+    @Override
+    public List<RegisteredScriptNode> queryServiceInstance(String groupId, String serviceId, String clientId) {
+        return queryServiceInstance(
+                ServiceInstance.builder().groupId(groupId).serviceId(serviceId).instanceId(clientId).build()
+        );
+    }
+
+    @Override
+    public boolean existServiceInstance(String key) {
+        String[] split = key.split(ControlServerUtil.SERVICE_INSTANCE_KEY_DISPATCHER);
+        ScriptNode scriptNode = new ScriptNode();
+        scriptNode.setGroupId(split[0]);
+        scriptNode.setServiceId(split[1]);
+        scriptNode.setInstanceId(split[2]);
+        return scriptNodeService.exists(new QueryWrapper<>(scriptNode));
+    }
+}
+package cn.com.vortexa.script_node.config;
+
+import cn.com.vortexa.common.dto.config.AutoBotAccountConfig;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.YamlConfigLoadUtil;
+import lombok.Data;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.stereotype.Component;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Stream;
+
+/**
+ * @author helei
+ * @since 2025-04-04
+ */
+@Slf4j
+@Data
+@Component
+@ConfigurationProperties(prefix = "vortexa.script-node")
+public class ScriptNodeConfiguration implements InitializingBean {
+
+    public static final String BOT_INSTANCE_CONFIG_FILE_NAME = "bot-instance-config.yaml";
+    public static final List<String> BOT_INSTANCE_CONFIG_PREFIX = List.of("vortexa", "botInstance");
+
+    /**
+     * bot group（Script Node中运行的bot的group)
+     * ）
+     */
+    private String scriptNodeName;
+
+    /**
+     * bot-instance 配置文件位置
+     */
+    private String botInstanceLocations;
+
+    /**
+     * Script node 基础路径
+     */
+    private String scriptNodeBasePath;
+
+    /**
+     * 解析后的botInstance配置文件绝对路径
+     */
+    private String resolvedInstanceLocations;
+
+    /**
+     * 是否开启命令行菜单
+     */
+    private boolean commandMenu = true;
+
+    /**
+     * botKeyConfigMap, （解析配置文件自动填入）
+     */
+    private Map<String, AutoBotConfig> botKeyConfigMap;
+
+    /**
+     * 自动时自动启动的botKey
+     */
+    private Set<String> autoLaunchBotKeys;
+
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        botKeyConfigMap = new HashMap<>();
+        // 解析地址，
+        scriptNodeBasePath = FileUtil.getAppResourceAppConfigPath() + File.separator + scriptNodeName;
+
+        resolvedInstanceLocations = FileUtil.generateAbsPath(botInstanceLocations, null);
+
+        // 解析文件夹
+        log.info("start resolve bot instance config from dir[{}]", resolvedInstanceLocations);
+        Path botInstanceDirsPath = Paths.get(resolvedInstanceLocations);
+        try (Stream<Path> walk = Files.walk(botInstanceDirsPath, 3)) {
+            walk.filter(Files::isDirectory).forEach(dir -> {
+                Path configFilePath = dir.resolve(BOT_INSTANCE_CONFIG_FILE_NAME);
+                if (Files.exists(configFilePath)) {
+                    AutoBotConfig config = YamlConfigLoadUtil.load(configFilePath.toFile(), BOT_INSTANCE_CONFIG_PREFIX, AutoBotConfig.class);
+
+                    // 配置文件校验
+                    if (config == null) {
+                        throw new IllegalArgumentException("bot instance config file [" + BOT_INSTANCE_CONFIG_FILE_NAME + "] illegal");
+                    }
+                    // 路径转换
+                    reactivePathConfigConvert(config, dir.toString());
+
+                    config.setResourceDir(dir.toString());
+                    botKeyConfigMap.put(config.getBotKey(), config);
+                    log.info("botKey[{}] config loaded", config.getBotKey());
+                }
+            });
+        }
+    }
+
+    /**
+     * 相对路径转换
+     *
+     * @param config          config
+     * @param botInstancePath botInstancePath
+     */
+    private void reactivePathConfigConvert(AutoBotConfig config, String botInstancePath) {
+        AutoBotAccountConfig accountConfig = config.getAccountConfig();
+        accountConfig.setConfigFilePath(
+                FileUtil.generateAbsPath(accountConfig.getConfigFilePath(), botInstancePath)
+        );
+
+        Map<String, Object> customConfig = config.getCustomConfig();
+        if (customConfig != null && !customConfig.isEmpty()) {
+            for (Map.Entry<String, Object> entry : customConfig.entrySet()) {
+                Object value = entry.getValue();
+                if (value instanceof String) {
+                    entry.setValue(FileUtil.generateAbsPath((String) value, botInstancePath));
+                }
+            }
+        }
+    }
+}
+package cn.com.vortexa.script_node.util;
+
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.classloader.DynamicJavaLoader;
+import cn.com.vortexa.script_node.anno.BotApplication;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.script_node.config.ScriptNodeConfiguration;
+import cn.com.vortexa.script_node.constants.BotStatus;
+import cn.com.vortexa.script_node.scriptagent.BotScriptAgent;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.com.vortexa.common.exception.BotStartException;
+import cn.com.vortexa.script_node.view.ScriptNodeCMDLineMenu;
+import cn.com.vortexa.script_node.view.commandMenu.DefaultMenuType;
+import cn.hutool.core.util.StrUtil;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
+
+@Slf4j
+public class ScriptBotLauncher {
+    private static final ScriptNodeCMDLineMenu scriptNodeCMDLineMenu = new ScriptNodeCMDLineMenu(List.of(
+            DefaultMenuType.START_BOT_TASK, DefaultMenuType.LAUNCH_SCRIPT
+    ));
+    private static final ConcurrentHashMap<String, ScriptBotMetaInfo> botMetaInfoMap = new ConcurrentHashMap<>();
+    public volatile static ScriptBotLauncher INSTANCE;
+
+    private final ScriptNodeConfiguration scriptNodeConfiguration;
+    private final BotApi botApi;
+    private final BotScriptAgent botScriptAgent;
+
+    public static ScriptBotLauncher buildScriptBotLauncher(ScriptNodeConfiguration scriptNodeConfiguration, BotApi botApi, BotScriptAgent botScriptAgent) {
+        if (INSTANCE == null) {
+            synchronized (ScriptBotLauncher.class) {
+                if (INSTANCE == null){
+                    INSTANCE = new ScriptBotLauncher(scriptNodeConfiguration, botApi, botScriptAgent);
+                }
+            }
+        }
+        return INSTANCE;
+    }
+
+    protected ScriptBotLauncher(ScriptNodeConfiguration scriptNodeConfiguration, BotApi botApi, BotScriptAgent botScriptAgent) {
+        this.scriptNodeConfiguration = scriptNodeConfiguration;
+        this.botApi = botApi;
+        this.botScriptAgent = botScriptAgent;
+    }
+
+    /**
+     * 加载并启动bot
+     *
+     * @param botKey botKey
+     */
+    public void loadAndLaunchBot(String botKey) {
+        AutoBotConfig botConfig = scriptNodeConfiguration.getBotKeyConfigMap().get(botKey);
+        if (botConfig == null) {
+            throw new IllegalArgumentException("no bot in script node" + botKey);
+        }
+        loadAndLaunchBot(botConfig);
+    }
+
+    /**
+     * 加载并启动bot
+     *
+     * @param botConfig botConfig
+     */
+    public void loadAndLaunchBot(AutoBotConfig botConfig) {
+        String botKey = botConfig.getBotKey();
+
+        log.info("[{}] start launch...", botKey);
+        String className = botConfig.getClassName();
+        if (StrUtil.isBlank(className)) {
+            throw new IllegalArgumentException(botKey + " config class name is null");
+        }
         try {
-            QueryEntity<JSON> queryEntity = healthBody();
-            CompletableFuture<String> request = request(queryEntity);
-            String str = request.get();
-            return queryEntity.getResultStrHandler().apply(str);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new BrowserRequestException("page query window error", e);
+            // 加载 class
+            // 1 编译为class
+            // 2 加载class
+            Class<?> aClass = loadScriptNodeResourceClass(botConfig.getResourceDir(), className, botKey);
+
+            log.info("[{}] class load success ", botKey);
+            if (isClassInInheritanceChain(aClass, AutoLaunchBot.class)) {
+                Class<AutoLaunchBot<?>> botClass = (Class<AutoLaunchBot<?>>) aClass;
+                // Step 3 启动bot
+                AutoLaunchBot<?> autoLaunchBot = launch(botClass, botConfig, bot -> {
+                    bot.setBotStatusChangeHandler((oldStatus, newStatus) -> {
+                        // 3.1 添加监听， bot状态改变时上报
+                        if (newStatus == BotStatus.RUNNING) {
+                            botScriptAgent.addRunningBot(bot.getBotInfo().getName(), botKey, bot);
+                        }
+
+                        if (newStatus == BotStatus.STOPPED || newStatus == BotStatus.SHUTDOWN) {
+                            botScriptAgent.removeRunningBot(bot.getBotInfo().getName(), botKey);
+                        }
+                    });
+                    return true;
+                });
+
+                // Step 4 添加进菜单
+                if (botConfig.isCommandMenu()) {
+                    addBotInMenu(botKey, autoLaunchBot);
+                }
+            } else {
+                log.info("[{}] class[{}} illegal, must extends AutoLaunchBot.class", botKey, className);
+            }
+
+        } catch (BotStartException | BotInitException e) {
+            log.error("script botKey[{}] auto launch error", botKey, e);
+        } catch (Exception e) {
+            log.error("script botKey[{}] auto launch error", botKey, e);
+            throw new RuntimeException("load class error", e);
         }
     }
 
-    /**
-     * 构建分页查询窗口的请求
-     *
-     * @return QueryEntity
-     */
-    protected abstract QueryEntity<JSON> healthBody();
 
     /**
-     * 分页查询窗口
+     * 启动bot
      *
-     * @param params params
+     * @param botClass botClass
+     * @return ApplicationContext
+     * @throws BotStartException BotStartException
+     * @throws BotInitException  BotInitException
      */
-    public JSON pageQueryWindow(JSONObject params) {
+    public AutoLaunchBot<?> launch(
+            Class<? extends AutoLaunchBot<?>> botClass,
+            AutoBotConfig botConfig,
+            Function<AutoLaunchBot<?>, Boolean> initHandler
+    ) throws BotStartException, BotInitException {
+        String botKey = botConfig.getBotKey();
+        if (StrUtil.isBlank(botKey)) {
+            throw new BotStartException("bot key is empty");
+        }
+
+        System.setProperty("spring.application.name", botKey);
+
+        // 解析注解上的bot name
+        BotApplication annotation = botClass.getAnnotation(BotApplication.class);
+        String botName = null;
+        if (annotation == null || StrUtil.isBlank((botName = annotation.name()))) {
+            throw new BotStartException("bot must have @BotApplication annotation and must have name");
+        }
+
+        // Step 1 创建bot实例
+        Constructor<? extends AutoLaunchBot<?>> constructor = null;
+        AutoLaunchBot<?> bot = null;
         try {
-            QueryEntity<JSON> queryEntity = buildPageQueryWindowBody(params);
-            CompletableFuture<String> request = request(queryEntity);
-            String str = request.get();
-            return queryEntity.getResultStrHandler().apply(str);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new BrowserRequestException("page query window error", e);
+            constructor = botClass.getConstructor();
+            bot = constructor.newInstance();
+        } catch (NoSuchMethodException | InstantiationException | IllegalAccessException |
+                 InvocationTargetException e) {
+            throw new BotInitException(e);
         }
+
+        botConfig.setBotName(botName);
+        bot.setBotName(botName);
+        bot.setBotKey(botKey);
+        botMetaInfoMap.put(botKey, new ScriptBotMetaInfo(
+                bot,
+                botConfig,
+                initHandler
+        ));
+
+        // Step 3 启动bot
+        launchResolvedScriptBot(botKey);
+
+        return bot;
     }
 
     /**
-     * 构建分页查询窗口的请求
-     *
-     * @return QueryEntity
+     * 启动命令行菜单
      */
-    protected abstract QueryEntity<JSON> buildPageQueryWindowBody(JSONObject params);
-
-    /**
-     * 打开浏览器窗口
-     *
-     * @param params params
-     * @return JSON
-     */
-    public JSON openBrowserWindow(JSONObject params) {
-        try {
-            QueryEntity<JSON> queryEntity = buildOpenBrowserWindowBody(params);
-            CompletableFuture<String> request = request(queryEntity);
-            String str = request.get();
-            return queryEntity.getResultStrHandler().apply(str);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new BrowserRequestException("open browser window error", e);
-        }
+    public static void startCommandLineMenu() {
+        scriptNodeCMDLineMenu.start();
     }
 
     /**
-     * 构建打开窗口窗口的请求
+     * 添加Bot到菜单
      *
-     * @return QueryEntity
+     * @param botKey botKey
+     * @param bot    bot
      */
-    protected abstract QueryEntity<JSON> buildOpenBrowserWindowBody(JSONObject params);
-
-    /**
-     * 关闭浏览器窗口
-     *
-     * @param params params
-     * @return JSON
-     */
-    public JSON closeBrowserWindow(JSONObject params) {
-        try {
-            QueryEntity<JSON> queryEntity = buildCloseBrowserWindowBody(params);
-            CompletableFuture<String> request = request(queryEntity);
-            String str = request.get();
-            return queryEntity.getResultStrHandler().apply(str);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new BrowserRequestException("close browser window error", e);
-        }
+    public void addBotInMenu(String botKey, AutoLaunchBot<?> bot) {
+        scriptNodeCMDLineMenu.getBotKeyMap().put(botKey, bot);
     }
 
-    /**
-     * 构建关闭窗口的请求
-     *
-     * @return QueryEntity
-     */
-    protected abstract QueryEntity<JSON> buildCloseBrowserWindowBody(JSONObject params);
 
-    /**
-     * 关闭所有浏览器窗口
-     *
-     * @return JSON
-     */
-    public JSON closeAllBrowserWindow() {
-        try {
-            QueryEntity<JSON> queryEntity = closeAllBrowserWindowBody();
-            CompletableFuture<String> request = request(queryEntity);
-            String str = request.get();
-            return queryEntity.getResultStrHandler().apply(str);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new BrowserRequestException("close all browser window error", e);
+    private void launchResolvedScriptBot(String botKey) throws BotStartException, BotInitException {
+        ScriptBotMetaInfo scriptBotMetaInfo = botMetaInfoMap.get(botKey);
+        if (scriptBotMetaInfo == null) {
+            throw new BotStartException(botKey + " didn't resolved by ScriptBotLauncher, place invoke ScriptBotLauncher.launch(...) first");
         }
-    }
 
-    /**
-     * 构建关闭所有浏览器窗口的请求
-     *
-     * @return QueryEntity
-     */
-    protected abstract QueryEntity<JSON> closeAllBrowserWindowBody();
-
-    /**
-     * 删除浏览器窗口
-     *
-     * @param params params
-     * @return JSON
-     */
-    public JSON deleteBrowserWindow(JSONObject params) {
-        try {
-            QueryEntity<JSON> queryEntity = deleteCloseBrowserWindowBody(params);
-            CompletableFuture<String> request = request(queryEntity);
-            String str = request.get();
-            return queryEntity.getResultStrHandler().apply(str);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new BrowserRequestException("delete browser window error", e);
-        }
-    }
-
-    /**
-     * 构建删除窗口的请求
-     *
-     * @return QueryEntity
-     */
-    protected abstract QueryEntity<JSON> deleteCloseBrowserWindowBody(JSONObject params);
-
-    /**
-     * 删除批量浏览器窗口
-     *
-     * @param params params
-     * @return JSON
-     */
-    public JSON deleteBrowserWindowBatch(JSONObject params) {
-        try {
-            QueryEntity<JSON> queryEntity = deleteBrowserWindowBatchBody(params);
-            CompletableFuture<String> request = request(queryEntity);
-            String str = request.get();
-            return queryEntity.getResultStrHandler().apply(str);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new BrowserRequestException("batch delete browser window error", e);
-        }
-    }
-
-    /**
-     * 构建批量删除窗口的请求
-     *
-     * @return QueryEntity
-     */
-    protected abstract QueryEntity<JSON> deleteBrowserWindowBatchBody(JSONObject params);
-
-    /**
-     * 浏览器窗口详情查询
-     *
-     * @param params params
-     * @return JSON
-     */
-    public JSON browserWindowDetail(JSONObject params) {
-        try {
-            QueryEntity<JSON> queryEntity = browserWindowDetailBody(params);
-            CompletableFuture<String> request = request(queryEntity);
-            String str = request.get();
-            return queryEntity.getResultStrHandler().apply(str);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new BrowserRequestException("query browser window detail error", e);
-        }
-    }
-
-    /**
-     * 构建窗口详情查询请求
-     *
-     * @return QueryEntity
-     */
-    protected abstract QueryEntity<JSON> browserWindowDetailBody(JSONObject params);
-
-    /**
-     * 排列已打开窗口
-     *
-     * @param params params
-     * @return JSON
-     */
-    public JSON boundsBrowserWindow(JSONObject params) {
-        try {
-            QueryEntity<JSON> queryEntity = boundsBrowserWindowBody(params);
-            CompletableFuture<String> request = request(queryEntity);
-            String str = request.get();
-            return queryEntity.getResultStrHandler().apply(str);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new BrowserRequestException("bounds browser window error", e);
-        }
-    }
-
-    /**
-     * 构建排列已打开窗口请求
-     *
-     * @return QueryEntity
-     */
-    protected abstract QueryEntity<JSON> boundsBrowserWindowBody(JSONObject params);
-
-    /**
-     * 自适应排列窗口
-     *
-     * @return JSON
-     */
-    public JSON autoFlexWindow() {
-        try {
-            QueryEntity<JSON> queryEntity = autoFlexWindowBody();
-            CompletableFuture<String> request = request(queryEntity);
-            String str = request.get();
-            return queryEntity.getResultStrHandler().apply(str);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new BrowserRequestException("auto flex browser window error", e);
-        }
-    }
-
-    /**
-     * 构建自适应排列窗口窗口请求
-     *
-     * @return QueryEntity
-     */
-    protected abstract QueryEntity<JSON> autoFlexWindowBody();
-
-    /**
-     * 修改浏览器窗口分组
-     *
-     * @param params params
-     * @return JSON
-     */
-    public JSON updateWindowGroup(JSONObject params) {
-        try {
-            QueryEntity<JSON> queryEntity = updateWindowGroupBody(params);
-            CompletableFuture<String> request = request(queryEntity);
-            String str = request.get();
-            return queryEntity.getResultStrHandler().apply(str);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new BrowserRequestException("update browser window group error", e);
-        }
-    }
-
-    /**
-     * 修改浏览器窗口分组请求
-     *
-     * @return QueryEntity
-     */
-    protected abstract QueryEntity<JSON> updateWindowGroupBody(JSONObject params);
-
-    /**
-     * 修改窗口备注
-     *
-     * @param params params
-     * @return JSON
-     */
-    public JSON updateWindowRemark(JSONObject params) {
-        try {
-            QueryEntity<JSON> queryEntity = updateWindowRemarkBody(params);
-            CompletableFuture<String> request = request(queryEntity);
-            String str = request.get();
-            return queryEntity.getResultStrHandler().apply(str);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new BrowserRequestException("update browser window remark error", e);
-        }
-    }
-
-    /**
-     * 修改窗口备注请求
-     *
-     * @return QueryEntity
-     */
-    protected abstract QueryEntity<JSON> updateWindowRemarkBody(JSONObject params);
-
-    /**
-     * 检查代理
-     *
-     * @param params params
-     * @return JSON
-     */
-    public JSON proxyCheckOut(JSONObject params) {
-        try {
-            QueryEntity<JSON> queryEntity = proxyCheckOutBody(params);
-            CompletableFuture<String> request = request(queryEntity);
-            String str = request.get();
-            return queryEntity.getResultStrHandler().apply(str);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new BrowserRequestException("update browser window remark error", e);
-        }
-    }
-
-    /**
-     * 检查代理请求
-     *
-     * @return QueryEntity
-     */
-    protected abstract QueryEntity<JSON> proxyCheckOutBody(JSONObject params);
-
-    /**
-     * 查询显示器列表
-     *
-     * @return JSON
-     */
-    public JSON displayListQuery() {
-        try {
-            QueryEntity<JSON> queryEntity = displayListQueryBody();
-            CompletableFuture<String> request = request(queryEntity);
-            String str = request.get();
-            return queryEntity.getResultStrHandler().apply(str);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new BrowserRequestException("query display list error", e);
-        }
-    }
-
-    /**
-     * 查询显示器列表
-     *
-     * @return QueryEntity
-     */
-    protected abstract QueryEntity<JSON> displayListQueryBody();
-
-    protected CompletableFuture<String> request(QueryEntity<JSON> queryEntity) {
-        if (queryEntity.getMethod() == null) {
-            queryEntity.setMethod(HttpMethod.POST);
-        }
-        return RestApiClientFactory.getClient(null).request(
-                connectUrl + queryEntity.getContentPath(),
-                queryEntity.getMethod(),
-                new HashMap<>(),
-                queryEntity.getMethod() == HttpMethod.POST ? null : queryEntity.getBody(),
-                queryEntity.getMethod() == HttpMethod.POST ? (queryEntity.getBody() != null ? queryEntity.getBody() : new JSONObject()) : new JSONObject()
+        log.info("bot[{}] start launch", botKey);
+        scriptBotMetaInfo.getBot().launch(
+                scriptNodeConfiguration,
+                scriptBotMetaInfo.botConfig,
+                botApi,
+                scriptBotMetaInfo.initHandler
         );
     }
 
     /**
-     * 根据序号启动，返回窗口debugAddress
+     * 加载script bot的class文件
      *
-     * @param fingerSeq fingerSeq
-     * @return  String
+     * @param sourceDir sourceDir
+     * @param className className
+     * @return 已加载的BotClass文件
+     * @throws Exception Exception
      */
-    public abstract String startWebDriverBySeq(Integer fingerSeq);
-}
-package cn.com.vortexa.script_bot.depin.optimai;
+    private static Class<?> loadScriptNodeResourceClass(String sourceDir, String className, String botKey) throws Exception {
+        String classOutputDir = FileUtil.getCompileClassResource(botKey);
+        if (!DynamicJavaLoader.compileJavaDir(sourceDir, classOutputDir)) {
+            throw new RuntimeException(sourceDir + " compile to class error");
+        }
+        log.info("{} compile finish, start output dir {}", sourceDir, classOutputDir);
+        return DynamicJavaLoader.loadClassFromFile(classOutputDir, className);
+    }
 
-import cn.com.vortexa.captcha.CloudFlareResolver;
-import cn.com.vortexa.common.constants.HttpMethod;
-import cn.com.vortexa.common.dto.Result;
+    public static boolean isClassInInheritanceChain(Class<?> subclass, Class<?> superclass) {
+        Class<?> currentClass = subclass;
+        while (currentClass != null) {
+            if (currentClass.equals(superclass)) {
+                return true;
+            }
+            currentClass = currentClass.getSuperclass();
+        }
+        return false;
+    }
+
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    public static class ScriptBotMetaInfo {
+        private AutoLaunchBot<?> bot;
+        private AutoBotConfig botConfig;
+        Function<AutoLaunchBot<?>, Boolean> initHandler;
+    }
+}
+package cn.com.vortexa.script_node.view;
+
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.com.vortexa.common.exception.BotStartException;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.script_node.util.AccountInfoPrinter;
+import cn.com.vortexa.script_node.util.ScriptBotLauncher;
+import cn.com.vortexa.script_node.view.commandMenu.CommandMenuNode;
+import cn.com.vortexa.script_node.view.commandMenu.DefaultMenuType;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.script_node.view.commandMenu.PageMenuNode;
+import cn.com.vortexa.common.dto.ACListOptResult;
+import cn.com.vortexa.common.dto.PageResult;
 import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.common.entity.BrowserEnv;
 import cn.com.vortexa.common.entity.ProxyInfo;
 import cn.com.vortexa.common.entity.RewordInfo;
+import cn.com.vortexa.job.constants.JobStatus;
+
+import com.alibaba.fastjson.JSON;
+
+import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
+
+import org.quartz.SchedulerException;
+
+import java.sql.SQLException;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
+
+import static cn.com.vortexa.script_node.constants.MapConfigKey.*;
+
+@Slf4j
+public class ScriptNodeCMDLineMenu extends CommandLineMenu {
+    /**
+     * 刷新节点
+     */
+    public static final CommandMenuNode REFRESH_NODE = new CommandMenuNode(true, "刷新", "当前数据已刷新");
+
+    private final List<DefaultMenuType> defaultMenuTypes;
+
+    @Setter
+    private Consumer<CommandMenuNode> addCustomMenuNode;
+
+    public ScriptNodeCMDLineMenu(List<DefaultMenuType> defaultMenuTypes) {
+        super();
+        this.defaultMenuTypes = new ArrayList<>(defaultMenuTypes);
+
+        this.defaultMenuTypes.add(DefaultMenuType.IMPORT);
+        this.defaultMenuTypes.add(DefaultMenuType.ACCOUNT_LIST);
+        this.defaultMenuTypes.add(DefaultMenuType.PROXY_LIST);
+        this.defaultMenuTypes.add(DefaultMenuType.BROWSER_ENV_LIST);
+    }
+
+    @Override
+    public final void buildBotMenuNode(CommandMenuNode botMenuNode, AutoLaunchBot<?> bot) {
+        if (addCustomMenuNode != null) {
+            addCustomMenuNode.accept(botMenuNode);
+        }
+
+        for (DefaultMenuType menuType : defaultMenuTypes) {
+            botMenuNode.addSubMenu(switch (menuType) {
+                case REGISTER -> buildRegisterMenuNode();
+                case VERIFIER -> buildVerifierMenuNode();
+                case LOGIN -> buildQueryTokenMenuNode();
+                case ACCOUNT_LIST -> buildAccountListMenuNode();
+                case PROXY_LIST -> buildProxyListMenuNode();
+                case BROWSER_ENV_LIST -> buildBrowserListMenuNode();
+                case START_BOT_TASK -> buildStartBotTaskMenuNode(bot);
+                case IMPORT -> buildImportMenuNode();
+                case LAUNCH_SCRIPT -> buildLaunchScriptMenuNode(bot);
+            });
+        }
+    }
+
+    /**
+     * 启动bot菜单
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildLaunchScriptMenuNode(AutoLaunchBot<?> bot) {
+        String botKey = bot.getBotKey();
+
+        CommandMenuNode commandMenuNode = new CommandMenuNode("启动/关闭 Bot", "启动或关闭Bot",
+                () -> "当前选择的Bot[%s][%s]\n状态[%s]".formatted(
+                        bot.getBotName(),
+                        botKey,
+                        bot.getStatus()
+                ));
+
+        return commandMenuNode.addSubMenu(new CommandMenuNode(true, "启动", null, () -> {
+            try {
+                ScriptBotLauncher.INSTANCE.loadAndLaunchBot(botKey);
+                return botKey + " launch finish...Current status: " + bot.getStatus();
+            } catch (Exception e) {
+                log.error("start bot[{}] error", botKey, e);
+                return "";
+            }
+        })).addSubMenu(new CommandMenuNode(true, "关闭", null, () -> {
+            bot.stop();
+            return "";
+        }));
+    }
+
+    /**
+     * 构建注册菜单节点
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildRegisterMenuNode() {
+        CommandMenuNode registerMenu = new CommandMenuNode("注册",
+                "请确认设置后运行", this::printCurrentRegisterConfig);
+
+        CommandMenuNode interInvite = new CommandMenuNode(
+                "填入邀请码",
+                "请输入邀请码：",
+                this::printCurrentRegisterConfig
+        );
+        interInvite.setResolveInput(input -> {
+            AutoBotConfig autoBotConfig = getBot().getAutoBotConfig();
+            log.info("邀请码修改[{}]->[{}]", autoBotConfig.getConfig(INVITE_CODE_KEY), input);
+            autoBotConfig.setConfig(INVITE_CODE_KEY, input);
+        });
+
+        return registerMenu
+                .addSubMenu(interInvite)
+                .addSubMenu(new CommandMenuNode(
+                        true,
+                        "开始注册",
+                        "开始注册所有账号...",
+                        () -> {
+                            try {
+
+                                return getBot().registerAccount().get().toString();
+                            } catch (Exception e) {
+                                return "registry error, " + e.getMessage();
+                            }
+                        }
+                ));
+    }
+
+    private CommandMenuNode buildVerifierMenuNode() {
+        return new CommandMenuNode("验证邮箱", "请选择验证的账户类型",
+                () -> "当前的邮箱类型：" + getBot().getAutoBotConfig().getConfig(EMAIL_VERIFIER_TYPE));
+    }
+
+    /**
+     * 获取token
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildQueryTokenMenuNode() {
+        return new CommandMenuNode("获取token", "开始获取token", () -> {
+            CompletableFuture<ACListOptResult> getToken = getBot().loginAndTakeTokenAccount();
+            try {
+                ACListOptResult acListOptResult = getToken.get();
+
+                return acListOptResult.printStr();
+            } catch (InterruptedException | ExecutionException e) {
+                getBot().logger.error("获取token异常, " +
+                        (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()), e);
+                return "";
+            }
+        });
+    }
+
+    /**
+     * 构建查看代理列表的菜单节点
+     *
+     * @return 查看代理列表菜单节点
+     */
+    private CommandMenuNode buildProxyListMenuNode() {
+        return new PageMenuNode<>("查看代理列表", "当前代理列表:", (pageNum, pageSize) -> {
+            try {
+                return getBot().getBotApi().getProxyInfoRPC().conditionPageQueryRPC(pageNum, pageSize, new HashMap<>());
+            } catch (SQLException e) {
+                getBot().logger.error(
+                        "查询代理列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+                return null;
+            }
+        }, ProxyInfo.class);
+    }
+
+    /**
+     * 构建查看浏览器环境列表的菜单节点
+     *
+     * @return 查看浏览器环境列表菜单节点
+     */
+    private CommandMenuNode buildBrowserListMenuNode() {
+        return new PageMenuNode<>("查看浏览器环境列表", "当前浏览器环境:", (pageNum, pageSize) -> {
+            try {
+                return getBot().getBotApi()
+                        .getBrowserEnvRPC()
+                        .conditionPageQueryRPC(pageNum, pageSize, new HashMap<>());
+            } catch (SQLException e) {
+                getBot().logger.error(
+                        "查询浏览器环境列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+                return null;
+            }
+        }, BrowserEnv.class);
+    }
+
+    /**
+     * 账户列表菜单节点
+     *
+     * @return 账户列表节点
+     */
+    private CommandMenuNode buildAccountListMenuNode() {
+        CommandMenuNode accountListMenuNode = new PageMenuNode<>("查看账号", "当前账户详情列表:",
+                (pageNum, pageSize) -> {
+                    try {
+                        HashMap<String, Object> filter = new HashMap<>();
+                        filter.put("botId", getBot().getBotInstance().getBotId());
+                        filter.put("botKey", getBot().getAutoBotConfig().getBotKey());
+
+                        PageResult<AccountContext> pageResult = getBot().getBotApi()
+                                .getBotAccountService()
+                                .conditionPageQuery(pageNum, pageSize, filter);
+                        getBot().getPersistenceManager().fillAccountInfos(pageResult.getList());
+                        return pageResult;
+                    } catch (Exception e) {
+                        getBot().logger.error(
+                                "查询账号列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+                        return new PageResult<>();
+                    }
+                }, AccountContext.class);
+
+        return accountListMenuNode
+                .addSubMenu(buildAccountRewardMenuNode())
+                .addSubMenu(buildAccountConnectStatusMenuNode())
+                .addSubMenu(REFRESH_NODE);
+    }
+
+    /**
+     * 查看账户收益菜单节点
+     *
+     * @return 账户收益节点
+     */
+    private CommandMenuNode buildAccountRewardMenuNode() {
+        return new PageMenuNode<>("查看账号收益", "账号收益详情列表:", (pageNum, pageSize) -> {
+            try {
+                return getBot().getBotApi()
+                        .getRewordInfoService()
+                        .conditionPageQuery(pageNum, pageSize, new HashMap<>());
+            } catch (SQLException e) {
+                getBot().logger.error(
+                        "查询账号收益列表出错, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+                return null;
+            }
+        }, RewordInfo.class);
+    }
+
+    /**
+     * 查看账户连接情况菜单节点
+     *
+     * @return 账户收益节点
+     */
+    private CommandMenuNode buildAccountConnectStatusMenuNode() {
+        return new CommandMenuNode(
+                "查看账号连接情况",
+                "账号连接情况列表:",
+                () -> AccountInfoPrinter.printAccountConnectStatusList(getBot().getAccountContexts())
+        ).addSubMenu(REFRESH_NODE);
+    }
+
+    /**
+     * 开始账户连接菜单节点
+     *
+     * @return 连接账户菜单节点
+     */
+    private CommandMenuNode buildStartBotTaskMenuNode(AutoLaunchBot<?> bot) {
+        CommandMenuNode menuNode = new CommandMenuNode(
+                "启动任务",
+                "选择任务类型",
+                node -> {
+                    Set<String> existJobs = node.getSubNodeList()
+                            .stream()
+                            .map(CommandMenuNode::getDescribe)
+                            .collect(Collectors.toSet());
+
+                    for (String jobName : bot.botJobNameList()) {
+                        if (existJobs.contains(jobName)) continue;
+                        CommandMenuNode typeInput = new CommandMenuNode(true, null, jobName,
+                                () -> JSON.toJSONString(bot.startBotJob(jobName))
+                        );
+
+                        typeInput.setTittleBuilder(() -> {
+                            JobStatus status = null;
+                            try {
+                                status = getBot().getBotApi()
+                                        .getBotJobService()
+                                        .queryJobStatus(
+                                                getBot().getScriptNodeName(),
+                                                getBot().getAutoBotConfig().getBotKey(),
+                                                jobName
+                                        );
+                                return "%s 任务 (%s)".formatted(jobName, status);
+                            } catch (SchedulerException e) {
+                                throw new RuntimeException(e);
+                            }
+                        });
+
+                        node.addSubMenu(typeInput);
+                    }
+                    return "";
+                }
+        );
+        return menuNode;
+    }
+
+    /**
+     * 导入菜单节点
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportMenuNode() {
+        return new CommandMenuNode("导入", "请选择要导入的数据")
+                .addSubMenu(buildImportBotAccountContextMenuNode());
+    }
+
+    /**
+     * 导入bot使用的账号菜单节点
+     *
+     * @return CommandMenuNode
+     */
+    private CommandMenuNode buildImportBotAccountContextMenuNode() {
+        return new CommandMenuNode(true, "导入bot运行账号", null, () -> {
+
+            try {
+                Integer i = getBot().getBotApi().getBotAccountService().importFromExcel(
+                        getBot().getBotInfo().getId(),
+                        getBot().getBotInstance().getBotKey(),
+                        getBot().getAutoBotConfig().getAccountConfig().getConfigFilePath()
+                );
+                getBot().initAccounts();
+                return "bot运行账号导入完成," + i;
+            } catch (Exception e) {
+                return "import bot account context error," + e.getMessage();
+            }
+        });
+    }
+
+    /**
+     * 打印当前的邀请码
+     *
+     * @return 邀请码
+     */
+    private String printCurrentRegisterConfig() {
+        String inviteCode = (String) getBot().getAutoBotConfig().getCustomConfig().get(INVITE_CODE_KEY);
+        String registerType = (String) getBot().getAutoBotConfig().getCustomConfig().get(REGISTER_TYPE_KEY);
+
+        return "(当前邀请码为:" + inviteCode + ")\n"
+                + "(当前注册类型为:" + registerType + ")\n";
+    }
+}
+package cn.com.vortexa.script_node;
+
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.typehandler.JsonTypeHandler;
+import cn.com.vortexa.common.util.typehandler.LocalDateTimeTypeHandler;
+import cn.com.vortexa.common.util.typehandler.MapTextTypeHandler;
+import cn.com.vortexa.db_layer.DBLayerAutoConfig;
+import cn.com.vortexa.db_layer.plugn.table_shard.TableShardInterceptor;
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.BotIdBasedTableShardStrategy;
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
+import cn.com.vortexa.job.JobAutoConfig;
+import cn.com.vortexa.script_node.config.ScriptNodeConfiguration;
+import cn.com.vortexa.script_node.scriptagent.BotScriptAgent;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.com.vortexa.script_node.util.ScriptBotLauncher;
 import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.config.GlobalConfig;
+import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
+import com.zaxxer.hikari.HikariDataSource;
+import org.apache.ibatis.plugin.Interceptor;
+import org.apache.ibatis.session.SqlSessionFactory;
+import org.mybatis.spring.annotation.MapperScan;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 
-import com.alibaba.fastjson.JSONObject;
+import javax.sql.DataSource;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
-import org.jetbrains.annotations.NotNull;
+@Configuration
+@ImportAutoConfiguration({DBLayerAutoConfig.class, JobAutoConfig.class})
+@ComponentScan({"cn.com.vortexa.script_node.service.impl", "cn.com.vortexa.script_node.config"})
+@MapperScan(basePackages = "cn.com.vortexa.script_node.mapper")
+public class ScriptNodeAutoConfig {
+
+    @Autowired
+    private JsonTypeHandler jsonTypeHandler;
+
+    @Autowired
+    private MapTextTypeHandler mapTextTypeHandler;
+
+    @Autowired
+    private LocalDateTimeTypeHandler localDateTimeTypeHandler;
+
+    @Autowired
+    private ScriptNodeConfiguration scriptNodeConfiguration;
+
+    @Autowired
+    private MybatisConfiguration mybatisConfiguration;
+
+    @Autowired
+    private GlobalConfig globalConfig;
+
+    @Lazy
+    @Autowired
+    private BotApi botApi;
+
+    @Autowired
+    private BotScriptAgent botScriptAgent;
+
+    @Bean("vortexaDataSource")
+    public DataSource vortexaDataSource() {
+        String scriptNodeName = scriptNodeConfiguration.getScriptNodeName();
+        if (StrUtil.isBlank(scriptNodeName)) {
+            throw new IllegalArgumentException("scriptNodeName is empty");
+        }
+
+        try {
+            String path = tryCreateDBFile(scriptNodeName);
+            HikariDataSource dataSource = new HikariDataSource();
+            dataSource.setJdbcUrl("jdbc:sqlite:/" + path);
+            return dataSource;
+        } catch (IOException e) {
+            throw new RuntimeException("create Bot[%s]DB file error".formatted(scriptNodeName), e);
+        }
+    }
+
+
+     @Bean
+     public SqlSessionFactory sqlSessionFactory(@Qualifier("vortexaDataSource") DataSource dataSource) throws Exception {
+         MybatisSqlSessionFactoryBean factoryBean = new MybatisSqlSessionFactoryBean();
+         factoryBean.setDataSource(dataSource);
+         factoryBean.setMapperLocations(new PathMatchingResourcePatternResolver().getResources("classpath:/mapper/*.xml"));
+         factoryBean.setTypeHandlers(
+                 jsonTypeHandler, mapTextTypeHandler, localDateTimeTypeHandler
+         );
+         factoryBean.setTypeAliasesPackage("cn.com.vortexa.entity");
+         factoryBean.setConfiguration(mybatisConfiguration);
+         factoryBean.setGlobalConfig(globalConfig);
+         // 分表插件， 不同bot账户用不同的表
+         factoryBean.setPlugins(tableShardInterceptor());
+         return factoryBean.getObject();
+     }
+
+
+
+    @Bean
+    public ITableShardStrategy tableShardStrategy() {
+        return new BotIdBasedTableShardStrategy();
+    }
+
+    @Bean
+    public Interceptor tableShardInterceptor() {
+        return new TableShardInterceptor(tableShardStrategy());
+    }
+
+    @Bean
+    public ScriptBotLauncher scriptBotLauncher() {
+        return ScriptBotLauncher.buildScriptBotLauncher(scriptNodeConfiguration, botApi, botScriptAgent);
+    }
+
+    /**
+     * 尝试创建DB File
+     *
+     * @param scriptNodeName scriptNodeName
+     * @return db file absolutePath
+     * @throws IOException IOException
+     */
+    private static String tryCreateDBFile(String scriptNodeName) throws IOException {
+        // 创建BotKey对应的数据库文件
+        Path absolutePath = Paths.get(
+                FileUtil.getDBResourceDir(),
+            scriptNodeName,
+                "script_node_" + scriptNodeName + ".db"
+        );
+
+        if (Files.notExists(absolutePath)) {
+            if (Files.notExists(absolutePath.getParent())) {
+                Files.createDirectories(absolutePath.getParent());
+            }
+            Files.createFile(absolutePath);
+        }
+
+        return absolutePath.toString();
+    }
+}
+package cn.com.vortexa.script_node;
+
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.script_node.config.ScriptNodeConfiguration;
+import cn.com.vortexa.script_node.util.ScriptBotLauncher;
+import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.ApplicationListener;
+import org.springframework.stereotype.Component;
+
+import java.util.Map;
+import java.util.Set;
+
+@Slf4j
+@Component
+public class ScriptNodeStartupListener implements ApplicationListener<ApplicationReadyEvent> {
+
+    @Autowired
+    private ScriptNodeConfiguration scriptNodeConfiguration;
+
+    @Autowired
+    private ScriptBotLauncher scriptBotLauncher;
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public void onApplicationEvent(ApplicationReadyEvent event) {
+        log.info("start launch script bot...");
+
+        Set<String> autoLaunchBotKeys = scriptNodeConfiguration.getAutoLaunchBotKeys();
+
+        // 启动配置的bot
+        for (Map.Entry<String, AutoBotConfig> entry : scriptNodeConfiguration.getBotKeyConfigMap().entrySet()) {
+            String botKey = entry.getKey();
+            AutoBotConfig botConfig = entry.getValue();
+
+            if (!autoLaunchBotKeys.contains(botKey)) {
+                continue;
+            }
+
+            scriptBotLauncher.loadAndLaunchBot(botConfig);
+        }
+
+        // 启动CMD
+        ScriptBotLauncher.startCommandLineMenu();
+    }
+
+
+}
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.classloader.DynamicJavaLoader;
+
+import java.lang.reflect.Method;
+
+/**
+ * @author h30069248
+ * @since 2025/4/17 11:52
+ */
+public class TestLoadJavaFile {
+    public static void main(String[] args) throws Exception {
+        String javaFile = "D:\\workspace\\Vortexa-dev_3.0\\vortexa-script-bot\\src\\main\\java\\cn\\com\\vortexa\\script_bot\\daily\\beamable";
+        String outputDir = FileUtil.getCompileClassResource("beamable_test");
+        String className = "cn.com.vortexa.script_bot.daily.beamable.BeamableBot";
+
+        // 1. 编译外部 Java 源文件
+        if (!DynamicJavaLoader.compileJavaDir(javaFile, outputDir)) {
+            System.out.println("编译失败");
+            return;
+        }
+
+        Class<?> clazz = DynamicJavaLoader.loadClassFromDir(outputDir, className);
+        // 4. 创建实例
+        Object instance = clazz.getDeclaredConstructor().newInstance();
+
+        // 5. 调用 run 方法
+        Method[] declaredMethods = clazz.getDeclaredMethods();
+        for (Method declaredMethod : declaredMethods) {
+            System.out.println(declaredMethod.getName());
+        }
+    }
+}
+package cn.com.vortexa.control.config;
+
+
+import cn.com.vortexa.common.util.YamlConfigLoadUtil;
+import cn.com.vortexa.common.dto.control.ServiceInstance;
+import lombok.Data;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.charset.StandardCharsets;
-import java.security.InvalidKeyException;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
-import java.util.Base64;
-import java.util.Date;
-import java.util.HashMap;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.InputStream;
 import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 
 /**
  * @author helei
- * @since 2025/3/24 17:15
+ * @since 2025-03-15
  */
-public class OptimAIAPI {
-    private static final List<String> BROWSER_LIST = List.of("chrome", "firefox", "edge", "opera", "brave");
-    private static final String CLIENT_SECRET = "D1A167BD1346DDF2357DA5A2F2F2F";
+@Data
+public class ScriptAgentConfig {
 
-    private static final String LOGIN_PAGE_URL = "https://node.optimai.network/login";
-    private static final String LOGIN_WEBSITE_KEY = "0x4AAAAAAA-NTN9roDHAsPQe";
+    private static final String RESOURCE_PATH = "nameserver-client-config.yaml";
 
-    private static final String SIGN_IN_API = "https://api.optimai.network/auth/signin";
-    private static final String GET_TOKEN_API = "https://api.optimai.network/auth/token";
-    private static final String REFRESH_TOKEN_API = "https://api.optimai.network/auth/refresh";
-    private static final String NODE_REGISTER_API = "https://api.optimai.network/devices/register";
-    private static final String REWORD_QUERY_API = "/dashboard/stats";
+    private static final String PREFIX_PATH = "cn.com.vortexa.nameserver.client";
+    private static final Logger log = LoggerFactory.getLogger(ScriptAgentConfig.class);
 
-    public static final String ACCESS_TOKEN_KEY = "access_token";
-    public static final String REFRESH_TOKEN_KEY = "refresh_token";
-    public static final String WS_TOKEN = "ws_token";
-    public static final String BROWSER_KEY = "optimai_browser";
-    public static final String TIMEZONE_KEY = "timezone";
+    private volatile static ScriptAgentConfig INSTANCE;
 
-    public static final Random random = new Random();
-    private static final Logger log = LoggerFactory.getLogger(OptimAIAPI.class);
-
-    private final OptimAIBot optimAIBot;
-
-    public OptimAIAPI(OptimAIBot optimAIBot) {
-        this.optimAIBot = optimAIBot;
+    public static ScriptAgentConfig defaultConfig() throws FileNotFoundException {
+        return loadConfig("nameserver-client-config.yaml", PREFIX_PATH);
     }
 
-    public Result registry(AccountContext uniAC, String inviteCode) {
-
-        return null;
-    }
-
-    /**
-     * 登录
-     *
-     * @param accountContext accountContext
-     * @return Result
-     * @throws Exception Exception
-     */
-    public Result login(AccountContext accountContext) throws Exception {
-        if (accountContext.getId() != 1) {
-            return Result.fail("");
-        }
-        ProxyInfo proxy = accountContext.getProxy();
-        String simpleInfo = accountContext.getSimpleInfo();
-
-        optimAIBot.logger.info(simpleInfo + " start cf resolve...");
-        CompletableFuture<Result> future = CloudFlareResolver.cloudFlareResolve(
-            proxy,
-            LOGIN_PAGE_URL,
-            LOGIN_WEBSITE_KEY,
-            optimAIBot.getAutoBotConfig().getConfig(OptimAIBot.TWO_CAPTCHA_API_KEY)
-        ).thenApplyAsync(twoCaptchaResult -> {
-            try {
-                optimAIBot.logger.info(simpleInfo + " cf resolve success");
-                String userAgent = twoCaptchaResult.getString("userAgent");
-                String token = twoCaptchaResult.getString("token");
-
-                JSONObject body = new JSONObject();
-                String codeVerifier = generateCodeVerifier();
-
-                body.put("email", accountContext.getAccountBaseInfo().getEmail());
-                body.put("password", accountContext.getParam(OptimAIBot.PASSWORD_KEY));
-                body.put("code_challenge_method", "S256");
-                body.put("code_challenge", generateCodeChallenge(codeVerifier));
-                body.put("turnstile_token", token);
-
-                Map<String, String> signInHeaders = buildSignInHeader(accountContext, userAgent);
-
-                String signInStr = optimAIBot.syncRequest(
-                    proxy,
-                    SIGN_IN_API,
-                    HttpMethod.POST,
-                    signInHeaders,
-                    null,
-                    body,
-                    () -> simpleInfo + " start login"
-                ).get();
-
-                JSONObject signIn = JSONObject.parseObject(signInStr);
-                String authorizationCode = signIn.getString("authorization_code");
-
-                optimAIBot.logger.info(simpleInfo + " code get success");
-
-                JSONObject getTokenBody = new JSONObject();
-                getTokenBody.put("code", authorizationCode);
-                getTokenBody.put("code_verifier", codeVerifier);
-                getTokenBody.put("grant_type", "authorization_code");
-
-                Map<String, String> tokenHeader = buildTokenHeader(accountContext, userAgent);
-
-                String getTokenStr = optimAIBot.syncRequest(
-                    proxy,
-                    GET_TOKEN_API,
-                    HttpMethod.POST,
-                    tokenHeader,
-                    null,
-                    getTokenBody,
-                    () -> simpleInfo + " start get token"
-                ).get();
-                JSONObject tokenResult = JSONObject.parseObject(getTokenStr);
-
-                optimAIBot.logger.info(simpleInfo + " get token success, " + tokenResult);
-                accountContext.setParam(ACCESS_TOKEN_KEY, tokenResult.getString(ACCESS_TOKEN_KEY));
-                accountContext.setParam(REFRESH_TOKEN_KEY, tokenResult.getString(REFRESH_TOKEN_KEY));
-                return Result.ok();
-            } catch (Exception e) {
-                optimAIBot.logger.error(
-                    "login error, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
-                return Result.fail("");
-            }
-        });
-
-        return future.get();
-    }
-
-
-    public Result refreshAccessToken(AccountContext accountContext)  {
-        String refreshToken = accountContext.getParam(REFRESH_TOKEN_KEY);
-        if (StrUtil.isBlank(refreshToken)) {
-            try {
-                return login(accountContext);
-            } catch (Exception e) {
-                return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+    public static ScriptAgentConfig loadConfig(String fileName, String prefix) throws FileNotFoundException {
+        if (INSTANCE == null) {
+            synchronized (ScriptAgentConfig.class) {
+                if (INSTANCE == null) {
+                    try(InputStream inputStream = ScriptAgentConfig.class.getClassLoader().getResourceAsStream(fileName)) {
+                        if (inputStream != null) {
+                            INSTANCE = YamlConfigLoadUtil.load(
+                                    fileName,
+                                    inputStream,
+                                    List.of(prefix.split("\\.")),
+                                    ScriptAgentConfig.class
+                            );
+                        } else {
+                            throw new FileNotFoundException("config file not found");
+                        }
+                    } catch (Exception e) {
+                        log.error("load script agent config[{}] error", fileName, e);
+                    }
+                }
             }
         }
+        return INSTANCE;
+    }
 
-        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
-        JSONObject body = new JSONObject();
-        body.put("refresh_token", refreshToken);
+    private String registryCenterUrl;   // 注册中心地址
+    private Integer nioThreadCount = 1; // netty nio 线程数
+    private ServiceInstance serviceInstance;    // 服务地址
+    private Integer serviceOfflineTtl; // 服务被判断为下线时间（ping interval）
 
-        try {
-            String responseStr = optimAIBot.syncRequest(
-                accountContext.getProxy(),
-                REFRESH_TOKEN_API,
-                HttpMethod.POST,
-                headers,
-                null,
-                body,
-                () -> accountContext.getSimpleInfo() + " start refresh token..."
-            ).get();
+    private int metricUploadIntervalSeconds = 15 * 60;  //  指标上报间隔（秒）
 
-            JSONObject result = JSONObject.parseObject(responseStr);
-            accountContext.setParam(ACCESS_TOKEN_KEY, result.getJSONObject("data").getString(ACCESS_TOKEN_KEY));
-            return Result.ok();
-        } catch (InterruptedException | ExecutionException e) {
-            return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+    private static String toCamelCase(String name) {
+        String[] parts = name.split("-");
+        StringBuilder camelCase = new StringBuilder(parts[0]);
+        for (int i = 1; i < parts.length; i++) {
+            camelCase.append(parts[i].substring(0, 1).toUpperCase()).append(parts[i].substring(1));
         }
+        return camelCase.toString();
     }
-
-    public Result queryReword(AccountContext accountContext) {
-        String accessToken = accountContext.getParam(ACCESS_TOKEN_KEY);
-        if (accessToken == null) {
-            Result result = refreshAccessToken(accountContext);
-            if (!result.getSuccess()) {
-                return Result.fail("get access token error, " + result.getErrorMsg());
-            } else {
-                accessToken = accountContext.getParam(ACCESS_TOKEN_KEY);
-            }
-        }
-
-        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
-        headers.put("Authorization", "Bearer " + accessToken);
-
-        try {
-            String responseStr = optimAIBot.syncRequest(
-                accountContext.getProxy(),
-                REWORD_QUERY_API,
-                HttpMethod.GET,
-                headers,
-                null,
-                null
-            ).get();
-            RewordInfo rewordInfo = accountContext.getRewordInfo();
-
-            JSONObject result = JSONObject.parseObject(responseStr);
-            JSONObject state = result.getJSONObject("data").getJSONObject("stats");
-            Double totalRewards = state.getDouble("total_rewards");
-            Object totalUptime = state.get("total_uptime");
-
-            rewordInfo.setTotalPoints(totalRewards);
-            rewordInfo.setSession(String.valueOf(totalUptime));
-            optimAIBot.logger.info(accountContext.getSimpleInfo()
-                + " reword query success, total[%s] uptime[%s]".formatted(totalRewards, totalUptime));
-            return Result.ok();
-        } catch (InterruptedException | ExecutionException e) {
-            optimAIBot.logger.error(
-                "query reword error, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
-            return Result.fail(e.getMessage());
-        }
-    }
-
-    public String registryNode2GetWSToken(AccountContext accountContext) throws Exception {
-        String accessToken = accountContext.getParam(ACCESS_TOKEN_KEY);
-        String browser = accountContext.getParam(BROWSER_KEY);
-        String timeZone = accountContext.getParam(TIMEZONE_KEY);
-        if (accessToken == null) {
-            Result result = refreshAccessToken(accountContext);
-            if (result.getSuccess()) {
-                accessToken = accountContext.getParam(ACCESS_TOKEN_KEY);
-            } else {
-                throw new RuntimeException("get access token error");
-            }
-        }
-        if (browser == null) {
-            browser = BROWSER_LIST.get(random.nextInt(BROWSER_LIST.size()));
-            accountContext.setParam(BROWSER_KEY, browser);
-        }
-        if (timeZone == null) {
-            timeZone = getNetworkTimezone(accountContext);
-            accountContext.setParam(TIMEZONE_KEY, timeZone);
-        }
-
-        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
-        headers.put("Authorization", accessToken);
-        headers.put("X-Client-Authentication", generateXClientAuthentication(browser, timeZone));
-
-        JSONObject deviceInfo = generateDeviceInfo(browser, timeZone);
-
-        String responseStr = optimAIBot
-            .syncRequest(accountContext.getProxy(), NODE_REGISTER_API, HttpMethod.POST, headers,
-                null, deviceInfo, () -> accountContext.getSimpleInfo() + " send registry node request")
-            .get();
-        optimAIBot.logger.info(accountContext.getSimpleInfo() + " registry node[%s][%s] success..".formatted(browser, timeZone) + responseStr);
-
-        JSONObject result = JSONObject.parseObject(responseStr);
-        return result.getJSONObject("data").getString("ws_auth_token");
-    }
-
-    public String getNetworkTimezone(AccountContext accountContext) throws ExecutionException, InterruptedException {
-        String responseStr = optimAIBot.syncRequest(
-            accountContext.getProxy(),
-            "http://ip-api.com/json/",
-            HttpMethod.GET,
-            new HashMap<>(),
-            null,
-            null,
-            () -> accountContext.getSimpleInfo() + " get network detail"
-        ).get();
-        return JSONObject.parseObject(responseStr).getJSONObject("data").getString("timezone");
-    }
-
-    @NotNull
-    private static Map<String, String> buildSignInHeader(AccountContext accountContext, String userAgent) {
-        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
-        headers.put("userAgent", userAgent);
-        headers.put("server", "cloudflare");
-        headers.put("cf-cache-status", "DYNAMIC");
-        headers.put("cf-ray", "925e96ab3e43e2e3-HKG");
-        headers.put("content-type", "application/json; charset=utf-8");
-        return headers;
-    }
-
-    @NotNull
-    private static Map<String, String> buildTokenHeader(AccountContext accountContext, String userAgent) {
-        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
-        headers.put("userAgent", userAgent);
-        headers.put("server", "cloudflare");
-        headers.put("origin", "https://node.optimai.network");
-        headers.put("referer", "https://node.optimai.network/");
-        headers.put("content-type", "application/json;");
-        return headers;
-    }
-
-    // 生成随机的 code_verifier（32 字节，转换为十六进制字符串）
-    public static String generateCodeVerifier() {
-        SecureRandom secureRandom = new SecureRandom();
-        byte[] codeVerifier = new byte[32]; // 32 字节随机数据（与 JS 代码一致）
-        secureRandom.nextBytes(codeVerifier);
-
-        // 转换为十六进制字符串
-        StringBuilder hexString = new StringBuilder();
-        for (byte b : codeVerifier) {
-            hexString.append(String.format("%02x", b));
-        }
-        return hexString.toString();
-    }
-
-    // 计算 code_challenge（SHA-256 + Base64 URL 编码）
-    public static String generateCodeChallenge(String codeVerifier) throws Exception {
-        MessageDigest digest = MessageDigest.getInstance("SHA-256");
-        byte[] hashed = digest.digest(codeVerifier.getBytes(StandardCharsets.UTF_8));
-
-        // Base64 URL 编码（去掉填充 =）
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(hashed)
-            .replace("+", "-")
-            .replace("/", "_");
-    }
-
-    public static String generateXClientAuthentication(String browser, String timezone) throws NoSuchAlgorithmException, InvalidKeyException {
-        JSONObject body = new JSONObject();
-        body.put("client_app_id", "TLG_MINI_APP_V1");
-        body.put("timestamp", new Date());
-        JSONObject deviceInfo = generateDeviceInfo(browser, timezone);
-        body.put("device_info", deviceInfo);
-
-        String bodyStr = JSONObject.toJSONString(body);
-
-        // 创建HMAC-SHA256签名
-        Mac mac = Mac.getInstance("HmacSHA256");
-        SecretKeySpec secretKeySpec = new SecretKeySpec(CLIENT_SECRET.getBytes(), "HmacSHA256");
-        mac.init(secretKeySpec);
-        byte[] signatureBytes = mac.doFinal(bodyStr.getBytes());
-        // 计算签名
-        String signature = bytesToHex(signatureBytes);
-        body.put("signature", signature);
-        // 对tokenPayload进行Base64编码
-        String base64Token = Base64.getEncoder().encodeToString(JSONObject.toJSONString(body).getBytes());
-        // 将Base64字符串进行替换
-        base64Token = base64Token.replace("+", "-")
-            .replace("/", "_")
-            .replaceAll("=+$", "");
-        return base64Token;
-    }
-
-    private static @NotNull JSONObject generateDeviceInfo(String browser, String timezone) {
-        JSONObject deviceInfo = new JSONObject();
-        deviceInfo.put("cpu_cores", 1);
-        deviceInfo.put("memory_gb", 0);
-        deviceInfo.put("screen_width_px", 375);
-        deviceInfo.put("screen_height_px", 600);
-        deviceInfo.put("color_depth", 30);
-        deviceInfo.put("scale_factor", 1);
-        deviceInfo.put("browser_name", browser);
-        deviceInfo.put("device_type", "extension");
-        deviceInfo.put("language", "zh-CN");
-        deviceInfo.put("timezone", timezone);
-        return deviceInfo;
-    }
-
-    // 将字节数组转换为Hex字符串
-    private static String bytesToHex(byte[] bytes) {
-        StringBuilder hexString = new StringBuilder();
-        for (byte b : bytes) {
-            hexString.append(String.format("%02x", b));
-        }
-        return hexString.toString();
-    }
-
-}
-package cn.com.vortexa.script_node.bot.selenium;
-
-import cn.com.vortexa.browser_control.OptSeleniumInstance;
-import cn.com.vortexa.browser_control.dto.SeleniumParams;
-import cn.com.vortexa.common.entity.AccountContext;
-
-import java.io.IOException;
-
-public class AccountFingerBrowserSelenium extends OptSeleniumInstance {
-
-    private final AccountContext accountContext;
-
-    public AccountFingerBrowserSelenium(AccountContext accountContext, SeleniumParams params) throws IOException {
-        super(accountContext.getSimpleInfo(), params);
-        this.accountContext = accountContext;
-    }
-
-
-}package cn.com.vortexa.script_node.bot.selenium;
-
-import cn.com.vortexa.common.entity.AccountContext;
-
-public class AccountRuntimeSeleniumParams {
-        private AccountContext accountContext;
-        
-        private AccountFingerBrowserSelenium browserSelenium;
-        
-        private List<>
-    }
-
-package cn.com.vortexa.browser_control.constants;
-
-/**
- * @author h30069248
- * @since 2025/4/9 17:21
- */
-public enum BrowserDriverType {
-    /**
-     * 比特浏览器
-     */
-    BIT_BROWSER,
-}
-package cn.com.vortexa.script_node.bot.selenium;
-
-import cn.com.vortexa.browser_control.constants.BrowserDriverType;
-import cn.com.vortexa.browser_control.driver.BitBrowserDriver;
-import cn.com.vortexa.browser_control.driver.FingerprintBrowserDriver;
-import cn.com.vortexa.browser_control.dto.SeleniumParams;
-import cn.com.vortexa.common.constants.BotJobType;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.common.entity.AccountContext;
-import cn.com.vortexa.script_node.anno.BotMethod;
-import cn.com.vortexa.script_node.bot.AutoLaunchBot;
-import cn.com.vortexa.script_node.service.BotApi;
-import cn.hutool.core.lang.Pair;
-
-import java.io.IOException;
-import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-
-/**
- * @author h30069248
- * @since 2025/4/9 14:35
- */
-public abstract class FingerBrowserBot extends AutoLaunchBot<FingerBrowserBot> {
-
-    public static final int BROWSER_BATCH_SIZE = 8; //  浏览器批大小
-    public static final String DEFAULT_WEB_SITE_URL = "default_web_site_url";   // 默认打开地址Key
-    public static final String FINGER_BROWSER_API_URL_KEY = "finger_browser_api_url"; // 指纹浏览器api地址Key
-    public static final String CHROME_DRIVER_URL_KEY = "chrome_driver_url"; // chromedriver连接地址Key
-    public static final String FINGER_BROWSER_SEQ_KEY = "finger_browser_seq";   //  指纹浏览器序号Key
-
-    private static final ConcurrentHashMap<AccountContext, AccountFingerBrowserSelenium> accountFBSeleniumMap = new ConcurrentHashMap<>();
-    private FingerprintBrowserDriver browserDriver;
-    private String chromeDriverUrl;
-    private String fingerBrowserApiUrl;
-
-    public FingerBrowserBot(FingerprintBrowserDriver browserDriver) {
-        this.browserDriver = browserDriver;
-    }
-
-    @Override
-    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
-        chromeDriverUrl = (String) botConfig.getCustomConfig().get(CHROME_DRIVER_URL_KEY);
-        fingerBrowserApiUrl = (String) botConfig.getCustomConfig().get(FINGER_BROWSER_API_URL_KEY);
-        browserDriver = buildBrowserDriver();
-    }
-
-    @Override
-    protected FingerBrowserBot getInstance() {
-        return this;
-    }
-
-    @BotMethod(jobType = BotJobType.ONCE_TASK, concurrentCount = BROWSER_BATCH_SIZE)
-    public void accountBrowserTask(AccountContext accountContext) {
-        try {
-            accountFBSeleniumMap.putIfAbsent(accountContext, new AccountFingerBrowserSelenium(
-                accountContext,
-                buildSeleniumParams((Integer) accountContext.getParams().get(FINGER_BROWSER_SEQ_KEY)))
-            );
-        } catch (IOException e) {
-            logger.error(accountContext.getSimpleInfo() + " - start selenium task error", e);
-        }
-    }
-
-    /**
-     * 构建selenium参数
-     *
-     * @return SeleniumParams
-     */
-    private SeleniumParams buildSeleniumParams(Integer seq) {
-        String debuggerAddress = browserDriver.startWebDriverBySeq(seq);
-
-        return SeleniumParams
-            .builder()
-            .driverPath(chromeDriverUrl)
-            .experimentalOptions(List.of(new Pair<>("debuggerAddress", debuggerAddress)))
-            .targetWebSite((String) getAutoBotConfig().getCustomConfig().get(DEFAULT_WEB_SITE_URL))
-            .build();
-    }
-
-    /**
-     * 构建指纹浏览器driver
-     *
-     * @return  FingerprintBrowserDriver
-     */
-    private FingerprintBrowserDriver buildBrowserDriver() {
-        return switch (browserDriverType()) {
-            case BIT_BROWSER -> new BitBrowserDriver(fingerBrowserApiUrl);
-        };
-    }
-
-    protected abstract BrowserDriverType browserDriverType();
 }
