@@ -1,161 +1,596 @@
-package cn.com.vortexa.browser_control.dto;
+package cn.com.vortexa.script_node.bot.selenium;
 
-import cn.com.vortexa.common.constants.ProxyProtocol;
-import cn.com.vortexa.common.entity.ProxyInfo;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import cn.com.vortexa.browser_control.OptSeleniumInstance;
+import cn.com.vortexa.browser_control.dto.SeleniumParams;
+import cn.com.vortexa.browser_control.execute.ExecuteGroup;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.script_node.dto.selenium.ACBotTypedSeleniumExecuteInfo;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.chrome.ChromeOptions;
+import org.openqa.selenium.remote.RemoteWebDriver;
 
-@Data
-@Builder
-@AllArgsConstructor
-@NoArgsConstructor
-public class SeleniumProxy {
+import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.util.*;
+import java.util.concurrent.locks.ReentrantLock;
 
-    private ProxyProtocol proxyProtocol;
+@Slf4j
+public class AccountFingerBrowserSelenium extends OptSeleniumInstance {
 
-    private String host;
+    private final ReentrantLock lock = new ReentrantLock();
 
-    private int port;
+    @Override
+    protected void addDefaultChromeOptions(ChromeOptions chromeOptions) {
 
-    private String username;
+    }
 
-    private String password;
+    /**
+     * 添加过的bot执行链的key set
+     */
+    private final Set<String> addedBotExecutionSet = new HashSet<>();
+    /**
+     * 执行链信息
+     */
+    private final List<ACBotTypedSeleniumExecuteInfo> executeInfoList = new ArrayList<>();
 
-    public SeleniumProxy(ProxyInfo proxy) {
-        this.proxyProtocol = proxy.getProxyProtocol();
-        this.host = proxy.getHost();
-        this.port = proxy.getPort();
-        this.username = proxy.getUsername();
-        this.password = proxy.getPassword();
+    @Getter
+    private volatile boolean running = false;
+
+    public AccountFingerBrowserSelenium(AccountContext accountContext, SeleniumParams params) throws IOException {
+        super(accountContext.getSimpleInfo(), params);
+    }
+
+    @Override
+    protected WebDriver createWebDriver(ChromeOptions chromeOptions) {
+        if (getWebDriver() != null) return getWebDriver();
+
+        try {
+            URL remoteWebDriverUrl = new URL(getParams().getDriverPath());
+            chromeOptions.setCapability("timeouts", new HashMap<String, Integer>() {{
+                put("script", 30000);  // 设置脚本执行超时
+                put("pageLoad", 30000);  // 设置页面加载超时
+                put("implicit", 30000);  // 设置隐式等待超时
+            }});
+            return new RemoteWebDriver(remoteWebDriverUrl, chromeOptions);
+        } catch (MalformedURLException e) {
+            log.error("[{}] create remote web driver error", getInstanceId(), e);
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 开始账户指纹浏览器selenium控制
+     */
+    public void startACFBSelenium() {
+        lock.lock();
+        try {
+            running = true;
+            log.info("[{}] start all added bot selenium execute...", getInstanceId());
+
+            for (ACBotTypedSeleniumExecuteInfo executeInfo : executeInfoList) {
+                try {
+                    log.info("[{}]-[{}] start selenium execute...", getInstanceId(), executeInfo.getBotKey());
+                    List<ExecuteGroup> seleniumExecuteChain = super.getSeleniumExecuteChain();
+                    seleniumExecuteChain.clear();
+                    seleniumExecuteChain.addAll(executeInfo.getSeleniumExecuteChain());
+
+                    syncStart();
+                    log.info("[{}]-[{}] selenium execute finish", getInstanceId(), executeInfo.getBotKey());
+                } catch (Exception e) {
+                    log.error("[{}]-[{}] selenium execute error", getInstanceId(), executeInfo.getBotKey(), e);
+                    randomWait(3);
+                }
+            }
+
+            log.info("[{}] all selenium execute finish", getInstanceId());
+        } finally {
+            log.info("[{}] closing webDriver", getInstanceId());
+            close();
+            log.info("[{}] close webDriver finish", getInstanceId());
+
+            running = false;
+            lock.unlock();
+        }
+    }
+
+    /**
+     * 添加执行链
+     *
+     * @param executeInfo executeInfo
+     */
+    public void addExecuteInfo(ACBotTypedSeleniumExecuteInfo executeInfo) {
+        log.info("[{}]-[{}] adding execute info...", getInstanceId(), executeInfo.getBotKey());
+        lock.lock();
+        try {
+            executeInfoList.add(executeInfo);
+            addedBotExecutionSet.add(executeInfo.getBotKey());
+            log.info("[{}]-[{}] add execute info finish", getInstanceId(), executeInfo.getBotKey());
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    protected void doClose() {
+        super.doClose();
+        executeInfoList.clear();
+        addedBotExecutionSet.clear();
     }
 }
-package cn.com.vortexa.browser_control.util;
+package cn.com.vortexa.script_node.bot.selenium;
 
-import cn.com.vortexa.browser_control.dto.SeleniumProxy;
-import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.browser_control.SeleniumInstance;
+import cn.com.vortexa.browser_control.constants.BrowserDriverType;
+import cn.com.vortexa.browser_control.driver.BitBrowserDriver;
+import cn.com.vortexa.browser_control.driver.FingerprintBrowserDriver;
+import cn.com.vortexa.browser_control.dto.SeleniumParams;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.script_node.anno.BotMethod;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.script_node.dto.selenium.ACBotTypedSeleniumExecuteInfo;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.hutool.core.lang.Pair;
+import lombok.extern.slf4j.Slf4j;
 
-import java.io.*;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
-public class SeleniumProxyAuth {
+/**
+ * @author h30069248
+ * @since 2025/4/9 14:35
+ */
+@Slf4j
+public abstract class FingerBrowserBot extends AutoLaunchBot<FingerBrowserBot> {
 
-    private static final String BASE_DIR = FileUtil.RESOURCE_ROOT_DIR + File.separator + "extensions";
+    public static final int BROWSER_BATCH_SIZE = 6; //  浏览器批大小
+    public static final String DEFAULT_WEB_SITE_URL = "http://www.google.com";   // 默认打开地址Key
+    public static final String DEFAULT_WEB_SITE_URL_KEY = "default_web_site_url";   // 默认打开地址Key
+    public static final String FINGER_BROWSER_API_URL_KEY = "finger_browser_api_url"; // 指纹浏览器api地址Key
+    public static final String CHROME_DRIVER_URL_KEY = "chrome_driver_url"; // chromedriver连接地址Key
+    public static final String FINGER_BROWSER_SEQ_KEY = "finger_browser_seq";   //  指纹浏览器序号Key
 
-    public static String createProxyAuthExtension(SeleniumProxy seleniumProxy) throws IOException {
-        String pluginPath = BASE_DIR + File.separator + "proxy_auth_plugin_%s_%s.zip".formatted(
-            seleniumProxy.getHost(), seleniumProxy.getPort()
-        );
+    private static final Set<Integer> currentWindowSeq = new HashSet<>();
+    private static final ConcurrentHashMap<AccountContext, AccountFingerBrowserSelenium> accountFBSeleniumMap = new ConcurrentHashMap<>();
+    private static final List<ACBotTypedSeleniumExecuteInfo> acExecuteInfos = new ArrayList<>();
+    private static volatile FingerprintBrowserDriver browserDriver;
+    private static String chromeDriverUrl;
+    private static String fingerBrowserApiUrl;
 
-        if (new File(pluginPath).exists()) {
-            return pluginPath;
+    private String openUrl = DEFAULT_WEB_SITE_URL;
+
+    @Override
+    protected void botStopped() {
+        super.botStopped();
+        Iterator<Map.Entry<AccountContext, AccountFingerBrowserSelenium>> iterator = accountFBSeleniumMap.entrySet()
+            .iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<AccountContext, AccountFingerBrowserSelenium> entry = iterator.next();
+            entry.getValue().close();
+            iterator.remove();
+        }
+        acExecuteInfos.clear();
+    }
+
+    @Override
+    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
+        if (chromeDriverUrl == null) {
+            chromeDriverUrl = (String) botConfig.getCustomConfig().get(CHROME_DRIVER_URL_KEY);
+        }
+        if (fingerBrowserApiUrl == null) {
+            fingerBrowserApiUrl = (String) botConfig.getCustomConfig().get(FINGER_BROWSER_API_URL_KEY);
         }
 
-        String manifestJson = """
-            {
-                "version": "1.0.0",
-                "manifest_version": 2,
-                "name": "Chrome Proxy",
-                "permissions": [
-                    "proxy",
-                    "tabs",
-                    "unlimitedStorage",
-                    "storage",
-                    "<all_urls>",
-                    "webRequest",
-                    "webRequestBlocking"
-                ],
-                "background": {
-                    "scripts": ["background.js"]
-                },
-                "minimum_chrome_version":"22.0.0"
-            }
-            """;
+        openUrl = getDefaultWebSiteUrl(botConfig);
+        initBrowserDriver();
 
-        String backgroundJs =
-            """
-                var config = {
-                        mode: "fixed_servers",
-                        rules: {
-                          singleProxy: {
-                            scheme: "%s",
-                            host: "%s",
-                            port: parseInt(%s)
-                          },
-                          bypassList: ["foobar.com"]
+        synchronized (acExecuteInfos) {
+            ACBotTypedSeleniumExecuteInfo executeInfo = buildExecuteGroupChain();
+            for (ACBotTypedSeleniumExecuteInfo acExecuteInfo : acExecuteInfos) {
+                String botKey = botConfig.getBotKey();
+                if (acExecuteInfo.getBotKey().equals(botKey)) {
+                    logger.warn(botKey + " execute info almost added...");
+                    return;
+                }
+            }
+            acExecuteInfos.add(executeInfo);
+        }
+    }
+
+    @Override
+    protected FingerBrowserBot getInstance() {
+        return this;
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK, concurrentCount = BROWSER_BATCH_SIZE)
+    public void accountBrowserTask(AccountContext accountContext) {
+        int seq = Integer.parseInt((String) accountContext.getParams().get(FINGER_BROWSER_SEQ_KEY));
+
+        try {
+            currentWindowSeq.add(seq);
+            AccountFingerBrowserSelenium browserSelenium = accountFBSeleniumMap.compute(accountContext, (k, v) -> {
+                if (v == null) {
+                    try {
+                        v = new AccountFingerBrowserSelenium(
+                                accountContext,
+                                buildSeleniumParams(seq)
+                        );
+
+                        for (ACBotTypedSeleniumExecuteInfo acExecuteInfo : acExecuteInfos) {
+                            v.addExecuteInfo(acExecuteInfo);
                         }
-                      };
-                chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
-                function callbackFn(details) {
-                    return {
-                        authCredentials: {
-                            username: "%s",
-                            password: "%s"
-                        }
+                    } catch (IOException e) {
+                        throw new RuntimeException("create account selenium error", e);
+                    }
+                }
+                return v;
+            });
+
+            if (!browserSelenium.isRunning()) {
+                browserDriver.flexAbleWindowBounds(new ArrayList<>(currentWindowSeq));
+                browserSelenium.startACFBSelenium();
+            } else {
+                logger.warn(accountContext.getSimpleInfo() + " selenium is running...cancel new start");
+            }
+        } catch (Exception e) {
+            logger.error(accountContext.getSimpleInfo() + " - start selenium task error", e);
+        } finally {
+            currentWindowSeq.remove(seq);
+        }
+    }
+
+    /**
+     * 构建selenium参数
+     *
+     * @return SeleniumParams
+     */
+    private SeleniumParams buildSeleniumParams(Integer seq) {
+        String debuggerAddress = browserDriver.startWebDriverBySeq(seq);
+
+        return SeleniumParams
+                .builder()
+                .driverPath(chromeDriverUrl)
+                .experimentalOptions(List.of(new Pair<>("debuggerAddress", debuggerAddress)))
+                .targetWebSite(openUrl)
+                .build();
+    }
+
+    /**
+     * 构建指纹浏览器driver
+     */
+    private void initBrowserDriver() {
+        if (browserDriver == null) {
+            synchronized (FingerBrowserBot.class) {
+                if (browserDriver == null) {
+                    browserDriver = switch (browserDriverType()) {
+                        case BIT_BROWSER -> new BitBrowserDriver(fingerBrowserApiUrl);
                     };
                 }
-                chrome.webRequest.onAuthRequired.addListener(
-                            callbackFn,
-                            {urls: ["<all_urls>"]},
-                            ['blocking']
-                );
-                """.formatted(
-                    seleniumProxy.getProxyProtocol().name().toLowerCase(),
-                    seleniumProxy.getHost(),
-                    seleniumProxy.getPort(),
-                    seleniumProxy.getUsername(),
-                    seleniumProxy.getPassword()
-                );
-
-        Path dirPath = Paths.get(BASE_DIR + File.separator + "proxy_auth_extension_%s_%s".formatted(
-            seleniumProxy.getHost(),
-            seleniumProxy.getPort()
-        ));
-
-        if (!Files.exists(dirPath)) {
-            Files.createDirectories(dirPath);
-        }
-
-        File dir = dirPath.toFile();
-        writeToFile(new File(dir, "manifest.json"), manifestJson);
-        writeToFile(new File(dir, "background.js"), backgroundJs);
-
-        // 创建 ZIP 扩展
-        File zipFile = new File(pluginPath);
-        try (FileOutputStream fos = new FileOutputStream(zipFile);
-            BufferedOutputStream bos = new BufferedOutputStream(fos);
-            java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(bos)) {
-
-            addToZipFile(new File(dir, "manifest.json"), zos);
-            addToZipFile(new File(dir, "background.js"), zos);
-        }
-
-        return pluginPath;
-    }
-
-    private static void writeToFile(File file, String content) throws IOException {
-        try (FileWriter fw = new FileWriter(file);
-            BufferedWriter bw = new BufferedWriter(fw)) {
-            bw.write(content);
-        }
-    }
-
-    private static void addToZipFile(File file, java.util.zip.ZipOutputStream zos) throws IOException {
-        try (FileInputStream fis = new FileInputStream(file);
-            BufferedInputStream bis = new BufferedInputStream(fis)) {
-
-            java.util.zip.ZipEntry zipEntry = new java.util.zip.ZipEntry(file.getName());
-            zos.putNextEntry(zipEntry);
-
-            byte[] bytes = new byte[1024];
-            int length;
-            while ((length = bis.read(bytes)) >= 0) {
-                zos.write(bytes, 0, length);
             }
         }
+    }
+
+    /**
+     * 指纹浏览器类型
+     *
+     * @return BrowserDriverType
+     */
+    protected abstract BrowserDriverType browserDriverType();
+
+    /**
+     * 构建执行链
+     *
+     * @return List<ExecuteGroup>
+     */
+    protected abstract ACBotTypedSeleniumExecuteInfo buildExecuteGroupChain();
+
+    /**
+     * 获取默认打开的url
+     *
+     * @param botConfig botConfig
+     * @return String
+     */
+    private String getDefaultWebSiteUrl(AutoBotConfig botConfig) {
+        return (String) botConfig.getCustomConfig().getOrDefault(DEFAULT_WEB_SITE_URL_KEY, DEFAULT_WEB_SITE_URL);
+    }
+}
+package cn.com.vortexa.script_node.util;
+
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.classloader.DynamicJavaLoader;
+import cn.com.vortexa.script_node.anno.BotApplication;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.script_node.config.ScriptNodeConfiguration;
+import cn.com.vortexa.script_node.constants.BotStatus;
+import cn.com.vortexa.script_node.scriptagent.BotScriptAgent;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.com.vortexa.common.exception.BotStartException;
+import cn.com.vortexa.script_node.view.ScriptNodeCMDLineMenu;
+import cn.com.vortexa.script_node.view.commandMenu.DefaultMenuType;
+import cn.hutool.core.util.StrUtil;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
+
+@Slf4j
+public class ScriptBotLauncher {
+    private static final ScriptNodeCMDLineMenu scriptNodeCMDLineMenu = new ScriptNodeCMDLineMenu(List.of(
+            DefaultMenuType.START_BOT_TASK, DefaultMenuType.LAUNCH_SCRIPT
+    ));
+    private static final ConcurrentHashMap<String, ScriptBotMetaInfo> botMetaInfoMap = new ConcurrentHashMap<>();
+    public volatile static ScriptBotLauncher INSTANCE;
+
+    private final ScriptNodeConfiguration scriptNodeConfiguration;
+    private final BotApi botApi;
+    private final BotScriptAgent botScriptAgent;
+
+    public static ScriptBotLauncher buildScriptBotLauncher(ScriptNodeConfiguration scriptNodeConfiguration, BotApi botApi, BotScriptAgent botScriptAgent) {
+        if (INSTANCE == null) {
+            synchronized (ScriptBotLauncher.class) {
+                if (INSTANCE == null) {
+                    INSTANCE = new ScriptBotLauncher(scriptNodeConfiguration, botApi, botScriptAgent);
+                }
+            }
+        }
+        return INSTANCE;
+    }
+
+    protected ScriptBotLauncher(ScriptNodeConfiguration scriptNodeConfiguration, BotApi botApi, BotScriptAgent botScriptAgent) {
+        this.scriptNodeConfiguration = scriptNodeConfiguration;
+        this.botApi = botApi;
+        this.botScriptAgent = botScriptAgent;
+    }
+
+    /**
+     * 加载并启动bot
+     *
+     * @param botKey botKey
+     */
+    public void loadAndLaunchBot(String botKey) {
+        AutoBotConfig botConfig = scriptNodeConfiguration.getBotKeyConfigMap().get(botKey);
+        if (botConfig == null) {
+            throw new IllegalArgumentException("no bot in script node" + botKey);
+        }
+        loadAndLaunchBot(botConfig);
+    }
+
+    /**
+     * 加载并启动bot
+     *
+     * @param botConfig botConfig
+     */
+    public void loadAndLaunchBot(AutoBotConfig botConfig) {
+        String botKey = botConfig.getBotKey();
+        ScriptBotMetaInfo rowBotMetaInfo = botMetaInfoMap.get(botKey);
+        if (rowBotMetaInfo != null) {
+            if (rowBotMetaInfo.getBot().getStatus() == BotStatus.RUNNING) {
+                throw new IllegalArgumentException(botKey + " in running..please stop it first");
+            }
+        }
+
+        log.info("[{}] start launch...", botKey);
+        String className = botConfig.getClassName();
+        if (StrUtil.isBlank(className)) {
+            throw new IllegalArgumentException(botKey + " config class name is null");
+        }
+        try {
+            // 加载 class
+            // 1 编译为class
+            // 2 加载class
+            Class<?> aClass = loadScriptNodeResourceClass(
+                    botConfig.getResourceDir(),
+                    className,
+                    botConfig.getExtraClassNameList(),
+                    botKey
+            );
+
+            log.info("[{}] class load success ", botKey);
+            if (isClassInInheritanceChain(aClass, AutoLaunchBot.class)) {
+                Class<AutoLaunchBot<?>> botClass = (Class<AutoLaunchBot<?>>) aClass;
+                // Step 3 启动bot
+                AutoLaunchBot<?> autoLaunchBot = launch(botClass, botConfig, bot -> {
+                    bot.setBotStatusChangeHandler((oldStatus, newStatus) -> {
+                        // 3.1 添加监听， bot状态改变时上报
+                        if (newStatus == BotStatus.RUNNING) {
+                            botScriptAgent.addRunningBot(bot.getBotInfo().getName(), botKey, bot);
+                        }
+
+                        if (newStatus == BotStatus.STOPPED || newStatus == BotStatus.SHUTDOWN) {
+                            botScriptAgent.removeRunningBot(bot.getBotInfo().getName(), botKey);
+                        }
+                    });
+                    return true;
+                });
+
+                // Step 4 添加进菜单
+                setLoadedBotInMenu(botKey, autoLaunchBot);
+            } else {
+                log.info("[{}] class[{}} illegal, must extends AutoLaunchBot.class", botKey, className);
+            }
+        } catch (BotStartException | BotInitException e) {
+            log.error("script botKey[{}] auto launch error", botKey, e);
+        } catch (Exception e) {
+            log.error("script botKey[{}] auto launch error", botKey, e);
+            throw new RuntimeException("load class error", e);
+        }
+    }
+
+
+    /**
+     * 启动bot
+     *
+     * @param botClass botClass
+     * @return ApplicationContext
+     * @throws BotStartException BotStartException
+     * @throws BotInitException  BotInitException
+     */
+    public AutoLaunchBot<?> launch(
+            Class<? extends AutoLaunchBot<?>> botClass,
+            AutoBotConfig botConfig,
+            Function<AutoLaunchBot<?>, Boolean> initHandler
+    ) throws BotStartException, BotInitException {
+        String botKey = botConfig.getBotKey();
+        if (StrUtil.isBlank(botKey)) {
+            throw new BotStartException("bot key is empty");
+        }
+
+        System.setProperty("spring.application.name", botKey);
+
+        // 解析注解上的bot name
+        BotApplication annotation = botClass.getAnnotation(BotApplication.class);
+        String botName = null;
+        if (annotation == null || StrUtil.isBlank((botName = annotation.name()))) {
+            throw new BotStartException("bot must have @BotApplication annotation and must have name");
+        }
+
+        // Step 1 创建bot实例
+        Constructor<? extends AutoLaunchBot<?>> constructor = null;
+        AutoLaunchBot<?> bot = null;
+        try {
+            constructor = botClass.getConstructor();
+            bot = constructor.newInstance();
+        } catch (NoSuchMethodException | InstantiationException | IllegalAccessException |
+                 InvocationTargetException e) {
+            throw new BotInitException(e);
+        }
+
+        botConfig.setBotName(botName);
+        bot.setBotName(botName);
+        bot.setBotKey(botKey);
+        botMetaInfoMap.put(botKey, new ScriptBotMetaInfo(
+                bot,
+                botConfig,
+                initHandler
+        ));
+
+        // Step 3 启动bot
+        launchResolvedScriptBot(botKey);
+
+        return bot;
+    }
+
+    /**
+     * 启动命令行菜单
+     */
+    public static void startCommandLineMenu() {
+        scriptNodeCMDLineMenu.start();
+    }
+
+    /**
+     * 添加Bot到菜单
+     *
+     * @param botKey botKey
+     */
+    public void addBotInMenu(String botKey) {
+        scriptNodeCMDLineMenu.getUsableBotKeySet().add(botKey);
+    }
+
+    /**
+     * 添加加载完成的bot到菜单
+     *
+     * @param botKey botKey
+     * @param bot    bot
+     */
+    public void setLoadedBotInMenu(String botKey, AutoLaunchBot<?> bot) {
+        scriptNodeCMDLineMenu.getLoadedBotMap().put(botKey, bot);
+    }
+
+    private void launchResolvedScriptBot(String botKey) throws BotStartException, BotInitException {
+        ScriptBotMetaInfo scriptBotMetaInfo = botMetaInfoMap.get(botKey);
+        if (scriptBotMetaInfo == null) {
+            throw new BotStartException(botKey + " didn't resolved by ScriptBotLauncher, place invoke ScriptBotLauncher.launch(...) first");
+        }
+
+        log.info("bot[{}] start launch", botKey);
+        scriptBotMetaInfo.getBot().launch(
+                scriptNodeConfiguration,
+                scriptBotMetaInfo.botConfig,
+                botApi,
+                scriptBotMetaInfo.initHandler
+        );
+    }
+
+    /**
+     * 加载script bot的class文件
+     *
+     * @param sourceDir sourceDir
+     * @param className className
+     * @return 已加载的BotClass文件
+     * @throws Exception Exception
+     */
+    private static Class<?> loadScriptNodeResourceClass(
+            String sourceDir, String className, List<String> extraClassName, String botKey
+    ) throws Exception {
+        String classOutputDir = FileUtil.getCompileClassResource(botKey);
+        if (!DynamicJavaLoader.compileJavaDir(sourceDir, classOutputDir)) {
+            throw new RuntimeException(sourceDir + " compile to class error");
+        }
+        log.info("{} compile finish, start output dir {}", sourceDir, classOutputDir);
+        return DynamicJavaLoader.loadClassFromDir(classOutputDir, className, extraClassName);
+    }
+
+    public static boolean isClassInInheritanceChain(Class<?> subclass, Class<?> superclass) {
+        Class<?> currentClass = subclass;
+        while (currentClass != null) {
+            if (currentClass.equals(superclass)) {
+                return true;
+            }
+            currentClass = currentClass.getSuperclass();
+        }
+        return false;
+    }
+
+    /**
+     * 获取bot状态
+     *
+     * @param botKey botKey
+     * @return BotStatus
+     */
+    public BotStatus getBotStatus(String botKey) {
+        ScriptBotMetaInfo botMetaInfo = botMetaInfoMap.get(botKey);
+        if (botMetaInfo == null) {
+            return BotStatus.NOT_LOADED;
+        }
+        return botMetaInfo.getBot().getStatus();
+    }
+
+    /**
+     * 根据botKey 获取bot
+     *
+     * @param botKey botKey
+     * @return AutoLaunchBot
+     */
+    public AutoLaunchBot<?> getBotByBotKey(String botKey) {
+        ScriptBotMetaInfo botMetaInfo = botMetaInfoMap.get(botKey);
+        return botMetaInfo == null ? null : botMetaInfo.getBot();
+    }
+
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    public static class ScriptBotMetaInfo {
+        private AutoLaunchBot<?> bot;
+        private AutoBotConfig botConfig;
+        Function<AutoLaunchBot<?>, Boolean> initHandler;
     }
 }
 package cn.com.vortexa.browser_control;
@@ -461,1193 +896,18 @@ public abstract class SeleniumInstance implements SeleniumOperate {
     public void close() {
         if (StrUtil.isNotBlank(targetHandle)) {
             try {
+                doClose();
                 webDriver.switchTo().window(targetHandle);
                 webDriver.close();
+                seleniumExecuteChain.clear();
+                webDriver = null;
             } catch (Exception e) {
                 log.error("{} close exception", instanceId, e);
             }
         }
     }
-}
-package cn.com.vortexa.script_bot.daily.haha_wallet;
 
-import cn.com.vortexa.browser_control.*;
-import cn.com.vortexa.browser_control.dto.SeleniumParams;
-import cn.com.vortexa.browser_control.dto.SeleniumProxy;
-import cn.com.vortexa.browser_control.execute.ExecuteGroup;
-import cn.com.vortexa.browser_control.execute.ExecuteItem;
-import cn.com.vortexa.browser_control.util.SeleniumProxyAuth;
-import cn.com.vortexa.common.entity.AccountContext;
-import cn.com.vortexa.common.entity.BrowserEnv;
-import cn.com.vortexa.common.entity.ProxyInfo;
-import cn.hutool.core.date.DateTime;
-import cn.hutool.core.util.StrUtil;
-import org.jetbrains.annotations.NotNull;
-import org.openqa.selenium.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-
-import java.awt.*;
-import java.awt.event.KeyEvent;
-import java.io.IOException;
-import java.util.*;
-import java.util.List;
-
-import static cn.com.vortexa.script_bot.daily.haha_wallet.HaHaWalletBot.*;
-
-public class HahaWalletSelenium extends OptSeleniumInstance {
-
-    public static String HAHA_WALLET_EXTENSION_CRX_PATH = "";
-    public static String CHROME_DRIVER_PATH = "";
-
-    private static final Logger log = LoggerFactory.getLogger(HahaWalletSelenium.class);
-
-    private final AccountContext accountContext;
-
-    private int todayCount;
-
-    public HahaWalletSelenium(HaHaWalletBot bot, AccountContext accountContext) throws IOException {
-        super(
-                accountContext.getParam(HaHaWalletBot.USERNAME_KEY),
-                new SeleniumProxy(
-                    accountContext.getProxy().getProxyProtocol(),
-                        accountContext.getProxy().getHost(),
-                        accountContext.getProxy().getPort(),
-                        accountContext.getProxy().getUsername(),
-                        accountContext.getProxy().getPassword()
-                ),
-                getParams(accountContext)
-        );
-
-        String email = accountContext.getParam(HaHaWalletBot.USERNAME_KEY);
-        String password = accountContext.getParam(HaHaWalletBot.PASSWORD_KEY);
-        String todayCountStr = accountContext.getParam(TODAY_COUNT_KEY);
-
-        String lastRunDay = accountContext.getParam(TODAY_KEY);
-        String today = DateTime.now().toString();
-
-        if (StrUtil.isBlank(todayCountStr) || StrUtil.isBlank(lastRunDay) || !today.equals(todayCountStr)) {
-            todayCount = getRandom().nextInt(10, 13);
-        } else {
-            todayCount = Integer.parseInt(todayCountStr);
-        }
-
-        accountContext.setParam(TODAY_KEY, today);
-        accountContext.setParam(TODAY_COUNT_KEY, todayCount);
-
-
-        bot.logger.info("[%s] remained [%s] today".formatted(accountContext.getAccountBaseInfoId(), todayCount));
-
-        String wallet = accountContext.getParam(WALLET_KEY);
-
-        if (todayCount == 0) {
-            throw new RuntimeException("today total finish");
-        }
-
-        if (StrUtil.isBlank(wallet) || StrUtil.isBlank(email) || StrUtil.isBlank(password)) {
-            bot.logger.warn("%s no email or password or wallet".formatted(accountContext.getSimpleInfo()));
-            throw new IllegalArgumentException("email or password or wallet is empty");
-        }
-
-        this.accountContext = accountContext;
-    }
-
-
-    @Override
-    public void init() {
-        super.addExecuteFun(ExecuteGroup.builder()
-                        .name("初始化")
-                        .enterCondition((webDriver, params) -> {
-                            return true;
-                        })
-                        .executeItems(List.of(
-                                ExecuteItem.builder().name("代理验证").executeLogic(this::proxyVerify).build()
-                        ))
-                        .build()
-                )
-                .addExecuteFun(ExecuteGroup.builder()
-                        .name("登录HaHa")
-                        .enterCondition((webDriver, params) -> {
-                            return !xPathExist("//*[@id=\"app-content\"]/div/div[2]/div[2]/div/button[2]");
-                        })
-                        .executeItems(List.of(
-                                ExecuteItem.builder().name("切换到目标页面").executeLogic(this::changeToTargetPage).build(),
-                                ExecuteItem.builder().name("登录账号").executeLogic(this::loginAccount).build(),
-                                ExecuteItem.builder().name("导入钱包").executeLogic(this::importWallet).build()
-                        ))
-                        .build()
-                )
-                .addExecuteFun(ExecuteGroup.builder()
-                        .name("解锁钱包")
-                        .enterCondition((webDriver, params) -> {
-                            return xPathExist("//*[@id=\"app-content\"]/div/div[2]/div[2]/div/button[2]");
-                        })
-                        .executeItems(List.of(
-                                ExecuteItem.builder().name("输入Pin Code").executeLogic(((webDriver, seleniumInstance) -> {
-                                    xPathFindElement("//*[@id=\"app-content\"]/div/div[2]/div[2]/div/div/input").sendKeys("123456789");
-
-                                    xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div/button[1]");
-                                })).build()
-                        ))
-                        .build()
-                )
-                .addExecuteFun(ExecuteGroup.builder()
-                        .name("每日任务")
-                        .enterCondition((webDriver, params) -> {
-                            return true;
-                        })
-                        .executeItems(List.of(
-                                ExecuteItem.builder().name("进入monad Swap页面").executeLogic(this::enterMonadSwapPage).build(),
-                                ExecuteItem.builder().name("交换Monad").executeLogic(this::monadSwap).build()
-//                                ExecuteItem.builder().name("trans sepolia Eth").executeLogic(this::sepoliaSwapPage).build()
-                        ))
-                        .build()
-                );
+    protected void doClose() {
 
     }
-
-
-    private void sepoliaSwapPage(WebDriver webDriver, SeleniumInstance seleniumInstance) {
-
-        // 点击进入legacyPage
-        xPathClick("//p[text()='Legacy Wallet']");
-
-        // 点击网络选择按钮
-        xPathClick("//div[text()='Sepolia' or text()='Monad Testnet']");
-
-        // 点击选择测试网
-        xPathClick("//li[text()='Testnet']");
-
-        // 点击选择Sepolia
-        xPathClick("//p[text()='Sepolia (ETH)']");
-
-        randomWait();
-
-        int count = seleniumInstance.getRandom().nextInt(5, 10);
-
-        for (int i = 0; i < count; i++) {
-            try {
-                sepoliaSwap(webDriver, seleniumInstance);
-
-            } catch (Exception e) {
-                log.error("{} sepolia swap error", getInstanceId(), e);
-            }
-        }
-    }
-
-    private void sepoliaSwap(WebDriver webDriver, SeleniumInstance seleniumInstance) {
-
-        // 点击send页面
-        xPathClick("//p[text()='Send']");
-
-        randomWait();
-
-        // 选择代币
-        List<WebElement> selectionBtnList = xPathFindElements("//*[@id=\"app-content\"]/div[1]/div[2]/div[2]/div[2]/div[1]/div[1]/div[1]//button");
-        int select = seleniumInstance.getRandom().nextInt(selectionBtnList.size());
-        selectionBtnList.get(select).click();
-
-        // 选择自己的地址
-        xPathClick("//div[contains(text(), 'Account 1')]", 60);
-        randomWait();
-
-        WebElement countP = xPathFindElement("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[1]/div[2]/div[2]/div[3]/p");
-        if (countP.getText().isEmpty()) {
-            countP = xPathFindElement("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[1]/div[2]/div[2]/div[3]/p");
-        }
-        double total = Double.parseDouble(countP.getText());
-        double count = seleniumInstance.getRandom().nextDouble(0.01, 0.07) * total;
-
-        // 输入数量
-        WebElement countInput = xPathFindElement("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[1]/div[2]/div[5]/div/div[2]/input");
-        countInput.sendKeys("%.6f".formatted(count));
-
-        // 点击下一步
-        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[2]/div[2]/button", 120);
-
-        // 点击确认
-        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[2]/div[2]/button", 120);
-    }
-
-
-    private void monadSwap(WebDriver webDriver, SeleniumInstance seleniumInstance) {
-        WebElement swapCountInput = xPathFindElement("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[1]/div[2]/div/div[3]/input");
-
-        Random random = new Random();
-        int monCount = random.nextInt(10, 13);
-        int successTimes = 0;
-        int errorTimes = 0;
-        while (successTimes < monCount) {
-            try {
-                // 点击进入交换代币选择界面
-                xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[3]/div[1]/button");
-
-                // 随机选择代币
-                List<WebElement> token2List = xPathFindElements("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[3]/div[2]/div[3]/div//button");
-                token2List.removeFirst();
-
-                randomWait();
-                token2List.get(random.nextInt(token2List.size())).click();
-
-                double count = random.nextDouble(0.0001, 0.001);
-                swapCountInput.clear();
-                swapCountInput.sendKeys("%.4f".formatted(count));
-
-                randomWait();
-                // 点击确认
-                xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[6]/button");
-
-                randomWait();
-                xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[3]/div[2]/div/button", 120);
-                successTimes++;
-
-                todayCount--;
-                accountContext.setParam(TODAY_COUNT_KEY, todayCount);
-            } catch (Exception e) {
-                log.error("{} monad swap error", getInstanceId(), e);
-                if (errorTimes++ > 3) {
-                    break;
-                }
-            }
-        }
-
-        // 点击返回按钮
-        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[1]/button");
-    }
-
-    private void enterMonadSwapPage(WebDriver webDriver, SeleniumInstance seleniumInstance) {
-
-        // 点击进入legacyPage
-        xPathClick("//p[text()='Legacy Wallet']");
-
-        // 点击网络选择按钮
-        xPathClick("//div[text()='Sepolia' or text()='Monad Testnet']");
-
-        // 点击选择测试网
-        xPathClick("//li[text()='Testnet']");
-
-        // 点击选择Monad
-        xPathClick("//p[text()='Monad Testnet']");
-
-        randomWait();
-
-        // 点击swap页面
-        xPathClick("//p[text()='Swap']");
-
-        randomWait();
-    }
-
-    private void importWallet(WebDriver webDriver, SeleniumInstance seleniumInstance) {
-        // 点击导入按钮
-        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[5]/div[2]/button");
-
-        // 等待输入框出现， 输入钱包
-        List<WebElement> inputs = xPathFindElements("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[3]/div//input");
-        String[] split = accountContext.getParam(WALLET_KEY).split(" ");
-        for (int i = 0; i < inputs.size(); i++) {
-            inputs.get(i).sendKeys(split[i]);
-        }
-
-        // 点击导入按钮
-        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[4]/button");
-
-        // 点击导入成功的确认按钮
-        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/button");
-
-        // 点击跳过按钮
-//            xPathClick("//*[@id=\"app-content\"]/div[2]/div[2]/div[3]/button[2]");
-
-
-        randomWait();
-    }
-
-
-    private void loginAccount(WebDriver webDriver, SeleniumInstance seleniumInstance) {
-        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[3]/button[2]");
-
-        // 找到 email 输入框并输入邮箱
-        webDriver.findElement(By.cssSelector("input[type='email']")).sendKeys(accountContext.getParam(USERNAME_KEY));
-        // 找到 password 输入框并输入密码
-        webDriver.findElement(By.cssSelector("input[type='password']")).sendKeys(accountContext.getParam(PASSWORD_KEY));
-        // 点击登录按钮
-        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[3]/div[3]/button[1]");
-
-
-        // 输入解锁密码
-        xPathFindElement("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[3]/div[1]/input").sendKeys("123456789");
-        // 输入解锁密码
-        xPathFindElement("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[3]/div[2]/input").sendKeys("123456789");
-        // 确认
-        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/div[2]/div[4]/button");
-
-
-        xPathClick("//*[@id=\"app-content\"]/div/div[2]/div[2]/label/input");
-    }
-
-
-    private void changeToTargetPage(WebDriver webDriver, SeleniumInstance seleniumInstance) {
-        // 获取所有窗口句柄
-        Set<String> handles = webDriver.getWindowHandles();
-        for (String handle : handles) {
-            webDriver.switchTo().window(handle);
-            if (Objects.equals(webDriver.getCurrentUrl(), "data:,")) {
-                webDriver.close(); // 关闭 data:, 页面
-                break;
-            }
-        }
-
-        // 切换到第二个标签页（索引 1）
-        List<String> windowList = new ArrayList<>(webDriver.getWindowHandles());
-        webDriver.switchTo().window(windowList.getFirst());
-    }
-
-    private void proxyVerify(WebDriver webDriver, SeleniumInstance instance) {
-        // 使用 Robot 模拟输入用户名和密码
-        Robot robot = null;
-        try {
-            robot = new Robot();
-        } catch (AWTException e) {
-            throw new RuntimeException(e);
-        }
-        robot.delay(10000); // 等待弹框出现
-
-        // 输入用户名
-        for (char c : instance.getProxy().getUsername().toCharArray()) {
-            robot.keyPress(KeyEvent.getExtendedKeyCodeForChar(c));
-            robot.keyRelease(KeyEvent.getExtendedKeyCodeForChar(c));
-        }
-
-        robot.keyPress(KeyEvent.VK_TAB);
-        robot.keyRelease(KeyEvent.VK_TAB);
-
-        // 输入密码
-        for (char c : instance.getProxy().getPassword().toCharArray()) {
-            robot.keyPress(KeyEvent.getExtendedKeyCodeForChar(c));
-            robot.keyRelease(KeyEvent.getExtendedKeyCodeForChar(c));
-        }
-        robot.keyPress(KeyEvent.VK_ENTER);
-        robot.keyRelease(KeyEvent.VK_ENTER);
-    }
-
-    @NotNull
-    private static SeleniumParams getParams(AccountContext accountContext) {
-        return SeleniumParams
-                .builder()
-                .driverPath(CHROME_DRIVER_PATH)
-                .targetWebSite("chrome-extension://andhndehpcjpmneneealacgnmealilal/popup.html")
-                .extensionPaths(List.of(HAHA_WALLET_EXTENSION_CRX_PATH))
-                .chromeOptions(List.of("user-agent=" + accountContext.getBrowserEnv().getUserAgent()))
-                .build();
-    }
-}
-package cn.com.vortexa.script_bot.daily.taker;
-
-import com.alibaba.fastjson.JSONObject;
-
-import cn.com.vortexa.common.constants.HttpMethod;
-import cn.com.vortexa.common.entity.AccountContext;
-import cn.com.vortexa.script_node.constants.MapConfigKey;
-import cn.com.vortexa.web3.EthWalletUtil;
-import cn.hutool.core.util.StrUtil;
-
-import java.util.Map;
-import java.util.concurrent.ExecutionException;
-
-
-/**
- * @author helei
- * @since 2025/4/18 9:26
- */
-public class TakerApi {
-    private static final String BASE_URL = "https://sowing-api.taker.xyz";
-    private static final String LOGIN_MESSAGE = "Taker quest needs to verify your identity to prevent unauthorized access. Please confirm your sign-in details below:\\n\\naddress: %s\\n\\nNonce: %s";
-    private final TakerBot takerBot;
-
-    public TakerApi(TakerBot takerBot) {
-        this.takerBot = takerBot;
-    }
-
-    /**
-     * 自动领
-     *
-     * @param accountContext    accountContext
-     * @throws Exception    Exception
-     */
-    public void autoClaim(AccountContext accountContext) throws Exception {
-        Map<String, String> headers = buildHaader(accountContext);
-
-        String simpleInfo = accountContext.getSimpleInfo();
-        String token = accountContext.getParam(MapConfigKey.TOKEN_KEY);
-        if (StrUtil.isBlank(token)) {
-            token = login(accountContext);
-        }
-        if (StrUtil.isBlank(token)) {
-            throw new Exception("token is empty");
-        }
-
-        headers.put("authorization", "Bearer " + token);
-        try {
-            String response = takerBot.syncRequest(
-                accountContext.getProxy(),
-                BASE_URL + "/task/signIn?status=true",
-                HttpMethod.GET,
-                headers,
-                null,
-                null,
-                () -> simpleInfo + " send auto claim request.."
-            ).get();
-            takerBot.logger.info(simpleInfo + " claim success.." + response);
-        } catch (InterruptedException | ExecutionException e) {
-            throw new Exception("auto claim error", e);
-        }
-    }
-
-    /**
-     * 登录获取token
-     *
-     * @param accountContext    accountContext
-     * @return  token
-     * @throws Exception    Exception
-     */
-    public String login(AccountContext accountContext) throws Exception {
-        String primaryKey = accountContext.getParam(MapConfigKey.WALLET_PRIMARY_KEY_Key);
-        if (StrUtil.isBlank(primaryKey)) {
-            throw new Exception(accountContext.getId() + " primary key is empty");
-        }
-        String address = accountContext.getParam(MapConfigKey.WALLET_ADDRESS_KEY, () -> EthWalletUtil.getETHAddress(primaryKey));
-        String nonce = generateNonce(accountContext, address);
-
-        String signature = EthWalletUtil.signatureMessage2String(
-            primaryKey,
-            LOGIN_MESSAGE.formatted(address, nonce)
-        );
-
-        JSONObject body = new JSONObject();
-        body.put("address", address);
-        body.put("signature", signature);
-
-        JSONObject response = takerBot.syncJSONRequest(
-            accountContext.getProxy(),
-            BASE_URL + "/wallet/login",
-            HttpMethod.POST,
-            buildHaader(accountContext),
-            null,
-            body,
-            () -> accountContext.getSimpleInfo() + ": " + address + " send login request.."
-        ).get();
-
-        String token = response.getJSONObject("result").getString("token");
-        accountContext.setParam(MapConfigKey.TOKEN_KEY, token);
-
-        return token;
-    }
-
-    private String generateNonce(AccountContext accountContext, String address) throws Exception {
-        JSONObject body = new JSONObject();
-        body.put("walletAddress", address);
-        try {
-            JSONObject response = takerBot.syncJSONRequest(
-                accountContext.getProxy(),
-                BASE_URL + "/wallet/generateNonce",
-                HttpMethod.POST,
-                buildHaader(accountContext),
-                null,
-                body,
-                () -> accountContext.getSimpleInfo() + ": " + address + " send get nonce request.."
-            ).get();
-
-            if (response.getInteger("code") == 200) {
-                takerBot.logger.info("request nonce success");
-                return response.getJSONObject("result").getString("nonce");
-            } else {
-                throw new Exception("request nonce result exception");
-            }
-        } catch (InterruptedException | ExecutionException e) {
-            throw new Exception("request nonce unknown error", e);
-        }
-    }
-
-    private Map<String, String> buildHaader(AccountContext ac) {
-        Map<String, String> headers = ac.getBrowserEnv().generateHeaders();
-        headers.put("accept", "application/json, text/plain, */*");
-        headers.put("accept-language", "en-US,en;q=0.9");
-        headers.put("Referer", "https://sowing.taker.xyz/");
-        headers.put("Referrer-Policy", "strict-origin-when-cross-origin");
-        return headers;
-    }
-}
-package cn.com.vortexa.script_bot.daily.taker;
-
-import cn.com.vortexa.common.constants.BotJobType;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.common.entity.AccountContext;
-import cn.com.vortexa.script_node.anno.BotApplication;
-import cn.com.vortexa.script_node.anno.BotMethod;
-import cn.com.vortexa.script_node.bot.AutoLaunchBot;
-import cn.com.vortexa.script_node.constants.MapConfigKey;
-import cn.com.vortexa.script_node.service.BotApi;
-
-/**
- * @author helei
- * @since 2025/4/18 9:02
- */
-@BotApplication(name = "taker_auto_bot", accountParams = MapConfigKey.WALLET_PRIMARY_KEY_Key)
-public class TakerBot extends AutoLaunchBot<TakerBot> {
-
-    private TakerApi takerApi;
-
-    @Override
-    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
-        this.takerApi = new TakerApi(this);
-    }
-
-    @Override
-    protected TakerBot getInstance() {
-        return this;
-    }
-
-    @BotMethod(jobType = BotJobType.TIMED_TASK, intervalInSecond = 60 * 60 * 3 + 120)
-    public void autoClaim(AccountContext accountContext) {
-        try {
-            takerApi.autoClaim(accountContext);
-        } catch (Exception e) {
-            logger.error(accountContext.getSimpleInfo() + " auto claim fail.."
-                + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
-        }
-    }
-}
-package cn.com.vortexa.script_node.bot;
-
-import static cn.com.vortexa.script_node.service.impl.BotAccountContextServiceImpl.BOT_ACCOUNT_CONTEXT_TABLE_PREFIX;
-import static cn.com.vortexa.common.entity.BotInfo.BASIC_JOB_LIST_KEY;
-
-import cn.com.vortexa.script_node.config.ScriptNodeConfiguration;
-import cn.com.vortexa.script_node.service.BotApi;
-import cn.com.vortexa.script_node.constants.BotStatus;
-import cn.com.vortexa.common.constants.BotJobType;
-import cn.com.vortexa.common.constants.HttpMethod;
-import cn.com.vortexa.common.dto.job.AutoBotJobParam;
-import cn.com.vortexa.script_node.util.log.AppendLogger;
-import cn.com.vortexa.common.dto.AutoBotRuntimeInfo;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.common.entity.BotInfo;
-import cn.com.vortexa.common.entity.BotInstance;
-import cn.com.vortexa.common.entity.ProxyInfo;
-import cn.com.vortexa.common.exception.BotInitException;
-import cn.com.vortexa.common.exception.BotStatusException;
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.NamedThreadFactory;
-import cn.com.vortexa.common.util.http.RestApiClientFactory;
-import cn.hutool.core.util.RandomUtil;
-import cn.hutool.core.util.StrUtil;
-
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
-
-import lombok.Getter;
-import lombok.Setter;
-
-import java.io.File;
-import java.io.IOException;
-import java.sql.SQLException;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.*;
-import java.util.function.Supplier;
-
-public abstract class AbstractAutoBot {
-
-    private static final ProxyInfo DEFAULT_PROXY = new ProxyInfo();
-
-    public AppendLogger logger;
-
-    /**
-     * 代理并发控制
-     */
-    private final Map<ProxyInfo, Semaphore> networkSyncControllerMap;
-
-    /**
-     * bot api
-     */
-    @Getter
-    private BotApi botApi;
-
-    /**
-     * bot运行时信息
-     */
-    @Getter
-    private final AutoBotRuntimeInfo autoBotRuntimeInfo;
-
-    /**
-     * 请求并发数量
-     */
-    @Getter
-    @Setter
-    private int requestConcurrentCount = 5;
-
-    /**
-     * bot信息
-     */
-    @Getter
-    private BotInfo botInfo;
-
-    @Getter
-    private BotInstance botInstance;
-
-    /**
-     * script node配置
-     */
-    @Getter
-    private ScriptNodeConfiguration scriptNodeConfiguration;
-
-    /**
-     * 配置
-     */
-    @Getter
-    private AutoBotConfig autoBotConfig;
-
-    /**
-     * 执行异步任务的线程池
-     */
-    @Getter
-    private ExecutorService executorService;
-
-    /**
-     * 状态
-     */
-    @Getter
-    private BotStatus status = BotStatus.NEW;
-
-    public AbstractAutoBot() {
-        this.networkSyncControllerMap = new ConcurrentHashMap<>();
-        this.autoBotRuntimeInfo = new AutoBotRuntimeInfo();
-    }
-
-    /**
-     * 初始化方法
-     *
-     * @param autoBotConfig autoBotConfig
-     * @throws BotInitException BotInitException
-     */
-    public final void init(
-            ScriptNodeConfiguration scriptNodeConfiguration, BotApi botApi, AutoBotConfig autoBotConfig
-    ) throws BotInitException {
-        try {
-            this.logger = new AppendLogger(
-                    scriptNodeConfiguration.getScriptNodeName(),
-                    autoBotConfig.getBotName(),
-                    autoBotConfig.getBotKey()
-            );
-        } catch (IOException e) {
-            throw new BotInitException("bot logger create error", e);
-        }
-
-        this.scriptNodeConfiguration = scriptNodeConfiguration;
-        this.botApi = botApi;
-
-        // Step 1 参数校验
-        if (StrUtil.isBlank(autoBotConfig.getBotKey())) {
-            throw new IllegalArgumentException("bot key is empty!");
-        }
-
-        // Step 2 进入INIT状态，获取参数
-        updateState(BotStatus.INIT);
-        this.autoBotConfig = autoBotConfig;
-        try {
-            // Step 2.1 获取BotInfo,解析Bot Job
-            botInfo = buildBotInfo();
-            resolveBotJobMethod();
-        } catch (Exception e) {
-            throw new BotInitException("resolve bot job error", e);
-        }
-
-        // Step 2.2 保存bot info
-        try {
-            if (botApi.getBotInfoRPC().insertOrUpdateRPC(botInfo) == 1) {
-                Map<String, Object> query = new HashMap<>();
-                query.put("name", botInfo.getName());
-                // 保存成还需查询botId
-                Integer id = botApi.getBotInfoRPC().conditionQueryRPC(query).getFirst().getId();
-                botInfo.setId(id);
-                logger.info("save bot info success, id:" + botInfo.getId());
-            }
-        } catch (SQLException e) {
-            throw new BotInitException("save bot info error", e);
-        }
-
-        this.botInstance = BotInstance.builder()
-                .botId(botInfo.getId())
-                .botName(botInfo.getName())
-                .botKey(autoBotConfig.getBotKey())
-                .build();
-
-        // Step 2.3 设置logger前缀与线程池
-        this.executorService = Executors.newThreadPerTaskExecutor(
-                new NamedThreadFactory(botInfo.getName() + "-executor"));
-
-        try {
-            // Step 2.4 初始化存储的Table
-            logger.info("start init database table");
-            // 检查对应分表是否存在
-            if (!botApi.getBotAccountService()
-                    .checkAndCreateShardedTable(botInfo.getId(), getAutoBotConfig().getBotKey(), true)) {
-                throw new RuntimeException("bot account table create error");
-            }
-            logger.info("database table init finish");
-
-            // Step 2.5 初始化BotInstance实例
-            logger.info("start init bot instance");
-
-            BotInstance dbInstance = getBotApi().getBotInstanceRPC().selectOneRPC(botInstance);
-
-            // 数据库存在bot instance实例信息并且job信息没变化，用数据库的。 否则用BotInfo信息生成BotInstance信息写入库
-            if (dbInstance != null && !compareBotJobParamsChanged(botInfo, dbInstance)) {
-                this.botInstance = dbInstance;
-                logger.info("exist botInstance, use exist instance config");
-            } else {
-                logger.info("no instance or instance job update, create it...");
-
-                String tableName = getBotApi().getTableShardStrategy().generateTableName(
-                        BOT_ACCOUNT_CONTEXT_TABLE_PREFIX,
-                        new Object[]{botInstance.getBotId(), botInstance.getBotKey()}
-                );
-                botInstance.setBotName(botInfo.getName());
-                botInstance.setAccountTableName(tableName);
-                botInstance.setJobParams(botInfo.getJobParams());
-                botInstance.setParams(botInfo.getParams());
-
-                if (botApi.getBotInstanceRPC().insertOrUpdateRPC(botInstance) > 0) {
-                    logger.info("new bot instance create success");
-                } else {
-                    throw new BotInitException("new bot instance create error");
-                }
-            }
-
-            // Step 2.5 子类初始化
-            doInit();
-
-            // Step 2。6 更新状态
-            updateState(BotStatus.INIT_FINISH);
-        } catch (Exception e) {
-            logger.error("init error", e);
-            updateState(BotStatus.INIT_ERROR);
-        }
-    }
-
-    /**
-     * 初始化方法
-     */
-    protected abstract void doInit() throws BotInitException;
-
-    /**
-     * 停止Bot
-     */
-    public void stop() {
-        updateState(BotStatus.STOPPING);
-        try {
-            networkSyncControllerMap.clear();
-            doStop();
-            updateState(BotStatus.STOPPED);
-        } catch (Exception e) {
-            logger.error("stop bot error, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
-            updateState(BotStatus.SHUTDOWN);
-        }
-    }
-
-    protected abstract void doStop();
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<String> response str
-     */
-    public CompletableFuture<String> syncRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body
-    ) {
-        return syncRequest(proxy, url, method, headers, params, body, 1);
-    }
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<String> response str
-     */
-    public CompletableFuture<String> syncRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body,
-            int retryTimes
-    ) {
-        return syncRequest(proxy, url, method, headers, params, body, null, retryTimes);
-    }
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<Response> String
-     */
-    public CompletableFuture<JSONObject> syncJSONRequest(
-        ProxyInfo proxy,
-        String url,
-        HttpMethod method,
-        Map<String, String> headers,
-        JSONObject params,
-        JSONObject body,
-        Supplier<String> requestStart
-    ) {
-        return syncRequest(
-            proxy,
-            url,
-            method,
-            headers,
-            params,
-            body,
-            requestStart,
-            1
-        ).thenApply(responseStr->{
-            if(responseStr == null) return null;
-            return JSONObject.parseObject(responseStr);
-        });
-    }
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<Response> String
-     */
-    public CompletableFuture<String> syncRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body,
-            Supplier<String> requestStart
-    ) {
-        return syncRequest(
-                proxy,
-                url,
-                method,
-                headers,
-                params,
-                body,
-                requestStart,
-                1
-        );
-    }
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<Response> String
-     */
-    public CompletableFuture<String> syncRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body,
-            Supplier<String> requestStart,
-            int retryTimes
-    ) {
-        return syncCCHandler(proxy, requestStart, () -> {
-            try {
-                return RestApiClientFactory.getClient(proxy).request(
-                        url,
-                        method,
-                        headers,
-                        params,
-                        body,
-                        retryTimes
-                ).get();
-            } catch (InterruptedException | ExecutionException e) {
-                throw new RuntimeException(e);
-            }
-        });
-    }
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<Response> String
-     */
-    public CompletableFuture<List<String>> syncStreamRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body,
-            Supplier<String> requestStart
-    ) {
-        return syncCCHandler(proxy, requestStart, () -> {
-            try {
-                return RestApiClientFactory.getClient(proxy).streamRequest(
-                        url,
-                        method,
-                        headers,
-                        params,
-                        body
-                ).get();
-            } catch (InterruptedException | ExecutionException e) {
-                throw new RuntimeException(e);
-            }
-        });
-    }
-
-    public <R> CompletableFuture<R> syncCCHandler(
-            ProxyInfo proxy,
-            Supplier<String> requestStart,
-            Supplier<R> request
-    ) {
-
-        Semaphore networkController = networkSyncControllerMap
-                .compute(proxy == null ? DEFAULT_PROXY : proxy, (k, v) -> {
-                    if (v == null) {
-                        v = new Semaphore(requestConcurrentCount);
-                    }
-                    return v;
-                });
-
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                networkController.acquire();
-                // 随机延迟
-                TimeUnit.MILLISECONDS.sleep(RandomUtil.randomLong(1000, 3000));
-
-                String str = "start network request";
-                if (requestStart != null) {
-                    str = requestStart.get();
-                }
-                logger.debug("同步器允许发送请求 - " + str);
-
-                return request.get();
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            } finally {
-                networkController.release();
-            }
-        }, executorService);
-    }
-
-    /**
-     * 打印BotRuntimeInfo
-     *
-     * @return string
-     */
-    public String printBotRuntimeInfo() {
-        StringBuilder sb = new StringBuilder();
-        getAutoBotRuntimeInfo().getKeyValueInfoMap().forEach((k, v) -> {
-            sb.append(k).append(": ").append(v).append("\n");
-        });
-        return sb.toString();
-    }
-
-    /**
-     * 获取app的配置目录
-     *
-     * @return String
-     */
-    public String getAppConfigDir() {
-        return FileUtil.getAppResourceAppConfigPath() + File.separator + getBotInstance().getBotKey();
-    }
-
-    /**
-     * 更新BotStatus
-     *
-     * @param newStatus 新状态
-     */
-    public synchronized void updateState(BotStatus newStatus) throws BotStatusException {
-
-        boolean b = switch (status) {
-            //当前为NEW，新状态才能为NEW,SHUTDOWN
-            case NOT_LOADED -> BotStatus.NEW.equals(newStatus);
-            case NEW -> BotStatus.INIT.equals(newStatus);
-            //当前为INIT，新状态只能为INIT_FINISH、INIT_ERROR,SHUTDOWN
-            case INIT -> newStatus.equals(BotStatus.INIT_FINISH)
-                    || newStatus.equals(BotStatus.INIT_ERROR);
-            //当前为INIT_ERROR,新状态只能为ACCOUNT_LOADING, SHUTDOWN
-            case INIT_ERROR -> newStatus.equals(BotStatus.INIT);
-            //当前状态为INIT_FINISH，新状态只能为ACCOUNT_LIST_CONNECT, SHUTDOWN
-            case INIT_FINISH -> newStatus.equals(BotStatus.STARTING);
-            //当前状态为STARING，新状态只能为RUNNING,SHUTDOWN
-            case STARTING -> newStatus.equals(BotStatus.RUNNING);
-            //RUNNING，新状态只能为 SHUTDOWN
-            case RUNNING -> newStatus.equals(BotStatus.STOPPING);
-            case STOPPING -> newStatus.equals(BotStatus.STOPPED) || newStatus.equals(BotStatus.SHUTDOWN);
-            case STOPPED -> newStatus.equals(BotStatus.INIT);
-            case SHUTDOWN -> throw new BotStatusException("bot already shutdown");
-        };
-
-        if (b) {
-            logger.debug("Status change [%s] => [%s]".formatted(status, newStatus));
-            this.status = newStatus;
-        } else {
-            throw new BotStatusException(
-                    String.format("%s status can't from[%s] -> to[%s]", runtimeBotName(), status, newStatus));
-        }
-    }
-
-    public String runtimeBotName() {
-        return "Bot[%s]-[%s]".formatted(botInstance.getBotName(), autoBotConfig.getBotKey());
-    }
-
-    public String getScriptNodeName() {
-        return scriptNodeConfiguration.getScriptNodeName();
-    }
-
-    protected synchronized Map<String, AutoBotJobParam> getJobParams() {
-        return this.botInstance == null ? new HashMap<>() : this.botInstance.getJobParams();
-    }
-
-    protected synchronized AutoBotJobParam getJobParam(String jobName) {
-        return this.botInfo.getJobParams() == null ? null : this.botInfo.getJobParams().get(jobName);
-    }
-
-    protected synchronized void setJobParam(String jobKey, AutoBotJobParam jobParam) {
-        this.botInfo.getJobParams().put(jobKey, jobParam);
-    }
-
-    protected synchronized void addBasicJob(BotJobType jobType) {
-        if (this.botInfo.getParams() == null) {
-            this.botInfo.setParams(new HashMap<>());
-        }
-
-        this.botInfo.getParams().compute(BASIC_JOB_LIST_KEY, (k, v) -> {
-            if (v == null) {
-                v = new HashSet<String>();
-            }
-            if (v instanceof JSONArray t) {
-                v = new HashSet<String>();
-                for (int i = 0; i < t.size(); i++) {
-                    ((HashSet<String>) v).add(t.getString(i));
-                }
-            }
-            Set<String> set = (HashSet<String>) v;
-            set.add(jobType.name());
-            return v;
-        });
-    }
-
-    protected abstract BotInfo buildBotInfo() throws BotInitException;
-
-    protected abstract void resolveBotJobMethod();
-
-    /**
-     * 比较botInfo 和 BotInstance是否发生变化
-     *
-     * @param botInfo    botInfo
-     * @param dbInstance dbInstance
-     * @return boolean
-     */
-    private boolean compareBotJobParamsChanged(BotInfo botInfo, BotInstance dbInstance) {
-        Map<String, AutoBotJobParam> botJobParam = botInfo.getJobParams();
-        Map<String, AutoBotJobParam> botInstanceParam = dbInstance.getJobParams();
-
-        // rpc map序列化范型丢失处理
-        Map<String, AutoBotJobParam> jobParams = dbInstance.getJobParams();
-        if (jobParams != null) {
-            for (String key : jobParams.keySet()) {
-                Object param = jobParams.get(key);
-                if (param instanceof JSONObject jb) {
-                    jobParams.put(key, JSONObject.parseObject(JSONObject.toJSONString(jb), AutoBotJobParam.class));
-                }
-            }
-        }
-
-        if (botJobParam.size() != botInstanceParam.size()) return true;
-
-        if (!botJobParam.keySet().containsAll(botInstanceParam.keySet())) {
-            return true;
-        }
-
-        for (Map.Entry<String, AutoBotJobParam> entry : botJobParam.entrySet()) {
-            String jobName = entry.getKey();
-            AutoBotJobParam param = entry.getValue();
-            AutoBotJobParam instanceParam = botInstanceParam.get(jobName);
-
-            if (!param.equals(instanceParam)) {
-                return true;
-            }
-        }
-        return false;
-    }
-}
-
-package cn.com.vortexa.script_node.constants;
-
-public class MapConfigKey {
-
-    public static final String INVITE_CODE_KEY = "invite_code";
-
-    public static final String REGISTER_TYPE_KEY = "register_type";
-
-    public static final String EMAIL_VERIFIED_KEY = "email_verified";
-
-    public static final String EMAIL_VERIFIER_TYPE = "email_verifier_type";
-
-    public static final String TOKEN_KEY = "token";
-
-    public static final String CONNECT_URL_KEY = "connect_url";
-
-    public static final String USER_AGENT_KEY = "user_agent";
-
-    public static final String TWO_CAPTCHA_API_KEY = "two_captcha_api_key";
-
-    public static final String PASSWORD_KEY = "password";
-
-    public static final String WALLET_PRIMARY_KEY_Key = "wallet_primary_key";
-    public static final String WALLET_ADDRESS_KEY = "wallet_address";
-
-    public static final String ACCESS_TOKEN_KEY_V1 = "access_token";
-    public static final String ACCESS_TOKEN_KEY_V2 ="accessToken";
-    public static final String REFRESH_TOKEN_KEY_V1 = "refresh_token";
-    public static final String REFRESH_TOKEN_KEY_V2 = "refreshToken";
 }
