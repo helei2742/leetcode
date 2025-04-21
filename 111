@@ -1,913 +1,1615 @@
-package cn.com.vortexa.script_node.bot.selenium;
+package cn.com.vortexa.common.entity;
 
-import cn.com.vortexa.browser_control.OptSeleniumInstance;
-import cn.com.vortexa.browser_control.dto.SeleniumParams;
-import cn.com.vortexa.browser_control.execute.ExecuteGroup;
-import cn.com.vortexa.common.entity.AccountContext;
-import cn.com.vortexa.script_node.dto.selenium.ACBotTypedSeleniumExecuteInfo;
-import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
-import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.chrome.ChromeOptions;
-import org.openqa.selenium.remote.RemoteWebDriver;
+import com.baomidou.mybatisplus.annotation.*;
 
-import java.io.IOException;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.util.*;
-import java.util.concurrent.locks.ReentrantLock;
+import cn.com.vortexa.common.dto.job.AutoBotJobParam;
+import lombok.*;
 
-@Slf4j
-public class AccountFingerBrowserSelenium extends OptSeleniumInstance {
+import java.io.Serial;
+import java.io.Serializable;
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
 
-    private final ReentrantLock lock = new ReentrantLock();
+/**
+ * @author com.helei
+ * @since 2025-02-18
+ */
+@Getter
+@Setter
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+@TableName("t_bot_instance")
+public class BotInstance implements Serializable {
+    public static final String BOT_INSTANCE_STATUS_KEY = "bot_instance_status";
 
-    @Override
-    protected void addDefaultChromeOptions(ChromeOptions chromeOptions) {
+    @Serial
+    private static final long serialVersionUID = 4984719841947412242L;
 
-    }
 
-    /**
-     * 添加过的bot执行链的key set
-     */
-    private final Set<String> addedBotExecutionSet = new HashSet<>();
-    /**
-     * 执行链信息
-     */
-    private final List<ACBotTypedSeleniumExecuteInfo> executeInfoList = new ArrayList<>();
+    @TableId(value = "id", type = IdType.AUTO)
+    private Integer id;
 
-    @Getter
-    private volatile boolean running = false;
+    @TableField("bot_id")
+    private Integer botId;
 
-    public AccountFingerBrowserSelenium(AccountContext accountContext, SeleniumParams params) throws IOException {
-        super(accountContext.getSimpleInfo(), params);
-    }
+    @TableField("bot_name")
+    private String botName;
 
-    @Override
-    protected WebDriver createWebDriver(ChromeOptions chromeOptions) {
-        if (getWebDriver() != null) return getWebDriver();
+    @TableField("script_node_name")
+    private String scriptNodeName;
 
-        try {
-            URL remoteWebDriverUrl = new URL(getParams().getDriverPath());
-            chromeOptions.setCapability("timeouts", new HashMap<String, Integer>() {{
-                put("script", 30000);  // 设置脚本执行超时
-                put("pageLoad", 30000);  // 设置页面加载超时
-                put("implicit", 30000);  // 设置隐式等待超时
-            }});
-            return new RemoteWebDriver(remoteWebDriverUrl, chromeOptions);
-        } catch (MalformedURLException e) {
-            log.error("[{}] create remote web driver error", getInstanceId(), e);
-            throw new RuntimeException(e);
-        }
-    }
+    @TableField("bot_key")
+    private String botKey;
 
-    /**
-     * 开始账户指纹浏览器selenium控制
-     */
-    public void startACFBSelenium() {
-        lock.lock();
-        try {
-            running = true;
-            log.info("[{}] start all added bot selenium execute...", getInstanceId());
+    @TableField("account_table_name")
+    private String accountTableName;
 
-            for (ACBotTypedSeleniumExecuteInfo executeInfo : executeInfoList) {
-                try {
-                    log.info("[{}]-[{}] start selenium execute...", getInstanceId(), executeInfo.getBotKey());
-                    List<ExecuteGroup> seleniumExecuteChain = super.getSeleniumExecuteChain();
-                    seleniumExecuteChain.clear();
-                    seleniumExecuteChain.addAll(executeInfo.getSeleniumExecuteChain());
+    @TableField("job_params")
+    private Map<String, AutoBotJobParam> jobParams = new HashMap<>();
 
-                    syncStart();
-                    log.info("[{}]-[{}] selenium execute finish", getInstanceId(), executeInfo.getBotKey());
-                } catch (Exception e) {
-                    log.error("[{}]-[{}] selenium execute error", getInstanceId(), executeInfo.getBotKey(), e);
-                    randomWait(3);
-                }
-            }
+    @TableField("params")
+    private Map<String, Object> params;
 
-            log.info("[{}] all selenium execute finish", getInstanceId());
-        } finally {
-            log.info("[{}] closing webDriver", getInstanceId());
-            close();
-            log.info("[{}] close webDriver finish", getInstanceId());
+    @TableField(value = "insert_datetime", fill = FieldFill.INSERT)
+    private LocalDateTime insertDatetime;
 
-            running = false;
-            lock.unlock();
-        }
-    }
+    @TableField(value = "update_datetime", fill = FieldFill.INSERT_UPDATE)
+    private LocalDateTime updateDatetime;
 
-    /**
-     * 添加执行链
-     *
-     * @param executeInfo executeInfo
-     */
-    public void addExecuteInfo(ACBotTypedSeleniumExecuteInfo executeInfo) {
-        log.info("[{}]-[{}] adding execute info...", getInstanceId(), executeInfo.getBotKey());
-        lock.lock();
-        try {
-            executeInfoList.add(executeInfo);
-            addedBotExecutionSet.add(executeInfo.getBotKey());
-            log.info("[{}]-[{}] add execute info finish", getInstanceId(), executeInfo.getBotKey());
-        } finally {
-            lock.unlock();
-        }
-    }
+    @TableField(value = "valid", fill = FieldFill.INSERT)
+    @TableLogic
+    private Integer valid;
 
-    @Override
-    protected void doClose() {
-        super.doClose();
-        executeInfoList.clear();
-        addedBotExecutionSet.clear();
+    @TableField(exist = false)
+    public BotInfo botInfo;
+
+    public synchronized void addParam(String key, Object value) {
+        if (params == null) params = new HashMap<>();
+        params.put(key, value);
     }
 }
-package cn.com.vortexa.script_node.bot.selenium;
+package cn.com.vortexa.common.entity;
 
-import cn.com.vortexa.browser_control.SeleniumInstance;
-import cn.com.vortexa.browser_control.constants.BrowserDriverType;
-import cn.com.vortexa.browser_control.driver.BitBrowserDriver;
-import cn.com.vortexa.browser_control.driver.FingerprintBrowserDriver;
-import cn.com.vortexa.browser_control.dto.SeleniumParams;
-import cn.com.vortexa.common.constants.BotJobType;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.common.entity.AccountContext;
-import cn.com.vortexa.script_node.anno.BotMethod;
-import cn.com.vortexa.script_node.bot.AutoLaunchBot;
-import cn.com.vortexa.script_node.dto.selenium.ACBotTypedSeleniumExecuteInfo;
-import cn.com.vortexa.script_node.service.BotApi;
-import cn.hutool.core.lang.Pair;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import java.io.Serializable;
+import java.time.LocalDateTime;
+import lombok.Getter;
+import lombok.Setter;
+
+/**
+ * <p>
+ * 
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-04-21
+ */
+@Getter
+@Setter
+@TableName("t_web3_wallet")
+public class Web3Wallet implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
+    @TableId(value = "id", type = IdType.AUTO)
+    private Long id;
+
+    @TableField("mnemonic")
+    private String mnemonic;
+
+    @TableField("privateKey")
+    private String privateKey;
+
+    @TableField("eth_address")
+    private String ethAddress;
+
+    @TableField("sol_address")
+    private String solAddress;
+
+    @TableField("bsc_address")
+    private String bscAddress;
+
+    @TableField("btc_address")
+    private String btcAddress;
+
+    @TableField("insert_datetime")
+    private LocalDateTime insertDatetime;
+
+    @TableField("update_datetime")
+    private LocalDateTime updateDatetime;
+
+    @TableField("valid")
+    private Boolean valid;
+}
+package cn.com.vortexa.websocket.netty.base;
+
+import cn.com.vortexa.common.entity.ProxyInfo;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
+import cn.com.vortexa.websocket.netty.constants.WebsocketClientStatus;
+import io.netty.bootstrap.Bootstrap;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.EventLoopGroup;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.handler.codec.http.HttpHeaders;
+import lombok.Getter;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
+
+import javax.net.ssl.SSLException;
+
+/**
+ * @author helei
+ * @since 2025/3/18 10:52
+ */
+@Slf4j
+@Setter
+@Getter
+public abstract class AutoConnectWSService implements IWSService {
+    public static final int UN_LIMIT_RECONNECT_MARK = -1;   // 无限重连标记
+    private static final AtomicReferenceFieldUpdater<AutoConnectWSService, Channel> CHANNEL_ATOMIC_UPDATER
+            = AtomicReferenceFieldUpdater.newUpdater(AutoConnectWSService.class, Channel.class, "channel");
+    private static volatile EventLoopGroup eventLoopGroup;    //netty线程组
+    private final AtomicInteger reconnectTimes = new AtomicInteger(0);  //重链接次数
+    private final ReentrantLock reconnectLock = new ReentrantLock();    //重连锁
+    private final Condition startingWaitCondition = reconnectLock.newCondition();   //启动中阻塞的condition
+    private final String url; //websocket的url字符串
+    private Bootstrap bootstrap; //netty bootstrap
+    private volatile Channel channel;    //连接channel
+    private String host;    //连接host
+    private int port;    //连接port
+    private boolean useSSL; //是否ssl
+    private HttpHeaders headers;    //请求头
+    private ProxyInfo proxy = null; //代理
+    private int reconnectCountDownSecond = 180; //重连次数减少的间隔
+    private int reconnectLimit = 3; //重连次数限制
+    private int eventLoopGroupThreads = 1; // 线程数
+    private volatile WebsocketClientStatus clientStatus = WebsocketClientStatus.NEW;    //客户端当前状态
+    private Consumer<WebsocketClientStatus> clientStatusChangeHandler = socketCloseStatus -> {
+    };    //clientStatus更新的回调
+
+    protected AutoConnectWSService(String url) {
+        this.url = url;
+    }
+
+    protected abstract void init() throws SSLException, URISyntaxException;
+
+    /**
+     * 连接
+     *
+     * @return CompletableFuture<Boolean>
+     */
+    public final CompletableFuture<Boolean> connect() {
+        return switch (clientStatus) {
+            case NEW, STOP -> reconnect();
+            case STARTING -> waitForStarting();
+            case RUNNING -> {
+                log.warn("ws service [{}] in running, clientStatus[{}]", getName(), clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN -> throw new RuntimeException("");
+        };
+    }
+
+    /**
+     * 重连接
+     *
+     * @return CompletableFuture<Boolean>
+     */
+    public CompletableFuture<Boolean> reconnect() {
+        return switch (clientStatus) {
+            case NEW, STOP -> reconnectLogic();
+            case STARTING -> waitForStarting().thenApplyAsync(success -> {
+                if (success) {
+                    return true;
+                }
+                try {
+                    return reconnectLogic().get();
+                } catch (InterruptedException | ExecutionException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            case RUNNING -> {
+                log.warn("ws service [{}] in running, can't reconnect. clientStatus[{}]", getName(), clientStatus);
+                yield CompletableFuture.supplyAsync(() -> true);
+            }
+            case SHUTDOWN -> CompletableFuture.supplyAsync(() -> {
+                log.error("client[{}] already shutdown", getName());
+                return false;
+            });
+        };
+    }
+
+    /**
+     * 重连接逻辑
+     *
+     * @return CompletableFuture<Boolean>
+     */
+    private CompletableFuture<Boolean> reconnectLogic() {
+        updateClientStatus(WebsocketClientStatus.STARTING);
+
+        String name = getName();
+
+        return CompletableFuture.supplyAsync(() -> {
+            //Step 1 重连次数超过限制，关闭
+            if (reconnectLimit != UN_LIMIT_RECONNECT_MARK && reconnectTimes.get() >= reconnectLimit) {
+                log.error("reconnect times out of limit [{}], close websocket client", reconnectLimit);
+                shutdown();
+                return false;
+            }
+
+            AtomicBoolean isSuccess = new AtomicBoolean(false);
+
+            //Step 2 重连逻辑
+            //Step 2.1 加锁保证只要一个线程进行重连
+            reconnectLock.lock();
+            try {
+                //Step 2.2 已经再running状态，直接返回true。变为shutdown、stop状态，直接返回false
+                if (clientStatus.equals(WebsocketClientStatus.RUNNING)) {
+                    log.info("client started by other thread");
+                    return true;
+                } else if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+                    log.error("clint {} when client starting", clientStatus);
+                    return false;
+                }
+
+                //Step 3 初始化
+                log.info("start init Websocket client");
+                try {
+                    resolveParamFromUrl();
+
+                    init();
+                } catch (SSLException | URISyntaxException e) {
+                    throw new RuntimeException("init websocket client error", e);
+                }
+                log.info("init Websocket finish，start connect server [{}]", url);
+
+                //Step 4 链接服务器
+                if (reconnectTimes.incrementAndGet() <= reconnectLimit || reconnectLimit == UN_LIMIT_RECONNECT_MARK) {
+
+                    //Step 4.1 每进行重连都会先将次数加1并设置定时任务将重连次数减1
+                    getEventLoopGroup().schedule(() -> {
+                        reconnectTimes.decrementAndGet();
+                    }, reconnectCountDownSecond, TimeUnit.SECONDS);
+
+                    int waitingConnectTime = getWaitingConnectTime();
+                    log.info("start connect client [{}], url[{}], current times [{}], start after [{}]s",
+                            name, url, reconnectTimes.get(), waitingConnectTime);
+
+                    //Step 4.2 latch用于同步等等链接完成
+                    CountDownLatch latch = new CountDownLatch(1);
+
+                    //Step 4.3 延迟再进行连接
+                    getEventLoopGroup().schedule(() -> {
+                        try {
+                            ChannelFuture connect = bootstrap.connect(host, port);
+                            connect.addListener(future -> {
+                                try {
+                                    if (future.isSuccess()) {
+                                        setChannel(connect.channel());
+                                        afterBoostrapConnected(getChannel());
+
+                                        log.info("success connect to {}", url);
+                                        //Step 4.4 连接成功设置标识
+                                        isSuccess.set(true);
+                                    } else {
+                                        log.error("connect client [{}], url[{}] error, times [{}]",
+                                                name, url, reconnectTimes.get(), future.cause());
+
+                                        isSuccess.set(false);
+                                    }
+                                } finally {
+                                    if (latch.getCount() != 0) {
+                                        latch.countDown();
+                                    }
+                                }
+                            });
+                        } catch (Exception e) {
+                            log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(),
+                                    e);
+                            isSuccess.set(false);
+                            latch.countDown();
+                        }
+                    }, waitingConnectTime, TimeUnit.SECONDS);
+
+                    //Step 4.5 等待链接完成
+                    try {
+                        latch.await();
+                    } catch (InterruptedException e) {
+                        log.error("connect client [{}], url[{}] interrupted, times [{}]", name, url,
+                                reconnectTimes.get(), e);
+                    }
+
+                    //Step 6 未成功启动，关闭
+                    if (!isSuccess.get()) {
+                        log.info("connect client [{}], url[{}] fail, current times [{}]", name, url,
+                                reconnectTimes.get());
+
+                        close();
+                    } else {
+                        log.info("connect client [{}], url[{}] success, current times [{}]", name, url,
+                                reconnectTimes.get());
+
+                        updateClientStatus(WebsocketClientStatus.RUNNING);
+                    }
+                }
+            } catch (Exception e) {
+                //exception 遇到未处理异常，直接关闭
+                log.error("connect client [{}] appear unknown error", name, e);
+                close();
+                throw new RuntimeException(String.format("connect client [%s] appear unknown error", name), e);
+            } finally {
+                //Step 5 释放等待启动的线程
+                startingWaitCondition.signalAll();
+                reconnectLock.unlock();
+            }
+
+            return isSuccess.get();
+        }, getCallbackInvoker());
+    }
+
+    protected int getWaitingConnectTime() {
+        int times = Math.min(Math.max(0, reconnectTimes.get()), NettyConstants.RECONNECT_DELAY_SECONDS.length - 1);
+        return NettyConstants.RECONNECT_DELAY_SECONDS[times];
+    }
+
+    /**
+     * 关闭
+     */
+    public void close() {
+        if (clientStatus.equals(WebsocketClientStatus.STOP)
+                || clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+            return;
+        }
+
+        updateClientStatus(WebsocketClientStatus.STOP);
+
+        log.info("closing websocket client [{}], [{}]", getName(), channel == null ? "null" : getChannel().hashCode());
+        if (channel != null) {
+            channel.close();
+            setChannel(null);
+        }
+        log.warn("web socket client [{}] closed", getName());
+    }
+
+    /**
+     * 终止
+     */
+    public final void shutdown() {
+        updateClientStatus(WebsocketClientStatus.SHUTDOWN);
+
+        if (channel != null) {
+            channel.close();
+            setChannel(null);
+        }
+        getEventLoopGroup().shutdownGracefully();
+        log.warn("web socket client [{}] already shutdown !", getName());
+    }
+
+    /**
+     * 更新status
+     *
+     * @param newStatus newStatus
+     */
+    protected void updateClientStatus(WebsocketClientStatus newStatus) {
+        synchronized ("CLIENT_STATUS_LOCK") {
+            if (clientStatus.equals(newStatus)) {
+                return;
+            }
+
+            if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
+                throw new IllegalArgumentException("client status is shutdown，new status can not be " + newStatus);
+            }
+
+            try {
+                if (newStatus != clientStatus && clientStatusChangeHandler != null) {
+                    clientStatusChangeHandler.accept(newStatus);
+                }
+            } finally {
+                log.debug("client[{}] status [{}] -> [{}]", getName(), clientStatus, newStatus);
+                clientStatus = newStatus;
+            }
+        }
+    }
+
+    protected EventLoopGroup getEventLoopGroup() {
+        if (eventLoopGroup == null) {
+            synchronized (AutoConnectWSService.class) {
+                if (eventLoopGroup == null) {
+                    eventLoopGroup = new NioEventLoopGroup(eventLoopGroupThreads);
+                }
+            }
+        }
+        return eventLoopGroup;
+    }
+
+    /**
+     * 获取回调执行线程池
+     *
+     * @return ExecutorService
+     */
+    public abstract ExecutorService getCallbackInvoker();
+
+    /**
+     * 每次netty bootstrap 连接后调用
+     *
+     * @throws InterruptedException InterruptedException
+     */
+    protected abstract void afterBoostrapConnected(Channel channel) throws InterruptedException;
+
+    /**
+     * 等待启动完成
+     *
+     * @return CompletableFuture<Void>
+     */
+    private CompletableFuture<Boolean> waitForStarting() {
+        return CompletableFuture.supplyAsync(() -> {
+            log.warn("client [{}] is starting, waiting for complete", getName());
+            reconnectLock.lock();
+            try {
+                while (clientStatus.equals(WebsocketClientStatus.STARTING)) {
+                    startingWaitCondition.await();
+                }
+
+                if (clientStatus.equals(WebsocketClientStatus.STOP) || clientStatus.equals(
+                        WebsocketClientStatus.SHUTDOWN)) {
+                    log.error("启动WS客户端[{}]失败, ClientStatus [{}}", getName(), clientStatus);
+                    return false;
+                }
+                return true;
+            } catch (InterruptedException e) {
+                log.error("waiting for start client [{}] error", getName());
+                throw new RuntimeException(e);
+            } finally {
+                reconnectLock.unlock();
+            }
+        }, getCallbackInvoker());
+    }
+
+    public Channel getChannel() {
+        return CHANNEL_ATOMIC_UPDATER.get(this);
+    }
+
+    public void setChannel(Channel channel) {
+        CHANNEL_ATOMIC_UPDATER.set(this, channel);
+    }
+
+    /**
+     * 解析参数
+     *
+     * @throws URISyntaxException url解析错误
+     */
+    private void resolveParamFromUrl() throws URISyntaxException {
+        URI uri = new URI(url);
+        String scheme = uri.getScheme() == null ? "ws" : uri.getScheme();
+        host = uri.getHost() == null ? "127.0.0.1" : uri.getHost();
+        if (uri.getPort() == -1) {
+            if ("ws".equalsIgnoreCase(scheme)) {
+                port = 80;
+            } else if ("wss".equalsIgnoreCase(scheme)) {
+                port = 443;
+            } else {
+                port = -1;
+            }
+        } else {
+            port = uri.getPort();
+        }
+
+        if (!"ws".equalsIgnoreCase(scheme) && !"wss".equalsIgnoreCase(scheme)) {
+            log.error("Only WS(S) is supported.");
+            throw new IllegalArgumentException("url error, Only WS(S) is supported.");
+        }
+
+        useSSL = "wss".equalsIgnoreCase(scheme);
+    }
+}
+package cn.com.vortexa.websocket.netty.constants;
+
+import io.netty.util.AttributeKey;
+
+public class NettyConstants {
+
+    /**
+     * 一朕的最大长度
+     */
+    public final static int MAX_FRAME_LENGTH = 1024;
+
+
+    /**
+     * 放在netty channel 里的 client_name 的 key
+     */
+    public static final AttributeKey<String> CLIENT_NAME = AttributeKey.valueOf("client_name");
+
+    /**
+     * 请求等待时间
+     */
+    public static final long REQUEST_WAITE_SECONDS = 60;
+
+    /**
+     * netty客户端断线重连时间
+     */
+    public static final int[] RECONNECT_DELAY_SECONDS = {0, 0, 10, 60, 180, 300, 600};
+
+
+    /**
+     * netty客户端断线重连次数
+     */
+    public static final int RECONNECT_LIMIT = 3;
+}
+package cn.com.vortexa.bot_platform.controller;
+
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+/**
+ * <p>
+ *  前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-04-21
+ */
+@RestController
+@RequestMapping("/core/web3Wallet")
+public class Web3WalletController {
+
+}
+package cn.com.vortexa.bot_platform.mapper;
+
+import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+
+import cn.com.vortexa.common.entity.Web3Wallet;
+
+/**
+ * <p>
+ *  Mapper 接口
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-04-21
+ */
+public interface Web3WalletMapper extends BaseMapper<Web3Wallet> {
+
+}
+package cn.com.vortexa.bot_platform.service.impl;
+
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+
+import cn.com.vortexa.bot_platform.mapper.Web3WalletMapper;
+import cn.com.vortexa.bot_platform.service.IWeb3WalletService;
+import cn.com.vortexa.common.entity.Web3Wallet;
+
+import org.springframework.stereotype.Service;
+
+/**
+ * <p>
+ *  服务实现类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-04-21
+ */
+@Service
+public class Web3WalletServiceImpl extends ServiceImpl<Web3WalletMapper, Web3Wallet> implements IWeb3WalletService {
+
+}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.com.vortexa.bot_platform.mapper.BotInstanceMapper">
+
+    <!-- 通用查询映射结果 -->
+    <resultMap id="BaseResultMap" type="cn.com.vortexa.common.entity.BotInstance">
+        <id column="id" property="id"/>
+        <result column="bot_id" property="botId"/>
+        <result column="bot_name" property="botName"/>
+        <result column="script_node_name" property="scriptNodeName"/>
+        <result column="bot_key" property="botKey"/>
+        <result column="account_table_name" property="accountTableName"/>
+        <result column="job_params" property="jobParams"/>
+        <result column="params" property="params"/>
+        <result column="insert_datetime" property="insertDatetime"/>
+        <result column="update_datetime" property="updateDatetime"/>
+        <result column="valid" property="valid"/>
+    </resultMap>
+
+    <insert id="insertOrUpdate" parameterType="cn.com.vortexa.common.entity.BotInstance">
+        INSERT INTO t_bot_instance
+        (bot_id, bot_name, script_node_name, bot_key, account_table_name, job_params, params, update_datetime, valid)
+        VALUES (
+        #{botId}, #{botName}, #{scriptNodeName}, #{botKey}, #{accountTableName}, #{jobParams}, #{params}, now(), 1
+        )
+        ON DUPLICATE KEY UPDATE
+        <trim suffixOverrides=",">
+            <if test="botId != null">
+                bot_id = values (bot_id),
+            </if>
+            <if test="accountTableName != null">
+                account_table_name = values (account_table_name),
+            </if>
+            <if test="jobParams != null">
+                job_params =values (job_params),
+            </if>
+            <if test="params != null">
+                params = values (params),
+            </if>
+            <if test="updateDatetime != null">
+                update_datetime = values (update_datetime),
+            </if>
+            <if test="valid != null">
+                valid = values(valid),
+            </if>
+        </trim>
+    </insert>
+
+    <insert id="insertOrUpdateBatch" parameterType="java.util.List">
+        INSERT INTO t_bot_instance
+        (bot_id, bot_name, script_node_name, bot_key, account_table_name, job_params, params, update_datetime, valid)
+        VALUES
+        <foreach collection="list" item="item" separator=",">
+            (#{item.botId}, #{item.botName}, #{item.scriptNodeName}, #{item.botKey}, #{item.accountTableName}, #{item.jobParams},
+            #{item.params}, current_timestamp, 1)
+        </foreach>
+        ON DUPLICATE KEY UPDATE
+        bot_id = values(bot_id),
+        account_table_name = values(account_table_name),
+        job_params = values(job_params),
+        params = values(params),
+        update_datetime = values(updateDatetime),
+        valid =values (valid)
+    </insert>
+
+
+    <select id="multipleConditionQuery"
+            parameterType="cn.com.vortexa.common.entity.BotInstance"
+            resultType="cn.com.vortexa.common.entity.BotInstance">
+        select
+        t.id as id,
+        t.bot_id as botId,
+        t.bot_name as botName,
+        t.script_node_name as scriptNodeName,
+        t.bot_key as botKey,
+        t.account_table_name as accountTableName,
+        t.job_params as jobParams,
+        t.params,
+        t.insert_datetime as insertDatetime,
+        t.update_datetime as updateDatetime,
+        t.valid as valid
+        from
+        t_bot_instance t
+        <where>
+            valid = 1
+            <if test="botId != null">
+                and t.bot_id = #{botId}
+            </if>
+            <if test="scriptNodeName != null">
+                and t.script_node_name = #{scriptNodeName}
+            </if>
+            <if test="botKey != null">
+                and t.bot_key = #{botKey}
+            </if>
+            <if test="botName != null">
+                and t.bot_name = #{botName}
+            </if>
+            <if test="accountTableName != null">
+                and t.account_table_name = #{accountTableName}
+            </if>
+            <if test="params != null and !params.isEmpty()">
+                AND JSON_CONTAINS(
+                t.params,
+                <foreach collection="params" item='value' index='key' separator=',' open="JSON_OBJECT(" close=")">
+                    #{key}, #{value}
+                </foreach>
+                )
+            </if>
+        </where>
+    </select>
+</mapper>
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="cn.com.helei.bot.core.mapper.Web3WalletMapper">
+
+    <!-- 通用查询映射结果 -->
+    <resultMap id="BaseResultMap" type="cn.com.helei.bot.core.entity.Web3Wallet">
+        <id column="id" property="id" />
+        <result column="mnemonic" property="mnemonic" />
+        <result column="privateKey" property="privateKey" />
+        <result column="eth_address" property="ethAddress" />
+        <result column="sol_address" property="solAddress" />
+        <result column="bsc_address" property="bscAddress" />
+        <result column="btc_address" property="btcAddress" />
+        <result column="insert_datetime" property="insertDatetime" />
+        <result column="update_datetime" property="updateDatetime" />
+        <result column="valid" property="valid" />
+    </resultMap>
+
+</mapper>
+create table t_web3_wallet(
+    id bigint primary key auto_increment,
+    mnemonic varchar(520),
+    privateKey varchar(520),
+    eth_address varchar(520),
+    sol_address varchar(520),
+    bsc_address varchar(520),
+    btc_address varchar(520),
+
+    insert_datetime datetime   default CURRENT_TIMESTAMP null,
+    update_datetime datetime   default CURRENT_TIMESTAMP null on update CURRENT_TIMESTAMP,
+    valid           tinyint(1) default 1                 null,
+    unique (mnemonic),
+    unique (privateKey)
+)
+
+
+package cn.com.vortexa.script_node.bot;
+
+import static cn.com.vortexa.script_node.service.impl.BotAccountContextServiceImpl.BOT_ACCOUNT_CONTEXT_TABLE_PREFIX;
+import static cn.com.vortexa.common.entity.BotInfo.BASIC_JOB_LIST_KEY;
+
+import cn.com.vortexa.script_node.config.ScriptNodeConfiguration;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.com.vortexa.script_node.constants.BotStatus;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.constants.HttpMethod;
+import cn.com.vortexa.common.dto.job.AutoBotJobParam;
+import cn.com.vortexa.script_node.util.log.AppendLogger;
+import cn.com.vortexa.common.dto.AutoBotRuntimeInfo;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.common.entity.BotInfo;
+import cn.com.vortexa.common.entity.BotInstance;
+import cn.com.vortexa.common.entity.ProxyInfo;
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.com.vortexa.common.exception.BotStatusException;
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.NamedThreadFactory;
+import cn.com.vortexa.common.util.http.RestApiClientFactory;
+import cn.hutool.core.util.RandomUtil;
+import cn.hutool.core.util.StrUtil;
+
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+
+import lombok.Getter;
+import lombok.Setter;
+
+import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
+import java.sql.SQLException;
+import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.*;
+import java.util.function.Supplier;
 
-/**
- * @author h30069248
- * @since 2025/4/9 14:35
- */
-@Slf4j
-public abstract class FingerBrowserBot extends AutoLaunchBot<FingerBrowserBot> {
+public abstract class AbstractAutoBot {
 
-    public static final int BROWSER_BATCH_SIZE = 6; //  浏览器批大小
-    public static final String DEFAULT_WEB_SITE_URL = "http://www.google.com";   // 默认打开地址Key
-    public static final String DEFAULT_WEB_SITE_URL_KEY = "default_web_site_url";   // 默认打开地址Key
-    public static final String FINGER_BROWSER_API_URL_KEY = "finger_browser_api_url"; // 指纹浏览器api地址Key
-    public static final String CHROME_DRIVER_URL_KEY = "chrome_driver_url"; // chromedriver连接地址Key
-    public static final String FINGER_BROWSER_SEQ_KEY = "finger_browser_seq";   //  指纹浏览器序号Key
+    private static final ProxyInfo DEFAULT_PROXY = new ProxyInfo();
 
-    private static final Set<Integer> currentWindowSeq = new HashSet<>();
-    private static final ConcurrentHashMap<AccountContext, AccountFingerBrowserSelenium> accountFBSeleniumMap = new ConcurrentHashMap<>();
-    private static final List<ACBotTypedSeleniumExecuteInfo> acExecuteInfos = new ArrayList<>();
-    private static volatile FingerprintBrowserDriver browserDriver;
-    private static String chromeDriverUrl;
-    private static String fingerBrowserApiUrl;
+    public AppendLogger logger;
 
-    private String openUrl = DEFAULT_WEB_SITE_URL;
+    /**
+     * 代理并发控制
+     */
+    private final Map<ProxyInfo, Semaphore> networkSyncControllerMap;
 
-    @Override
-    protected void botStopped() {
-        super.botStopped();
-        Iterator<Map.Entry<AccountContext, AccountFingerBrowserSelenium>> iterator = accountFBSeleniumMap.entrySet()
-            .iterator();
-        while (iterator.hasNext()) {
-            Map.Entry<AccountContext, AccountFingerBrowserSelenium> entry = iterator.next();
-            entry.getValue().close();
-            iterator.remove();
-        }
-        acExecuteInfos.clear();
+    /**
+     * bot api
+     */
+    @Getter
+    private BotApi botApi;
+
+    /**
+     * bot运行时信息
+     */
+    @Getter
+    private final AutoBotRuntimeInfo autoBotRuntimeInfo;
+
+    /**
+     * 请求并发数量
+     */
+    @Getter
+    @Setter
+    private int requestConcurrentCount = 5;
+
+    /**
+     * bot信息
+     */
+    @Getter
+    private BotInfo botInfo;
+
+    @Getter
+    private BotInstance botInstance;
+
+    /**
+     * script node配置
+     */
+    @Getter
+    private ScriptNodeConfiguration scriptNodeConfiguration;
+
+    /**
+     * 配置
+     */
+    @Getter
+    private AutoBotConfig autoBotConfig;
+
+    /**
+     * 执行异步任务的线程池
+     */
+    @Getter
+    private ExecutorService executorService;
+
+    /**
+     * 状态
+     */
+    @Getter
+    private BotStatus status = BotStatus.NEW;
+
+    public AbstractAutoBot() {
+        this.networkSyncControllerMap = new ConcurrentHashMap<>();
+        this.autoBotRuntimeInfo = new AutoBotRuntimeInfo();
     }
 
-    @Override
-    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
-        if (chromeDriverUrl == null) {
-            chromeDriverUrl = (String) botConfig.getCustomConfig().get(CHROME_DRIVER_URL_KEY);
-        }
-        if (fingerBrowserApiUrl == null) {
-            fingerBrowserApiUrl = (String) botConfig.getCustomConfig().get(FINGER_BROWSER_API_URL_KEY);
-        }
-
-        openUrl = getDefaultWebSiteUrl(botConfig);
-        initBrowserDriver();
-
-        synchronized (acExecuteInfos) {
-            ACBotTypedSeleniumExecuteInfo executeInfo = buildExecuteGroupChain();
-            for (ACBotTypedSeleniumExecuteInfo acExecuteInfo : acExecuteInfos) {
-                String botKey = botConfig.getBotKey();
-                if (acExecuteInfo.getBotKey().equals(botKey)) {
-                    logger.warn(botKey + " execute info almost added...");
-                    return;
-                }
-            }
-            acExecuteInfos.add(executeInfo);
-        }
-    }
-
-    @Override
-    protected FingerBrowserBot getInstance() {
-        return this;
-    }
-
-    @BotMethod(jobType = BotJobType.ONCE_TASK, concurrentCount = BROWSER_BATCH_SIZE)
-    public void accountBrowserTask(AccountContext accountContext) {
-        int seq = Integer.parseInt((String) accountContext.getParams().get(FINGER_BROWSER_SEQ_KEY));
-
+    /**
+     * 初始化方法
+     *
+     * @param autoBotConfig autoBotConfig
+     * @throws BotInitException BotInitException
+     */
+    public final void init(
+            ScriptNodeConfiguration scriptNodeConfiguration, BotApi botApi, AutoBotConfig autoBotConfig
+    ) throws BotInitException {
         try {
-            currentWindowSeq.add(seq);
-            AccountFingerBrowserSelenium browserSelenium = accountFBSeleniumMap.compute(accountContext, (k, v) -> {
-                if (v == null) {
-                    try {
-                        v = new AccountFingerBrowserSelenium(
-                                accountContext,
-                                buildSeleniumParams(seq)
-                        );
-
-                        for (ACBotTypedSeleniumExecuteInfo acExecuteInfo : acExecuteInfos) {
-                            v.addExecuteInfo(acExecuteInfo);
-                        }
-                    } catch (IOException e) {
-                        throw new RuntimeException("create account selenium error", e);
-                    }
-                }
-                return v;
-            });
-
-            if (!browserSelenium.isRunning()) {
-                browserDriver.flexAbleWindowBounds(new ArrayList<>(currentWindowSeq));
-                browserSelenium.startACFBSelenium();
-            } else {
-                logger.warn(accountContext.getSimpleInfo() + " selenium is running...cancel new start");
-            }
-        } catch (Exception e) {
-            logger.error(accountContext.getSimpleInfo() + " - start selenium task error", e);
-        } finally {
-            currentWindowSeq.remove(seq);
+            this.logger = new AppendLogger(
+                    scriptNodeConfiguration.getScriptNodeName(),
+                    autoBotConfig.getBotName(),
+                    autoBotConfig.getBotKey()
+            );
+        } catch (IOException e) {
+            throw new BotInitException("bot logger create error", e);
         }
-    }
 
-    /**
-     * 构建selenium参数
-     *
-     * @return SeleniumParams
-     */
-    private SeleniumParams buildSeleniumParams(Integer seq) {
-        String debuggerAddress = browserDriver.startWebDriverBySeq(seq);
-
-        return SeleniumParams
-                .builder()
-                .driverPath(chromeDriverUrl)
-                .experimentalOptions(List.of(new Pair<>("debuggerAddress", debuggerAddress)))
-                .targetWebSite(openUrl)
-                .build();
-    }
-
-    /**
-     * 构建指纹浏览器driver
-     */
-    private void initBrowserDriver() {
-        if (browserDriver == null) {
-            synchronized (FingerBrowserBot.class) {
-                if (browserDriver == null) {
-                    browserDriver = switch (browserDriverType()) {
-                        case BIT_BROWSER -> new BitBrowserDriver(fingerBrowserApiUrl);
-                    };
-                }
-            }
-        }
-    }
-
-    /**
-     * 指纹浏览器类型
-     *
-     * @return BrowserDriverType
-     */
-    protected abstract BrowserDriverType browserDriverType();
-
-    /**
-     * 构建执行链
-     *
-     * @return List<ExecuteGroup>
-     */
-    protected abstract ACBotTypedSeleniumExecuteInfo buildExecuteGroupChain();
-
-    /**
-     * 获取默认打开的url
-     *
-     * @param botConfig botConfig
-     * @return String
-     */
-    private String getDefaultWebSiteUrl(AutoBotConfig botConfig) {
-        return (String) botConfig.getCustomConfig().getOrDefault(DEFAULT_WEB_SITE_URL_KEY, DEFAULT_WEB_SITE_URL);
-    }
-}
-package cn.com.vortexa.script_node.util;
-
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.classloader.DynamicJavaLoader;
-import cn.com.vortexa.script_node.anno.BotApplication;
-import cn.com.vortexa.script_node.bot.AutoLaunchBot;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.script_node.config.ScriptNodeConfiguration;
-import cn.com.vortexa.script_node.constants.BotStatus;
-import cn.com.vortexa.script_node.scriptagent.BotScriptAgent;
-import cn.com.vortexa.script_node.service.BotApi;
-import cn.com.vortexa.common.exception.BotInitException;
-import cn.com.vortexa.common.exception.BotStartException;
-import cn.com.vortexa.script_node.view.ScriptNodeCMDLineMenu;
-import cn.com.vortexa.script_node.view.commandMenu.DefaultMenuType;
-import cn.hutool.core.util.StrUtil;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
-import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Function;
-
-@Slf4j
-public class ScriptBotLauncher {
-    private static final ScriptNodeCMDLineMenu scriptNodeCMDLineMenu = new ScriptNodeCMDLineMenu(List.of(
-            DefaultMenuType.START_BOT_TASK, DefaultMenuType.LAUNCH_SCRIPT
-    ));
-    private static final ConcurrentHashMap<String, ScriptBotMetaInfo> botMetaInfoMap = new ConcurrentHashMap<>();
-    public volatile static ScriptBotLauncher INSTANCE;
-
-    private final ScriptNodeConfiguration scriptNodeConfiguration;
-    private final BotApi botApi;
-    private final BotScriptAgent botScriptAgent;
-
-    public static ScriptBotLauncher buildScriptBotLauncher(ScriptNodeConfiguration scriptNodeConfiguration, BotApi botApi, BotScriptAgent botScriptAgent) {
-        if (INSTANCE == null) {
-            synchronized (ScriptBotLauncher.class) {
-                if (INSTANCE == null) {
-                    INSTANCE = new ScriptBotLauncher(scriptNodeConfiguration, botApi, botScriptAgent);
-                }
-            }
-        }
-        return INSTANCE;
-    }
-
-    protected ScriptBotLauncher(ScriptNodeConfiguration scriptNodeConfiguration, BotApi botApi, BotScriptAgent botScriptAgent) {
         this.scriptNodeConfiguration = scriptNodeConfiguration;
         this.botApi = botApi;
-        this.botScriptAgent = botScriptAgent;
-    }
 
-    /**
-     * 加载并启动bot
-     *
-     * @param botKey botKey
-     */
-    public void loadAndLaunchBot(String botKey) {
-        AutoBotConfig botConfig = scriptNodeConfiguration.getBotKeyConfigMap().get(botKey);
-        if (botConfig == null) {
-            throw new IllegalArgumentException("no bot in script node" + botKey);
-        }
-        loadAndLaunchBot(botConfig);
-    }
-
-    /**
-     * 加载并启动bot
-     *
-     * @param botConfig botConfig
-     */
-    public void loadAndLaunchBot(AutoBotConfig botConfig) {
-        String botKey = botConfig.getBotKey();
-        ScriptBotMetaInfo rowBotMetaInfo = botMetaInfoMap.get(botKey);
-        if (rowBotMetaInfo != null) {
-            if (rowBotMetaInfo.getBot().getStatus() == BotStatus.RUNNING) {
-                throw new IllegalArgumentException(botKey + " in running..please stop it first");
-            }
+        // Step 1 参数校验
+        if (StrUtil.isBlank(autoBotConfig.getBotKey())) {
+            throw new IllegalArgumentException("bot key is empty!");
         }
 
-        log.info("[{}] start launch...", botKey);
-        String className = botConfig.getClassName();
-        if (StrUtil.isBlank(className)) {
-            throw new IllegalArgumentException(botKey + " config class name is null");
-        }
+        // Step 2 进入INIT状态，获取参数
+        updateState(BotStatus.INIT);
+        this.autoBotConfig = autoBotConfig;
         try {
-            // 加载 class
-            // 1 编译为class
-            // 2 加载class
-            Class<?> aClass = loadScriptNodeResourceClass(
-                    botConfig.getResourceDir(),
-                    className,
-                    botConfig.getExtraClassNameList(),
-                    botKey
-            );
-
-            log.info("[{}] class load success ", botKey);
-            if (isClassInInheritanceChain(aClass, AutoLaunchBot.class)) {
-                Class<AutoLaunchBot<?>> botClass = (Class<AutoLaunchBot<?>>) aClass;
-                // Step 3 启动bot
-                AutoLaunchBot<?> autoLaunchBot = launch(botClass, botConfig, bot -> {
-                    bot.setBotStatusChangeHandler((oldStatus, newStatus) -> {
-                        // 3.1 添加监听， bot状态改变时上报
-                        if (newStatus == BotStatus.RUNNING) {
-                            botScriptAgent.addRunningBot(bot.getBotInfo().getName(), botKey, bot);
-                        }
-
-                        if (newStatus == BotStatus.STOPPED || newStatus == BotStatus.SHUTDOWN) {
-                            botScriptAgent.removeRunningBot(bot.getBotInfo().getName(), botKey);
-                        }
-                    });
-                    return true;
-                });
-
-                // Step 4 添加进菜单
-                setLoadedBotInMenu(botKey, autoLaunchBot);
-            } else {
-                log.info("[{}] class[{}} illegal, must extends AutoLaunchBot.class", botKey, className);
-            }
-        } catch (BotStartException | BotInitException e) {
-            log.error("script botKey[{}] auto launch error", botKey, e);
+            // Step 2.1 获取BotInfo,解析Bot Job
+            botInfo = buildBotInfo();
+            resolveBotJobMethod();
         } catch (Exception e) {
-            log.error("script botKey[{}] auto launch error", botKey, e);
-            throw new RuntimeException("load class error", e);
-        }
-    }
-
-
-    /**
-     * 启动bot
-     *
-     * @param botClass botClass
-     * @return ApplicationContext
-     * @throws BotStartException BotStartException
-     * @throws BotInitException  BotInitException
-     */
-    public AutoLaunchBot<?> launch(
-            Class<? extends AutoLaunchBot<?>> botClass,
-            AutoBotConfig botConfig,
-            Function<AutoLaunchBot<?>, Boolean> initHandler
-    ) throws BotStartException, BotInitException {
-        String botKey = botConfig.getBotKey();
-        if (StrUtil.isBlank(botKey)) {
-            throw new BotStartException("bot key is empty");
+            throw new BotInitException("resolve bot job error", e);
         }
 
-        System.setProperty("spring.application.name", botKey);
-
-        // 解析注解上的bot name
-        BotApplication annotation = botClass.getAnnotation(BotApplication.class);
-        String botName = null;
-        if (annotation == null || StrUtil.isBlank((botName = annotation.name()))) {
-            throw new BotStartException("bot must have @BotApplication annotation and must have name");
-        }
-
-        // Step 1 创建bot实例
-        Constructor<? extends AutoLaunchBot<?>> constructor = null;
-        AutoLaunchBot<?> bot = null;
+        // Step 2.2 保存bot info
         try {
-            constructor = botClass.getConstructor();
-            bot = constructor.newInstance();
-        } catch (NoSuchMethodException | InstantiationException | IllegalAccessException |
-                 InvocationTargetException e) {
-            throw new BotInitException(e);
+            if (botApi.getBotInfoRPC().insertOrUpdateRPC(botInfo) == 1) {
+                Map<String, Object> query = new HashMap<>();
+                query.put("name", botInfo.getName());
+                // 保存成还需查询botId
+                Integer id = botApi.getBotInfoRPC().conditionQueryRPC(query).getFirst().getId();
+                botInfo.setId(id);
+                logger.info("save bot info success, id:" + botInfo.getId());
+            }
+        } catch (SQLException e) {
+            throw new BotInitException("save bot info error", e);
         }
 
-        botConfig.setBotName(botName);
-        bot.setBotName(botName);
-        bot.setBotKey(botKey);
-        botMetaInfoMap.put(botKey, new ScriptBotMetaInfo(
-                bot,
-                botConfig,
-                initHandler
-        ));
+        this.botInstance = BotInstance.builder()
+                .botId(botInfo.getId())
+                .botName(botInfo.getName())
+                .scriptNodeName(scriptNodeConfiguration.getScriptNodeName())
+                .botKey(autoBotConfig.getBotKey())
+                .build();
 
-        // Step 3 启动bot
-        launchResolvedScriptBot(botKey);
+        // Step 2.3 设置logger前缀与线程池
+        this.executorService = Executors.newThreadPerTaskExecutor(
+                new NamedThreadFactory(botInfo.getName() + "-executor"));
 
-        return bot;
-    }
+        try {
+            // Step 2.4 初始化存储的Table
+            logger.info("start init database table");
+            // 检查对应分表是否存在
+            if (!botApi.getBotAccountService()
+                    .checkAndCreateShardedTable(botInfo.getId(), getAutoBotConfig().getBotKey(), true)) {
+                throw new RuntimeException("bot account table create error");
+            }
+            logger.info("database table init finish");
 
-    /**
-     * 启动命令行菜单
-     */
-    public static void startCommandLineMenu() {
-        scriptNodeCMDLineMenu.start();
-    }
+            // Step 2.5 初始化BotInstance实例
+            logger.info("start init bot instance");
 
-    /**
-     * 添加Bot到菜单
-     *
-     * @param botKey botKey
-     */
-    public void addBotInMenu(String botKey) {
-        scriptNodeCMDLineMenu.getUsableBotKeySet().add(botKey);
-    }
+            BotInstance dbInstance = getBotApi().getBotInstanceRPC().selectOneRPC(botInstance);
 
-    /**
-     * 添加加载完成的bot到菜单
-     *
-     * @param botKey botKey
-     * @param bot    bot
-     */
-    public void setLoadedBotInMenu(String botKey, AutoLaunchBot<?> bot) {
-        scriptNodeCMDLineMenu.getLoadedBotMap().put(botKey, bot);
-    }
+            // 数据库存在bot instance实例信息并且job信息没变化，用数据库的。 否则用BotInfo信息生成BotInstance信息写入库
+            if (dbInstance != null && !compareBotJobParamsChanged(botInfo, dbInstance)) {
+                this.botInstance = dbInstance;
+                logger.info("exist botInstance, use exist instance config");
+            } else {
+                logger.info("no instance or instance job update, create it...");
 
-    private void launchResolvedScriptBot(String botKey) throws BotStartException, BotInitException {
-        ScriptBotMetaInfo scriptBotMetaInfo = botMetaInfoMap.get(botKey);
-        if (scriptBotMetaInfo == null) {
-            throw new BotStartException(botKey + " didn't resolved by ScriptBotLauncher, place invoke ScriptBotLauncher.launch(...) first");
+                String tableName = getBotApi().getTableShardStrategy().generateTableName(
+                        BOT_ACCOUNT_CONTEXT_TABLE_PREFIX,
+                        new Object[]{botInstance.getBotId(), botInstance.getBotKey()}
+                );
+                botInstance.setBotName(botInfo.getName());
+                botInstance.setAccountTableName(tableName);
+                botInstance.setJobParams(botInfo.getJobParams());
+                botInstance.setParams(botInfo.getParams());
+
+                if (botApi.getBotInstanceRPC().insertOrUpdateRPC(botInstance) > 0) {
+                    logger.info("new bot instance create success");
+                } else {
+                    throw new BotInitException("new bot instance create error");
+                }
+            }
+
+            // Step 2.5 子类初始化
+            doInit();
+
+            // Step 2。6 更新状态
+            updateState(BotStatus.INIT_FINISH);
+        } catch (Exception e) {
+            logger.error("init error", e);
+            updateState(BotStatus.INIT_ERROR);
         }
+    }
 
-        log.info("bot[{}] start launch", botKey);
-        scriptBotMetaInfo.getBot().launch(
-                scriptNodeConfiguration,
-                scriptBotMetaInfo.botConfig,
-                botApi,
-                scriptBotMetaInfo.initHandler
+    /**
+     * 初始化方法
+     */
+    protected abstract void doInit() throws BotInitException;
+
+    /**
+     * 停止Bot
+     */
+    public void stop() {
+        updateState(BotStatus.STOPPING);
+        try {
+            networkSyncControllerMap.clear();
+            doStop();
+            updateState(BotStatus.STOPPED);
+        } catch (Exception e) {
+            logger.error("stop bot error, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+            updateState(BotStatus.SHUTDOWN);
+        }
+    }
+
+    protected abstract void doStop();
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<String> response str
+     */
+    public CompletableFuture<String> syncRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body
+    ) {
+        return syncRequest(proxy, url, method, headers, params, body, 1);
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<String> response str
+     */
+    public CompletableFuture<String> syncRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            int retryTimes
+    ) {
+        return syncRequest(proxy, url, method, headers, params, body, null, retryTimes);
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<Response> String
+     */
+    public CompletableFuture<JSONObject> syncJSONRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            Supplier<String> requestStart
+    ) {
+        return syncRequest(
+                proxy,
+                url,
+                method,
+                headers,
+                params,
+                body,
+                requestStart,
+                1
+        ).thenApply(responseStr -> {
+            if (responseStr == null) return null;
+            return JSONObject.parseObject(responseStr);
+        });
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<Response> String
+     */
+    public CompletableFuture<String> syncRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            Supplier<String> requestStart
+    ) {
+        return syncRequest(
+                proxy,
+                url,
+                method,
+                headers,
+                params,
+                body,
+                requestStart,
+                1
         );
     }
 
     /**
-     * 加载script bot的class文件
+     * 同步请求，使用syncController控制并发
      *
-     * @param sourceDir sourceDir
-     * @param className className
-     * @return 已加载的BotClass文件
-     * @throws Exception Exception
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<Response> String
      */
-    private static Class<?> loadScriptNodeResourceClass(
-            String sourceDir, String className, List<String> extraClassName, String botKey
-    ) throws Exception {
-        String classOutputDir = FileUtil.getCompileClassResource(botKey);
-        if (!DynamicJavaLoader.compileJavaDir(sourceDir, classOutputDir)) {
-            throw new RuntimeException(sourceDir + " compile to class error");
-        }
-        log.info("{} compile finish, start output dir {}", sourceDir, classOutputDir);
-        return DynamicJavaLoader.loadClassFromDir(classOutputDir, className, extraClassName);
+    public CompletableFuture<String> syncRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            Supplier<String> requestStart,
+            int retryTimes
+    ) {
+        return syncCCHandler(proxy, requestStart, () -> {
+            try {
+                return RestApiClientFactory.getClient(proxy).request(
+                        url,
+                        method,
+                        headers,
+                        params,
+                        body,
+                        retryTimes
+                ).get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+        });
     }
 
-    public static boolean isClassInInheritanceChain(Class<?> subclass, Class<?> superclass) {
-        Class<?> currentClass = subclass;
-        while (currentClass != null) {
-            if (currentClass.equals(superclass)) {
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<Response> String
+     */
+    public CompletableFuture<List<String>> syncStreamRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            Supplier<String> requestStart
+    ) {
+        return syncCCHandler(proxy, requestStart, () -> {
+            try {
+                return RestApiClientFactory.getClient(proxy).streamRequest(
+                        url,
+                        method,
+                        headers,
+                        params,
+                        body
+                ).get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    public <R> CompletableFuture<R> syncCCHandler(
+            ProxyInfo proxy,
+            Supplier<String> requestStart,
+            Supplier<R> request
+    ) {
+
+        Semaphore networkController = networkSyncControllerMap
+                .compute(proxy == null ? DEFAULT_PROXY : proxy, (k, v) -> {
+                    if (v == null) {
+                        v = new Semaphore(requestConcurrentCount);
+                    }
+                    return v;
+                });
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                networkController.acquire();
+                // 随机延迟
+                TimeUnit.MILLISECONDS.sleep(RandomUtil.randomLong(1000, 3000));
+
+                String str = "start network request";
+                if (requestStart != null) {
+                    str = requestStart.get();
+                }
+                logger.debug("同步器允许发送请求 - " + str);
+
+                return request.get();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            } finally {
+                networkController.release();
+            }
+        }, executorService);
+    }
+
+    /**
+     * 打印BotRuntimeInfo
+     *
+     * @return string
+     */
+    public String printBotRuntimeInfo() {
+        StringBuilder sb = new StringBuilder();
+        getAutoBotRuntimeInfo().getKeyValueInfoMap().forEach((k, v) -> {
+            sb.append(k).append(": ").append(v).append("\n");
+        });
+        return sb.toString();
+    }
+
+    /**
+     * 获取app的配置目录
+     *
+     * @return String
+     */
+    public String getAppConfigDir() {
+        return FileUtil.getAppResourceAppConfigDir() + File.separator + getBotInstance().getBotKey();
+    }
+
+    /**
+     * 更新BotStatus
+     *
+     * @param newStatus 新状态
+     */
+    public synchronized void updateState(BotStatus newStatus) throws BotStatusException {
+
+        boolean b = switch (status) {
+            //当前为NEW，新状态才能为NEW,SHUTDOWN
+            case NOT_LOADED -> BotStatus.NEW.equals(newStatus);
+            case NEW -> BotStatus.INIT.equals(newStatus);
+            //当前为INIT，新状态只能为INIT_FINISH、INIT_ERROR,SHUTDOWN
+            case INIT -> newStatus.equals(BotStatus.INIT_FINISH)
+                    || newStatus.equals(BotStatus.INIT_ERROR);
+            //当前为INIT_ERROR,新状态只能为ACCOUNT_LOADING, SHUTDOWN
+            case INIT_ERROR -> newStatus.equals(BotStatus.INIT);
+            //当前状态为INIT_FINISH，新状态只能为ACCOUNT_LIST_CONNECT, SHUTDOWN
+            case INIT_FINISH -> newStatus.equals(BotStatus.STARTING);
+            //当前状态为STARING，新状态只能为RUNNING,SHUTDOWN
+            case STARTING -> newStatus.equals(BotStatus.RUNNING);
+            //RUNNING，新状态只能为 SHUTDOWN
+            case RUNNING -> newStatus.equals(BotStatus.STOPPING);
+            case STOPPING -> newStatus.equals(BotStatus.STOPPED) || newStatus.equals(BotStatus.SHUTDOWN);
+            case STOPPED -> newStatus.equals(BotStatus.INIT);
+            case SHUTDOWN -> throw new BotStatusException("bot already shutdown");
+        };
+
+        if (b) {
+            logger.debug("Status change [%s] => [%s]".formatted(status, newStatus));
+            this.status = newStatus;
+        } else {
+            throw new BotStatusException(
+                    String.format("%s status can't from[%s] -> to[%s]", runtimeBotName(), status, newStatus));
+        }
+    }
+
+    public String runtimeBotName() {
+        return "Bot[%s]-[%s]".formatted(botInstance.getBotName(), autoBotConfig.getBotKey());
+    }
+
+    public String getScriptNodeName() {
+        return scriptNodeConfiguration.getScriptNodeName();
+    }
+
+    protected synchronized Map<String, AutoBotJobParam> getJobParams() {
+        return this.botInstance == null ? new HashMap<>() : this.botInstance.getJobParams();
+    }
+
+    protected synchronized AutoBotJobParam getJobParam(String jobName) {
+        return this.botInfo.getJobParams() == null ? null : this.botInfo.getJobParams().get(jobName);
+    }
+
+    protected synchronized void setJobParam(String jobKey, AutoBotJobParam jobParam) {
+        this.botInfo.getJobParams().put(jobKey, jobParam);
+    }
+
+    protected synchronized void addBasicJob(BotJobType jobType) {
+        if (this.botInfo.getParams() == null) {
+            this.botInfo.setParams(new HashMap<>());
+        }
+
+        this.botInfo.getParams().compute(BASIC_JOB_LIST_KEY, (k, v) -> {
+            if (v == null) {
+                v = new HashSet<String>();
+            }
+            if (v instanceof JSONArray t) {
+                v = new HashSet<String>();
+                for (int i = 0; i < t.size(); i++) {
+                    ((HashSet<String>) v).add(t.getString(i));
+                }
+            }
+            Set<String> set = (HashSet<String>) v;
+            set.add(jobType.name());
+            return v;
+        });
+    }
+
+    protected abstract BotInfo buildBotInfo() throws BotInitException;
+
+    protected abstract void resolveBotJobMethod();
+
+    /**
+     * 比较botInfo 和 BotInstance是否发生变化
+     *
+     * @param botInfo    botInfo
+     * @param dbInstance dbInstance
+     * @return boolean
+     */
+    private boolean compareBotJobParamsChanged(BotInfo botInfo, BotInstance dbInstance) {
+        Map<String, AutoBotJobParam> botJobParam = botInfo.getJobParams();
+        Map<String, AutoBotJobParam> botInstanceParam = dbInstance.getJobParams();
+
+        // rpc map序列化范型丢失处理
+        Map<String, AutoBotJobParam> jobParams = dbInstance.getJobParams();
+        if (jobParams != null) {
+            for (String key : jobParams.keySet()) {
+                Object param = jobParams.get(key);
+                if (param instanceof JSONObject jb) {
+                    jobParams.put(key, JSONObject.parseObject(JSONObject.toJSONString(jb), AutoBotJobParam.class));
+                }
+            }
+        }
+
+        if (botJobParam.size() != botInstanceParam.size()) return true;
+
+        if (!botJobParam.keySet().containsAll(botInstanceParam.keySet())) {
+            return true;
+        }
+
+        for (Map.Entry<String, AutoBotJobParam> entry : botJobParam.entrySet()) {
+            String jobName = entry.getKey();
+            AutoBotJobParam param = entry.getValue();
+            AutoBotJobParam instanceParam = botInstanceParam.get(jobName);
+
+            if (param.getParams() == null) {
+                param.setParams(new HashMap<>());
+            }
+            if (!param.equals(instanceParam)) {
                 return true;
             }
-            currentClass = currentClass.getSuperclass();
         }
         return false;
     }
-
-    /**
-     * 获取bot状态
-     *
-     * @param botKey botKey
-     * @return BotStatus
-     */
-    public BotStatus getBotStatus(String botKey) {
-        ScriptBotMetaInfo botMetaInfo = botMetaInfoMap.get(botKey);
-        if (botMetaInfo == null) {
-            return BotStatus.NOT_LOADED;
-        }
-        return botMetaInfo.getBot().getStatus();
-    }
-
-    /**
-     * 根据botKey 获取bot
-     *
-     * @param botKey botKey
-     * @return AutoLaunchBot
-     */
-    public AutoLaunchBot<?> getBotByBotKey(String botKey) {
-        ScriptBotMetaInfo botMetaInfo = botMetaInfoMap.get(botKey);
-        return botMetaInfo == null ? null : botMetaInfo.getBot();
-    }
-
-    @Data
-    @AllArgsConstructor
-    @NoArgsConstructor
-    public static class ScriptBotMetaInfo {
-        private AutoLaunchBot<?> bot;
-        private AutoBotConfig botConfig;
-        Function<AutoLaunchBot<?>, Boolean> initHandler;
-    }
 }
-package cn.com.vortexa.browser_control;
 
-import cn.com.vortexa.browser_control.dto.SeleniumParams;
-import cn.com.vortexa.browser_control.dto.SeleniumProxy;
-import cn.com.vortexa.browser_control.execute.ExecuteGroup;
-import cn.com.vortexa.browser_control.execute.ExecuteLogic;
-import cn.com.vortexa.browser_control.util.SeleniumProxyAuth;
-import cn.com.vortexa.browser_control.util.SeleniumUtil;
-import cn.hutool.core.lang.Pair;
+package cn.com.vortexa.script_agent;
+
+import cn.com.vortexa.script_agent.config.ScriptAgentConfig;
+import cn.com.vortexa.control.constant.*;
+import cn.com.vortexa.script_agent.dto.RemoteControlServerStatus;
+import cn.com.vortexa.control.dto.RemotingCommand;
+import cn.com.vortexa.common.dto.control.ServiceInstance;
+import cn.com.vortexa.control.exception.CustomCommandException;
+import cn.com.vortexa.control.handler.CustomRequestHandler;
+import cn.com.vortexa.control.processor.CustomCommandProcessor;
+import cn.com.vortexa.script_agent.processor.ScriptAgentProcessorAdaptor;
+import cn.com.vortexa.common.util.protocol.Serializer;
+import cn.com.vortexa.script_agent.service.ScriptAgentMetricsUploadService;
+import cn.com.vortexa.control.util.DistributeIdMaker;
+import cn.com.vortexa.control.util.RemotingCommandDecoder;
+import cn.com.vortexa.control.util.RemotingCommandEncoder;
+import cn.com.vortexa.websocket.netty.base.AbstractWebsocketClient;
+import cn.com.vortexa.websocket.netty.base.AutoConnectWSService;
+import cn.com.vortexa.websocket.netty.constants.NettyConstants;
 import cn.hutool.core.util.StrUtil;
+import io.netty.channel.*;
+import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
+import io.netty.handler.codec.LengthFieldPrepender;
+import io.netty.handler.timeout.IdleStateHandler;
 import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
-import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.WebDriverException;
-import org.openqa.selenium.WindowType;
-import org.openqa.selenium.chrome.ChromeDriver;
-import org.openqa.selenium.chrome.ChromeOptions;
 
-import java.io.File;
-import java.io.IOException;
-import java.time.Duration;
-import java.util.*;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.io.Serializable;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
-
+/**
+ * @author helei
+ * @since 2025-03-13
+ */
 @Slf4j
 @Getter
-public abstract class SeleniumInstance implements SeleniumOperate {
+public class ScriptAgent extends AbstractWebsocketClient<RemotingCommand> {
 
-    private final SeleniumParams params;
-
-    private final ChromeOptions chromeOptions;
-
-    private final SeleniumProxy proxy;
-
-    private final List<ExecuteGroup> seleniumExecuteChain = new ArrayList<>();
-
-    private final Random random = new Random();
-
-    private final String instanceId;
-
-    private WebDriver webDriver;
-
-    private String targetHandle;
+    private final ScriptAgentConfig clientConfig;  // 配置
+    private final ServiceInstance serviceInstance;
+    private final RemoteControlServerStatus remoteStatus; // 远程服务命名中心状态
+    private final CustomCommandProcessor customCommandProcessor;    // 自定义命令处理器
+    private final ScriptAgentMetricsUploadService metricsUploadService; // 指标上传服务
+    private final Map<Integer, BiFunction<Channel, RemotingCommand, RemotingCommand>> customRemotingCommandHandlerMap = new HashMap<>();
 
     @Setter
-    private boolean autoClose = true;
-
+    private Supplier<Serializable> registryBodySetter = null; // 注册时的body
     @Setter
-    private Consumer<Long> finishHandler;
+    private Consumer<RemotingCommand> afterRegistryHandler = null;  // 注册成功后回调
 
-    public SeleniumInstance(
-            String instanceId,
-            SeleniumParams params
-    ) throws IOException {
-        this(instanceId, null, params);
+    public ScriptAgent(ScriptAgentConfig clientConfig) {
+        this(clientConfig, new ScriptAgentProcessorAdaptor(clientConfig));
+        // 设置无需重连
+        super.setReconnectLimit(AutoConnectWSService.UN_LIMIT_RECONNECT_MARK);
     }
 
-    public SeleniumInstance(
-            String instanceId,
-            SeleniumProxy proxy,
-            SeleniumParams params
-    ) throws IOException {
-        this.instanceId = instanceId;
-        if (instanceId == null || instanceId.isEmpty()) throw new IllegalArgumentException("instanceId is empty");
-        this.params = params;
-        this.proxy = proxy;
-        this.chromeOptions = initChromeOption(proxy, params);
+    public ScriptAgent(ScriptAgentConfig clientConfig, ScriptAgentProcessorAdaptor scriptAgentProcessorAdaptor) {
+        super(clientConfig.getRegistryCenterUrl(), clientConfig.getServiceInstance().toString(),
+                scriptAgentProcessorAdaptor);
+        super.setHandshake(false);
+        this.clientConfig = clientConfig;
+        this.serviceInstance = clientConfig.getServiceInstance();
+        super.setName(this.serviceInstance.toString());
+        this.remoteStatus = new RemoteControlServerStatus();
+        this.customCommandProcessor = new CustomCommandProcessor();
+
+        this.metricsUploadService = new ScriptAgentMetricsUploadService(this, this.getCallbackInvoker());
+        ((ScriptAgentProcessorAdaptor) getHandler()).setScriptAgent(this);
     }
 
-    public abstract void init();
-
-    public abstract void webDriverLaunched();
-
-    /**
-     * 添加执行方法
-     *
-     * @param executeGroup executeGroup
-     * @return SeleniumInstance
-     */
-    public SeleniumInstance addExecuteFun(ExecuteGroup executeGroup) {
-        this.seleniumExecuteChain.add(executeGroup);
-        return this;
+    @Override
+    protected void afterBoostrapConnected(Channel channel) {
+        // 每次连接成功，都发送注册消息
+        channel.attr(NettyConstants.CLIENT_NAME).set(getName());
+        sendRegistryCommand();
     }
 
-    /**
-     * 同步启动selenium
-     */
-    public void syncStart() throws InterruptedException {
-        CountDownLatch latch = new CountDownLatch(1);
+    @Override
+    public void addPipeline(ChannelPipeline p) {
+        p.addLast(new IdleStateHandler(0,
+                0, clientConfig.getServiceOfflineTtl()));
 
-        if (finishHandler == null) {
-            setFinishHandler(cost -> {
-                latch.countDown();
-            });
+        p.addLast(new LengthFieldBasedFrameDecoder(WSControlSystemConstants.MAX_FRAME_LENGTH,
+                0, 4, 0, 4));
+        p.addLast(new LengthFieldPrepender(4));
+
+        p.addLast(new RemotingCommandDecoder());
+        p.addLast(new RemotingCommandEncoder());
+        p.addLast(getHandler());
+    }
+
+    @Override
+    protected void doSendMessage(RemotingCommand message, boolean b) {
+        log.debug("send message to nameserver: {}", message);
+
+        ServiceInstance serviceInstance = clientConfig.getServiceInstance();
+
+        if (b && StrUtil.isBlank(message.getTransactionId())) {
+            message.setTransactionId(nextTxId());
+        }
+
+        message.setGroup(serviceInstance.getGroupId());
+        message.setServiceId(serviceInstance.getServiceId());
+        message.setInstanceId(serviceInstance.getInstanceId());
+
+        Channel channel;
+        if ((channel = getChannel()) != null) {
+            channel.writeAndFlush(message);
         } else {
-            Consumer<Long> fh = getFinishHandler();
-            setFinishHandler(cost -> {
-                fh.accept(cost);
-                latch.countDown();
-            });
-        }
-
-        asyncStart();
-        latch.await();
-    }
-
-
-    /**
-     * 异步启动selenium
-     */
-    public void asyncStart() {
-        init();
-
-        long start = System.currentTimeMillis();
-        try {
-            // Step 1 设置driver
-            String driverPath = params.getDriverPath();
-            if (driverPath != null && !driverPath.isEmpty()) {
-                System.setProperty("webdriver.chrome.driver", driverPath);
-            }
-
-            // Step 2 启动浏览器
-            launchBrowser();
-
-            webDriverLaunched();
-
-            // Step 3 遍历execute chain 执行
-            executeChainInvoke();
-        } catch (Exception e) {
-            log.error("selenium instance invoke error", e);
-        } finally {
-            if (finishHandler != null) {
-                finishHandler.accept(System.currentTimeMillis() - start);
-            }
+            throw new RuntimeException("channel is null");
         }
     }
 
     /**
-     * 调用执行链
-     *
-     * @throws InterruptedException InterruptedException
+     * 发送服务注册命令
      */
-    protected void executeChainInvoke() throws InterruptedException {
-        for (ExecuteGroup executeGroup : seleniumExecuteChain) {
-            String groupName = executeGroup.getName();
+    public void sendRegistryCommand() {
+        RemotingCommand remotingCommand = newRequestCommand(RemotingCommandFlagConstants.CLIENT_REGISTRY_SERVICE);
+        Serializable body = null;
+        if (registryBodySetter != null) {
+            body = registryBodySetter.get();
+        }
+        remotingCommand.setObjBody(body);
 
-            log.info("[{}]-[{}] group start execute", instanceId, groupName);
+        sendRequest(remotingCommand).whenComplete((response, throwable) -> {
+            if (throwable != null) {
+                log.error("{} -> [{}] channel active error",
+                        clientConfig.getServiceInstance(), clientConfig.getRegistryCenterUrl(), throwable);
+            }
 
-            // Step 3.1 判断该组操作是否能够进入
-            Boolean isEnter = executeGroup.getEnterCondition().apply(webDriver, this);
-            if (isEnter != null && isEnter) {
-                // Step 3.1.1 能够进入，开始执行group的逻辑
-                log.info("[{}]-[{}] group can execute", instanceId, groupName);
-                executeGroup.getExecuteItems().forEach(item -> {
-                    // Step 3.1.1.1 带重试
-                    Integer retryTimes = item.getRetryTimes() == null ? 1 : item.getRetryTimes();
-                    for (int j = 0; j < retryTimes; j++) {
-                        try {
-                            log.info("[{}]-[{}]-[{}] start invoke logic [{}/{}]",
-                                    instanceId, groupName, item.getName(), j, retryTimes);
-                            ExecuteLogic executeLogic = item.getExecuteLogic();
+            // 注册成功
+            if (response.getCode() == RemotingCommandCodeConstants.SUCCESS) {
+                log.info("{} client registry success", clientConfig.getServiceInstance());
+                if (afterRegistryHandler != null) {
+                    afterRegistryHandler.accept(response);
+                }
 
-                            if (executeLogic != null) {
-                                executeLogic.execute(webDriver, this);
-                            }
-                            // Step 3。1.1.2 运行成功，return下一个item执行
-                            return;
-                        } catch (Exception e) {
-                            // Step 3.1.1.3 运行失败，调用重试Rest方法后，继续执行
-                            log.error("[{}]-[{}]-[{}] invoke logic error, retry {}", instanceId, groupName, item.getName(), j, e);
+                ServiceInstance nameserviceInstance = Serializer.Algorithm.Protostuff
+                        .deserialize(response.getBody(), ServiceInstance.class);
 
-                            ExecuteLogic resetLogic = item.getResetLogic();
-                            if (resetLogic != null) {
-                                resetLogic.execute(webDriver, this);
-                            }
-                        }
-                    }
-                    // Step 3.1.1.4 超过次数抛出异常
-                    throw new RuntimeException("[%S]-[%s]-[%s] invoke logic error, out of limit %s"
-                            .formatted(instanceId, groupName, item.getName(), retryTimes));
-                });
+                remoteStatus.setNameserverInstance(nameserviceInstance);
             } else {
-                // Step 3.1.2 不能进入执行
-                log.warn("[{}]-[{}] group can not execute", instanceId, groupName);
+                // 注册失败
+                log.error("{} client registry failed, response: {}", clientConfig.getServiceInstance(), response);
+                close();
             }
 
-            // Step 3.2 group 操作执行完，sleep一段时间
-            int timeout = random.nextInt(500, 5000);
-            log.info("[{}]-[{}] execute finish, sleep [{}]ms", instanceId, groupName, timeout);
-            TimeUnit.MILLISECONDS.sleep(timeout);
-        }
+            remoteStatus.setLastUpdateTimestamp(System.currentTimeMillis());
+            remoteStatus.setControlServerState(ControlServerState.valueOf(
+                    response.getExtFieldsValue(ExtFieldsConstants.NAMESERVER_STATUS)
+            ));
+        });
     }
 
     /**
-     * 创建web driver
+     * 添加自定义命令处理器,flag为CUSTOM_COMMAND，参数的commandFlag是放RemotingCommand的extFields里的
      *
-     * @param chromeOptions chromeOptions
-     * @return WebDriver
+     * @param commandFlag          commandFlag 命令标识
+     * @param customRequestHandler customRequestHandler    处理器
      */
-    protected WebDriver createWebDriver(ChromeOptions chromeOptions) {
-        ChromeDriver chromeDriver = new ChromeDriver(chromeOptions);
-        log.info("chrome browser started, start execute chain");
+    public void addCustomCommandHandler(String commandFlag, CustomRequestHandler customRequestHandler)
+            throws CustomCommandException {
+        customCommandProcessor.addCustomCommandHandler(commandFlag, customRequestHandler);
+    }
+
+    /**
+     * 添加自定义远程命令处理器
+     * 与addCustomCommandHandler(String commandFlag, CustomRequestHandler customRequestHandler)不同的是，
+     * 这个注册的RemotingCommand 的flag为 commandFlag
+     *
+     * @param commandFlag commandFlag
+     * @param handler     handler
+     */
+    public void addCustomRemotingCommandHandler(
+            Integer commandFlag,
+            BiFunction<Channel, RemotingCommand, RemotingCommand> handler
+    ) {
+        customRemotingCommandHandlerMap.put(commandFlag, handler);
+    }
+
+    /**
+     * 处理自定义请求
+     *
+     * @param remotingCommand request
+     * @return response
+     */
+    public RemotingCommand tryResolveCustomRequest(RemotingCommand remotingCommand) {
+        RemotingCommand response = null;
         try {
-            TimeUnit.SECONDS.sleep(5);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+            response = customCommandProcessor.tryInvokeCustomCommandHandler(getChannel(), remotingCommand);
+        } catch (Exception e) {
+            log.error("custom request[{}] execute error, ", remotingCommand, e);
+            response = new RemotingCommand();
+            response.setTransactionId(remotingCommand.getTransactionId());
+            response.setCode(RemotingCommandCodeConstants.FAIL);
+            response.setBody(
+                    Serializer.Algorithm.Protostuff.serialize(e)
+            );
         }
-        return chromeDriver;
+        return response;
     }
 
     /**
-     * 启动浏览器
+     * 构建命令
      *
-     * @throws IOException IOException
+     * @param commandFlag commandFlag
+     * @return RemotingCommand
      */
-    private void launchBrowser() throws IOException {
-        log.info("starting chrome browser [{}}", instanceId);
-        this.webDriver = createWebDriver(chromeOptions);
-        this.webDriver.manage().timeouts().implicitlyWait(Duration.ofSeconds(1));
-
-        // Step 2.2 设置代理
-        setProxyAuth();
-
-        // Step 2.3 进入目标页面
-        // 打开初始页面
-        Set<String> windowHandles = webDriver.getWindowHandles();
-        for (String windowHandle : windowHandles) {
-            webDriver.switchTo().window(windowHandle);
-            String title = null;
-            try {
-                // 打开新的标签页并自动切换到这个 tab
-                webDriver.switchTo().newWindow(WindowType.TAB);
-                title = webDriver.getTitle();
-                // 跳转到目标网址
-                webDriver.get(params.getTargetWebSite());
-                targetHandle = webDriver.getWindowHandle();
-                TimeUnit.SECONDS.sleep(5);
-                break;
-            } catch (WebDriverException e) {
-                webDriver.close();
-            } catch (Exception e) {
-                log.warn("{} cannot open tab, try next", title);
-            }
-        }
-    }
-
-    private void setProxyAuth() {
-
+    public RemotingCommand newRequestCommand(int commandFlag) {
+        return newRequestCommand(commandFlag, true);
     }
 
     /**
-     * 初始化参数
+     * 构建命令
      *
-     * @param proxy  proxy
-     * @param params params
-     * @return ChromeOptions
-     * @throws IOException IOException
+     * @param commandFlag commandFlag
+     * @return RemotingCommand
      */
-    private ChromeOptions initChromeOption(SeleniumProxy proxy, SeleniumParams params) throws IOException {
-        final ChromeOptions chromeOptions = new ChromeOptions();
-        addDefaultChromeOptions(chromeOptions);
+    public RemotingCommand newRequestCommand(int commandFlag, boolean needTxId) {
+        RemotingCommand command = new RemotingCommand();
+        command.setGroup(serviceInstance.getGroupId());
+        command.setServiceId(serviceInstance.getServiceId());
+        command.setInstanceId(serviceInstance.getInstanceId());
+        command.setTransactionId(needTxId ? nextTxId() : null);
 
-        if (params.getChromeOptions() != null) {
-            params.getChromeOptions().forEach(chromeOptions::addArguments);
-        }
-        if (params.getExperimentalOptions() != null) {
-            for (Pair<String, String> pair : params.getExperimentalOptions()) {
-                chromeOptions.setExperimentalOption(pair.getKey(), pair.getValue());
-            }
-        }
-        if (params.getExtensionPaths() != null) {
-            chromeOptions.addExtensions(params.getExtensionPaths().stream().map(File::new).toList());
-        }
-        if (proxy != null) {
-            chromeOptions.addExtensions(new File(SeleniumProxyAuth.createProxyAuthExtension(proxy)));
-        }
-        return chromeOptions;
+        command.setFlag(commandFlag);
+        return command;
     }
 
-    protected void addDefaultChromeOptions(ChromeOptions chromeOptions) {
-        // 设置用户数据目录
-        chromeOptions.addArguments("user-data-dir=" + SeleniumUtil.getUserDataDir(instanceId));
-        // 设置代理
-        chromeOptions.addArguments("--disable-gpu");
-        chromeOptions.addArguments("--remote-allow-origins=*");
-        chromeOptions.addArguments("--no-default-browser-check");
-        chromeOptions.addArguments("--disable-popup-blocking");
-        chromeOptions.addArguments("--disable-infobars");
-        chromeOptions.addArguments("---no-sandbox");
-
-        chromeOptions.addArguments("--disable-blink-features=AutomationControlled");  // 禁用自动化检测
-        chromeOptions.addArguments("--start-maximized");
-        chromeOptions.setExperimentalOption("useAutomationExtension", false);
-        chromeOptions.setExperimentalOption("excludeSwitches", new String[]{"enable-automation"});
-    }
-
-    public void close() {
-        if (StrUtil.isNotBlank(targetHandle)) {
-            try {
-                doClose();
-                webDriver.switchTo().window(targetHandle);
-                webDriver.close();
-                seleniumExecuteChain.clear();
-                webDriver = null;
-            } catch (Exception e) {
-                log.error("{} close exception", instanceId, e);
-            }
-        }
-    }
-
-    protected void doClose() {
-
+    /**
+     * 获取下一个事务id
+     *
+     * @return String
+     */
+    public String nextTxId() {
+        return DistributeIdMaker.DEFAULT.nextId(getName());
     }
 }
