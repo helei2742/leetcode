@@ -1,485 +1,883 @@
-package cn.com.vortexa.script_node.websocket;
+package cn.com.vortexa.script_node.scriptagent;
 
-import cn.com.vortexa.script_node.bot.AnnoDriveAutoBot;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.job.AutoBotJobParam;
-import cn.com.vortexa.common.dto.job.AutoBotJobWSParam;
-import cn.com.vortexa.common.entity.AccountContext;
-import cn.com.vortexa.common.util.NamedThreadFactory;
-import cn.com.vortexa.websocket.netty.constants.WebsocketClientStatus;
+import cn.com.vortexa.common.constants.BotExtFieldConstants;
+import cn.com.vortexa.common.constants.BotRemotingCommandFlagConstants;
+import cn.com.vortexa.common.dto.BotACJobResult;
+import cn.com.vortexa.common.dto.control.ServiceInstance;
+import cn.com.vortexa.common.entity.ScriptNode;
+import cn.com.vortexa.script_agent.ScriptAgent;
+import cn.com.vortexa.script_agent.config.ScriptAgentConfig;
+import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
+import cn.com.vortexa.control.dto.RPCArgsWrapper;
+import cn.com.vortexa.control.dto.RPCServiceInfo;
+import cn.com.vortexa.control.dto.RemotingCommand;
+import cn.com.vortexa.control.dto.RequestHandleResult;
+import cn.com.vortexa.control.exception.CustomCommandException;
+import cn.com.vortexa.control.exception.CustomCommandInvokeException;
+import cn.com.vortexa.common.util.protocol.Serializer;
+import cn.com.vortexa.control.util.ControlServerUtil;
+import cn.com.vortexa.control.util.RPCMethodUtil;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.script_node.config.ScriptNodeConfiguration;
+import cn.hutool.core.util.BooleanUtil;
 import lombok.extern.slf4j.Slf4j;
-import org.jetbrains.annotations.NotNull;
 
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.net.URISyntaxException;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import javax.net.ssl.SSLException;
+
+/**
+ * @author helei
+ * @since 2025/3/26 16:56
+ */
+@Slf4j
+public class BotScriptAgent extends ScriptAgent {
+
+    private final AtomicInteger initCount = new AtomicInteger(0);   // 启动次数
+    private final BotScriptAgentLogUploadService logUploadService = new BotScriptAgentLogUploadService(this);  // 日志上传服务
+    private final Map<String, BotInstanceMetaInfo> runningBotMap = new HashMap<>(); // key map bot
+    private final String scriptNodeName;
+    private final List<RPCServiceInfo<?>> rpcServiceInfos;  // RPC方法信息
+
+    public BotScriptAgent(
+            ScriptAgentConfig clientConfig,
+            ScriptNodeConfiguration scriptNodeConfiguration,
+            List<RPCServiceInfo<?>> rpcServiceInfos
+    ) {
+        super(clientConfig);
+        super.setName(clientConfig.getServiceInstance().toString());
+        super.setRegistryBodySetter(() -> {
+            ServiceInstance serviceInstance = clientConfig.getServiceInstance();
+
+            ScriptNode scriptNode = ScriptNode.generateFromServiceInstance(serviceInstance);
+            scriptNode.setScriptNodeName(scriptNodeConfiguration.getScriptNodeName());
+            // scriptNode.setBotConfigMap(scriptNodeConfiguration.getBotNameMetaInfoMap());
+
+            return scriptNode;
+        });
+
+        this.scriptNodeName = scriptNodeConfiguration.getScriptNodeName();
+        this.rpcServiceInfos = rpcServiceInfos;
+    }
+
+    @Override
+    protected void init() throws SSLException, URISyntaxException {
+        super.init();
+
+        if (initCount.getAndIncrement() > 0) {
+            return;
+        }
+
+        // Step 1 RPC命令处理
+        if (initRPCMethod()) return;
+
+        // Step 2 其它命令处理
+        customCommandInit();
+    }
+
+    /**
+     * 初始化自定义命令
+     */
+    private void customCommandInit() {
+        addCustomRemotingCommandHandler(
+                BotRemotingCommandFlagConstants.START_UP_BOT_LOG,
+                logUploadService::startUploadLogRCHandler
+        );
+        addCustomRemotingCommandHandler(
+                BotRemotingCommandFlagConstants.STOP_UP_BOT_LOG,
+                logUploadService::stopUploadLogRCHandler
+        );
+        addCustomRemotingCommandHandler(
+                BotRemotingCommandFlagConstants.START_BOT_JOB,
+                (channel, remotingCommand) -> startOrParsedBotJob(remotingCommand)
+        );
+    }
+
+    /**
+     * 初始化rpc方法
+     *
+     * @return 是否初始化成功
+     */
+    private boolean initRPCMethod() {
+        if (rpcServiceInfos == null) {
+            return true;
+        }
+        log.info("start registry rpc services");
+        for (RPCServiceInfo<?> rpcServiceInfo : rpcServiceInfos) {
+            Class<?> interfaces = rpcServiceInfo.getInterfaces();
+            Object ref = rpcServiceInfo.getRef();
+
+            for (Method method : interfaces.getDeclaredMethods()) {
+                method.setAccessible(true);
+                String key = RPCMethodUtil.buildRpcMethodKey(interfaces.getName(), method);
+
+                try {
+                    super.addCustomCommandHandler(key, request -> {
+                        RequestHandleResult result = new RequestHandleResult();
+
+                        log.debug("invoke rpc method[{}]", method.getName());
+                        try {
+                            byte[] body = request.getBody();
+                            RPCArgsWrapper params = Serializer.Algorithm.JDK.deserialize(body, RPCArgsWrapper.class);
+                            result.setData(method.invoke(ref, params.getArgs()));
+                            result.setSuccess(true);
+                            return result;
+                        } catch (Exception e) {
+                            log.error("invoke rpc method [{}] error", method.getName());
+                            throw new CustomCommandInvokeException(e);
+                        }
+                    });
+                } catch (CustomCommandException e) {
+                    log.error("registry custom method error", e);
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 添加运行的bot 到script agent中
+     *
+     * @param botName botName
+     * @param botKey  botKey
+     * @param bot     bot
+     */
+    public void addRunningBot(String botName, String botKey, AutoLaunchBot<?> bot) {
+        String key = ControlServerUtil.generateServiceInstanceKey(scriptNodeName, botName, botKey);
+
+        if (runningBotMap.containsKey(key)) {
+            throw new IllegalArgumentException("bot[%s][%s] exist".formatted(botName, botKey));
+        }
+        runningBotMap.put(key, new BotInstanceMetaInfo(bot));
+
+        // 上报bot上线
+        reportScriptBotOnLine(scriptNodeName, botName, botKey)
+                .exceptionally(throwable -> {
+                    log.error("bot[{}][{}]expose error", botName, botKey, throwable);
+                    return false;
+                });
+    }
+
+    /**
+     * 移除正在运行的bot
+     *
+     * @param botName botName
+     * @param botKey  botKey
+     */
+    public void removeRunningBot(String botName, String botKey) {
+        String key = ControlServerUtil.generateServiceInstanceKey(scriptNodeName, botName, botKey);
+        runningBotMap.remove(key);
+
+        // 上报bot下线
+        reportScriptBotOffLine(scriptNodeName, botName, botKey)
+                .exceptionally(throwable -> {
+                    log.error("bot[{}][{}] ffLine error", botName, botKey, throwable);
+                    return false;
+                });
+    }
+
+
+    /**
+     * 根据bot实例key获取bot
+     */
+    public BotInstanceMetaInfo getBotMetaInfo(String botInstanceKey) {
+        return runningBotMap.get(botInstanceKey);
+    }
+
+    /**
+     * 将bot 上线上报到ControlServer
+     *
+     * @param botGroup botGroup
+     * @param botName  botName
+     * @param botKey   botKey
+     * @return boolean
+     */
+    private CompletableFuture<Boolean> reportScriptBotOnLine(String botGroup, String botName, String botKey) {
+        log.info("send report bot[{}][{}] on line command", botGroup, botName);
+        // Step 1 生成命令
+        RemotingCommand command = newRequestCommand(BotRemotingCommandFlagConstants.SCRIPT_BOT_ON_LINE, true);
+        command.addExtField(BotExtFieldConstants.TARGET_GROUP_KEY, botGroup);
+        command.addExtField(BotExtFieldConstants.TARGET_BOT_NAME_KEY, botName);
+        command.addExtField(BotExtFieldConstants.TARGET_BOT_KEY_KEY, botKey);
+
+        return sendRequest(command)
+                .thenApply(response -> {
+                    if (response.isSuccess()) {
+                        log.info("report bot[{}][{}] online success", botGroup, botName);
+                        return true;
+                    } else {
+                        return false;
+                    }
+                });
+    }
+
+    /**
+     * 上报bot下线
+     *
+     * @param botGroup botGroup
+     * @param botName  botName
+     * @param botKey   botKey
+     * @return CompletableFuture<Boolean>
+     */
+    private CompletableFuture<Boolean> reportScriptBotOffLine(String botGroup, String botName, String botKey) {
+        log.warn("send report bot[{}][{}] offline command", botGroup, botName);
+        // Step 1 生成命令
+        RemotingCommand command = newRequestCommand(BotRemotingCommandFlagConstants.SCRIPT_BOT_OFF_LINE, true);
+        command.addExtField(BotExtFieldConstants.TARGET_GROUP_KEY, botGroup);
+        command.addExtField(BotExtFieldConstants.TARGET_BOT_NAME_KEY, botName);
+        command.addExtField(BotExtFieldConstants.TARGET_BOT_KEY_KEY, botKey);
+
+        return sendRequest(command)
+                .thenApply(response -> {
+                    if (response.isSuccess()) {
+                        log.warn("report bot[{}][{}] offline success", botGroup, botName);
+                        return true;
+                    } else {
+                        return false;
+                    }
+                });
+    }
+
+
+    /**
+     * 启动或暂停bot
+     *
+     * @param remotingCommand remotingCommand
+     * @return RemotingCommand
+     */
+    private RemotingCommand startOrParsedBotJob(RemotingCommand remotingCommand) {
+        String botName = remotingCommand.getExtFieldsValue(BotExtFieldConstants.TARGET_BOT_NAME_KEY);
+        String botKey = remotingCommand.getExtFieldsValue(BotExtFieldConstants.TARGET_BOT_KEY_KEY);
+        String jobName = remotingCommand.getExtFieldsValue(BotExtFieldConstants.JOB_NAME);
+
+        // Step 1 生成key，从map中查找存在的bot
+        String key = ControlServerUtil.generateServiceInstanceKey(scriptNodeName, botName, botKey);
+
+        RemotingCommand response = new RemotingCommand();
+        response.setCode(RemotingCommandCodeConstants.FAIL);
+
+        BotInstanceMetaInfo botMetaInfo = runningBotMap.get(key);
+
+        // 不存在，返回
+        if (botMetaInfo == null) {
+            response.setErrorMessage(key + " not found in script node");
+            return response;
+        }
+
+        AutoLaunchBot<?> bot = botMetaInfo.getBot();
+
+        // 存在则尝试调用方法启动
+        BotACJobResult botACJobResult = bot.startBotJob(jobName);
+        if (BooleanUtil.isTrue(botACJobResult.getSuccess())) {
+            response.setCode(RemotingCommandCodeConstants.SUCCESS);
+            bot.logger.debug("start/parsed job[%s] success".formatted(jobName));
+        } else {
+
+            bot.logger.error("start/parsed job[%s] fail".formatted(jobName));
+        }
+
+        response.setBody(Serializer.Algorithm.JDK.serialize(botACJobResult));
+        return response;
+    }
+}
+package cn.com.vortexa.script_node.service.impl;
+
+import cn.com.vortexa.rpc.api.platform.IWeb3WalletRPC;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.com.vortexa.script_node.service.IBotAccountContextService;
+import cn.com.vortexa.script_node.service.IRewordInfoService;
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
+import cn.com.vortexa.rpc.api.bot.IScriptAgentRPC;
+import cn.com.vortexa.rpc.api.platform.IAccountBaseInfoRPC;
+import cn.com.vortexa.rpc.api.platform.IBotInfoRPC;
+import cn.com.vortexa.job.service.BotJobService;
+import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
+import cn.com.vortexa.rpc.api.platform.IBrowserEnvRPC;
+import cn.com.vortexa.rpc.api.platform.IDiscordAccountRPC;
+import cn.com.vortexa.rpc.api.platform.IProxyInfoRPC;
+import cn.com.vortexa.rpc.api.platform.ITelegramAccountRPC;
+import cn.com.vortexa.rpc.api.platform.ITwitterAccountRPC;
+import cn.com.vortexa.control.anno.RPCReference;
+import lombok.Getter;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+
+@Getter
+@Component
+public class DBBotApi implements BotApi {
+
+    @Autowired
+    private BotJobService botJobService;
+
+    @Autowired
+    private IBotAccountContextService botAccountService;
+
+    @Autowired
+    private IRewordInfoService rewordInfoService;
+
+
+    @RPCReference
+    private IBotInfoRPC botInfoRPC;
+
+    @RPCReference
+    private IBotInstanceRPC botInstanceRPC;
+
+    @RPCReference
+    private IAccountBaseInfoRPC accountBaseInfoRPC;
+
+    @RPCReference
+    private ITwitterAccountRPC twitterAccountRPC;
+
+    @RPCReference
+    private ITelegramAccountRPC telegramAccountRPC;
+
+    @RPCReference
+    private IProxyInfoRPC proxyInfoRPC;
+
+    @RPCReference
+    private IBrowserEnvRPC browserEnvRPC;
+
+    @RPCReference
+    private IDiscordAccountRPC discordAccountRPC;
+
+    @RPCReference
+    private IWeb3WalletRPC web3WalletRPC;
+
+    @Autowired
+    private IScriptAgentRPC scriptAgentRPC;
+
+    @Autowired
+    private ITableShardStrategy tableShardStrategy;
+}
+package cn.com.vortexa.script_node.service;
+
+
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
+import cn.com.vortexa.job.service.BotJobService;
+import cn.com.vortexa.rpc.api.bot.IScriptAgentRPC;
+import cn.com.vortexa.rpc.api.platform.IAccountBaseInfoRPC;
+import cn.com.vortexa.rpc.api.platform.IBotInfoRPC;
+import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
+import cn.com.vortexa.rpc.api.platform.IBrowserEnvRPC;
+import cn.com.vortexa.rpc.api.platform.IDiscordAccountRPC;
+import cn.com.vortexa.rpc.api.platform.IProxyInfoRPC;
+import cn.com.vortexa.rpc.api.platform.ITelegramAccountRPC;
+import cn.com.vortexa.rpc.api.platform.ITwitterAccountRPC;
+import cn.com.vortexa.rpc.api.platform.IWeb3WalletRPC;
+
+public interface BotApi {
+
+    IBotInfoRPC getBotInfoRPC();
+
+    IBotInstanceRPC getBotInstanceRPC();
+
+    IAccountBaseInfoRPC getAccountBaseInfoRPC();
+
+    IBrowserEnvRPC getBrowserEnvRPC();
+
+    IDiscordAccountRPC getDiscordAccountRPC();
+
+    IProxyInfoRPC getProxyInfoRPC();
+
+    ITwitterAccountRPC getTwitterAccountRPC();
+
+    ITelegramAccountRPC getTelegramAccountRPC();
+
+    ITableShardStrategy getTableShardStrategy();
+
+    IRewordInfoService getRewordInfoService();
+
+    IBotAccountContextService getBotAccountService();
+
+    BotJobService getBotJobService();
+
+    IScriptAgentRPC getScriptAgentRPC();
+
+    IWeb3WalletRPC getWeb3WalletRPC();
+}
+package cn.com.vortexa.script_node.util.persistence.impl;
+
+import cn.com.vortexa.common.entity.*;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.com.vortexa.script_node.util.persistence.AbstractPersistenceManager;
+import cn.com.vortexa.common.util.propertylisten.PropertyChangeInvocation;
+import lombok.extern.slf4j.Slf4j;
+
+import java.sql.SQLException;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.stream.Collectors;
 
 @Slf4j
-public class WebSocketClientLauncher {
+public class DBAccountPersistenceManager extends AbstractPersistenceManager {
 
-    public static final Method lanuchMethod;
-
-    static {
-        try {
-            lanuchMethod = WebSocketClientLauncher.class.getMethod("launchWSClient",
-                    Object.class, Object.class, Object.class);
-        } catch (NoSuchMethodException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    /**
-     * 线程池
-     */
     private final ExecutorService executorService;
 
-    /**
-     * bot 对象
-     */
-    private final AnnoDriveAutoBot<?> bot;
+    private final BotApi botApi;
 
-    /**
-     * 控制并发数量的信号量
-     */
-    private final Map<String, Semaphore> wsCCSemapthoreMap = new ConcurrentHashMap<>();
-
-    /**
-     * 已启动的ws客户端
-     */
-    private final Map<String, BaseBotWSClient<?>> launchedWSClientMap = new ConcurrentHashMap<>();
-
-    public WebSocketClientLauncher(
-            AnnoDriveAutoBot<?> bot
-    ) {
-        this.bot = bot;
-        this.executorService = Executors.newThreadPerTaskExecutor(new NamedThreadFactory("ws-client-launcher"));
+    public DBAccountPersistenceManager(BotApi botApi, ExecutorService executorService) {
+        this.botApi = botApi;
+        this.executorService = executorService;
     }
 
-    /**
-     * 构建ws客户端
-     *
-     * @param accountContextObj accountContextObj
-     * @param jobParamObj       jobParamObj
-     * @return BaseBotWSClient < Req, Resp>
-     */
-    public final CompletableFuture<Result> launchWSClient(
-            Object accountContextObj,
-            Object jobParamObj,
-            Object wsClientBuilderObj
-    ) {
-        // 参数处理
-        AccountContext accountContext = (AccountContext) accountContextObj;
-        AutoBotJobParam jobParam = (AutoBotJobParam) jobParamObj;
-        AccountWSClientBuilder wsClientBuilder = (AccountWSClientBuilder) wsClientBuilderObj;
+    @Override
+    public void init() {
 
-        String key = generateAccountKey(accountContext, jobParam.getJobName());
-
-        String prefix = String.format("bot[%s]-job[%s]-account[%s]-[%s]",
-                bot.getBotInstance().getBotKey(), jobParam.getJobName(), accountContext.getId(), accountContext.getName());
-
-        AutoBotJobWSParam autoBotJobWSParam = jobParam.getAutoBotJobWSParam();
-
-
-        // 已经启动的，不再创建
-        if (launchedWSClientMap.containsKey(key)) {
-            if (!autoBotJobWSParam.getIsRefreshWSConnection()) {
-                log.warn("{} ws client already created", prefix);
-                return CompletableFuture.completedFuture(Result.fail(prefix + "ws client already created"));
-            } else {
-                log.warn(prefix + " 移除旧ws客户端");
-                launchedWSClientMap.remove(key).shutdown();
-            }
-        }
-
-        return buildAndConnectWebSocket(accountContext, autoBotJobWSParam, key, wsClientBuilder, prefix);
     }
 
-
-    /**
-     * 构建并连接ws客户端
-     *
-     * @param accountContext    accountContext
-     * @param autoBotJobWSParam autoBotJobWSParam
-     * @param key               key
-     * @param wsClientBuilder   wsClientBuilder
-     * @param prefix            prefix
-     * @return CompletableFuture<Result>
-     */
-    private @NotNull CompletableFuture<Result> buildAndConnectWebSocket(
-            AccountContext accountContext,
-            AutoBotJobWSParam autoBotJobWSParam,
-            String key,
-            AccountWSClientBuilder wsClientBuilder,
-            String prefix
-    ) {
-
-        // Step 1 ws 连接数量控制
-        Semaphore wsConnectSemaphore;
+    @Override
+    public void persistenceAccountContexts(List<AccountContext> accountContexts) {
         try {
-            wsConnectSemaphore = wsCCSemapthoreMap.computeIfAbsent(key, k -> new Semaphore(autoBotJobWSParam.getWsConnectCount()));
-            wsConnectSemaphore.acquire();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+            botApi.getBotAccountService().insertOrUpdateBatch(accountContexts);
+        } catch (SQLException e) {
+            throw new RuntimeException("persistence bot account context error", e);
         }
+    }
 
-        //  Step 2 启动
-        BaseBotWSClient<?> wsClient = null;
+    @Override
+    public List<AccountContext> loadAccountContexts(Integer botId, String botKey) {
+        // Step 1 加载 projectId 对应的账号
+        Map<String, Object> query = new HashMap<>();
+        query.put("botId", botId);
+        query.put("botKey", botKey);
 
-        // Step 3 创建ws client
+        List<AccountContext> accountContexts = null;
         try {
-            wsClient = wsClientBuilder.build(accountContext);
-
-            if (wsClient == null) {
-                return CompletableFuture.completedFuture(Result.fail("ws client create failed"));
-            }
-            launchedWSClientMap.put(key, wsClient);
-        } catch (InvocationTargetException | IllegalAccessException e) {
-            log.error("build account ws client error", e);
-            return CompletableFuture.completedFuture(Result.fail(prefix + "build account ws client error"));
+            accountContexts = botApi
+                    .getBotAccountService()
+                    .conditionQuery(query);
+        } catch (SQLException e) {
+            throw new RuntimeException("query bot[%s][%s] account list error".formatted(botId, botKey), e);
         }
 
-        // Step 4 设置handler
-        init(wsClient, autoBotJobWSParam, wsConnectSemaphore);
 
-        // Step 5 检查当前状态，如果为new或stop才进行启动
-        WebsocketClientStatus currentStatus = wsClient.getClientStatus();
+        // Step 2 遍历账号，补充对象
+        try {
+            fillAccountInfos(accountContexts);
+        } catch (Exception e) {
+            throw new RuntimeException("fill account info error", e);
+        }
 
-
-        return switch (currentStatus) {
-            // 新创建，停止状态，需要建立连接
-            case WebsocketClientStatus.NEW, WebsocketClientStatus.STOP -> wsClient
-                    .connect() // 异步连接
-                    .thenApplyAsync(connectResult -> {
-                        if (connectResult) {
-                            // 连接成功
-                            return Result.ok(prefix + "connect success");
-                        } else if (autoBotJobWSParam.getWsUnlimitedRetry()) {
-                            // TODO ws需要加入shutdown后的恢复机制
-                            // 连接失败，且允许无限重连, 返回ok，ws内部会自动重连
-                            return Result.ok(prefix + "connect fail, restarting...");
-                        } else {
-                            return Result.fail(prefix + "ws client can not connect");
-                        }
-                    }, executorService)
-                    .exceptionallyAsync(throwable -> {
-                        log.error("ws client connect error", throwable);
-                        return Result.fail(prefix + "connect error, " + throwable.getMessage());
-                    }, executorService);
-            case WebsocketClientStatus.STARTING, WebsocketClientStatus.RUNNING ->
-                    CompletableFuture.completedFuture(Result.ok());
-            // 被禁止使用，抛出异常
-            case WebsocketClientStatus.SHUTDOWN ->
-                    CompletableFuture.completedFuture(Result.fail(prefix + " ws client can not connect"));
-        };
+        // Step 4
+        return accountContexts;
     }
 
-    /**
-     * 生成账户key
-     *
-     * @param accountContext accountContext
-     * @param jobName        jobName
-     * @return String
-     */
-    private static @NotNull String generateAccountKey(AccountContext accountContext, String jobName) {
-        return jobName + accountContext.getName();
-    }
+    @Override
+    protected void propertyChangeHandler(PropertyChangeInvocation invocation) {
+        log.debug("object field{} changed {}->{}", invocation.getPropertyName(), invocation.getOldValue(), invocation.getNewValue());
 
-
-    /**
-     * 添加ws状态改变的handler
-     *
-     * @param <T>               t
-     * @param wsClient          wsClient
-     * @param autoBotJobWSParam autoBotJobWSParam
-     */
-    private <T> void init(cn.com.vortexa.script_node.websocket.BaseBotWSClient<T> wsClient, AutoBotJobWSParam autoBotJobWSParam, Semaphore wsConnectSemaphore) {
-        // 设置参数
-        wsClient.setAllIdleTimeSecond(autoBotJobWSParam.getHeartBeatIntervalSecond());
-        wsClient.setReconnectCountDownSecond(autoBotJobWSParam.getReconnectCountDownSecond());
-        wsClient.setReconnectLimit(autoBotJobWSParam.getReconnectLimit());
-        wsClient.setEventLoopGroupThreads(autoBotJobWSParam.getNioEventLoopGroupThreads());
-
-        //设置相关回调
-        wsClient.setClientStatusChangeHandler(newStatus -> {
-            wsClient.whenClientStatusChange(newStatus);
-            // 释放资源
-            if (newStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
-                // 记录完成的ws数量
-                wsConnectSemaphore.release();
+        Object target = invocation.getTarget();
+        if (target instanceof AccountContext) {
+            try {
+                botApi.getBotAccountService().insertOrUpdate((AccountContext) target);
+            } catch (SQLException e) {
+                log.error("更新Bot Account Context[{}] error", target, e);
             }
+        }
+    }
+
+    @Override
+    public void fillAccountInfos(List<AccountContext> accountContexts) throws ExecutionException, InterruptedException {
+        Set<Integer> baseAccountIds = new HashSet<>();
+        Set<Integer> twitterIds = new HashSet<>();
+        Set<Integer> discordIds = new HashSet<>();
+        Set<Integer> proxyIds = new HashSet<>();
+        Set<Integer> browserIds = new HashSet<>();
+        Set<Integer> telegramIds = new HashSet<>();
+        Set<Integer> rewordInfoIds = new HashSet<>();
+        Set<Integer> walletIds = new HashSet<>();
+
+        accountContexts.forEach(accountContext -> {
+            baseAccountIds.add(accountContext.getAccountBaseInfoId());
+            twitterIds.add(accountContext.getTwitterId());
+            discordIds.add(accountContext.getDiscordId());
+            proxyIds.add(accountContext.getProxyId());
+            browserIds.add(accountContext.getBrowserEnvId());
+            telegramIds.add(accountContext.getTelegramId());
+            walletIds.add(accountContext.getWalletId());
+            rewordInfoIds.add(accountContext.getId());
+        });
+
+        CompletableFuture<Map<Integer, AccountBaseInfo>> accountBaseInfoMapFuture = CompletableFuture.supplyAsync(() -> {
+            baseAccountIds.remove(null);
+            return botApi.getAccountBaseInfoRPC()
+                    .batchQueryByIdsRPC(new ArrayList<>(baseAccountIds))
+                    .stream()
+                    .collect(Collectors.toMap(AccountBaseInfo::getId, accountBaseInfo -> accountBaseInfo));
+        }, executorService);
+
+        CompletableFuture<Map<Integer, TwitterAccount>> twitterAccountMapFuture = CompletableFuture.supplyAsync(() -> {
+            twitterIds.remove(null);
+            return botApi.getTwitterAccountRPC()
+                    .batchQueryByIdsRPC(new ArrayList<>(twitterIds))
+                    .stream()
+                    .collect(Collectors.toMap(TwitterAccount::getId, twitterAccount -> twitterAccount));
+        }, executorService);
+
+        CompletableFuture<Map<Integer, DiscordAccount>> discordAccountMapFuture = CompletableFuture.supplyAsync(() -> {
+            discordIds.remove(null);
+            return botApi.getDiscordAccountRPC()
+                    .batchQueryByIdsRPC(new ArrayList<>(discordIds))
+                    .stream()
+                    .collect(Collectors.toMap(DiscordAccount::getId, discordAccount -> discordAccount));
+        }, executorService);
+
+        CompletableFuture<Map<Integer, ProxyInfo>> proxyInfoMapFuture = CompletableFuture.supplyAsync(() -> {
+            proxyIds.remove(null);
+            return botApi.getProxyInfoRPC()
+                    .batchQueryByIdsRPC(new ArrayList<>(proxyIds))
+                    .stream()
+                    .collect(Collectors.toMap(ProxyInfo::getId, proxyInfo -> proxyInfo));
+        }, executorService);
+
+        CompletableFuture<Map<Integer, BrowserEnv>> browserEnvMapFuture = CompletableFuture.supplyAsync(() -> {
+            browserIds.remove(null);
+            return botApi.getBrowserEnvRPC()
+                    .batchQueryByIdsRPC(new ArrayList<>(browserIds))
+                    .stream()
+                    .collect(Collectors.toMap(BrowserEnv::getId, browserEnv -> browserEnv));
+        }, executorService);
+
+        CompletableFuture<Map<Integer, TelegramAccount>> telegramAccountMapFuture = CompletableFuture.supplyAsync(() -> {
+            telegramIds.remove(null);
+            return botApi.getTelegramAccountRPC()
+                    .batchQueryByIdsRPC(new ArrayList<>(telegramIds))
+                    .stream()
+                    .collect(Collectors.toMap(TelegramAccount::getId, account -> account));
+        }, executorService);
+
+        CompletableFuture<Map<Integer, Web3Wallet>> walletMapFuture = CompletableFuture.supplyAsync(() -> {
+            walletIds.remove(null);
+            return botApi.getWeb3WalletRPC()
+                .batchQueryByIdsRPC(new ArrayList<>(walletIds))
+                .stream()
+                .collect(Collectors.toMap(Web3Wallet::getId, account -> account));
+        }, executorService);
+
+//        CompletableFuture<Map<Integer, RewordInfo>> rewordInfoMapFuture = CompletableFuture.supplyAsync(() -> {
+//            rewordInfoIds.remove(null);
+//            IRewordInfoService rewordInfoService = botApi.getRewordInfoService();
+//            return rewordInfoService
+//                    .batchQueryByIds(new ArrayList<>(rewordInfoIds))
+//                    .stream()
+//                    .collect(Collectors.toMap(RewordInfo::getProjectAccountId, account -> account));
+//        }, executorService);
+
+        Map<Integer, AccountBaseInfo> accountBaseInfoMap = accountBaseInfoMapFuture.get();
+        Map<Integer, TwitterAccount> twitterAccountMap = twitterAccountMapFuture.get();
+        Map<Integer, DiscordAccount> discordAccountMap = discordAccountMapFuture.get();
+        Map<Integer, ProxyInfo> proxyInfoMap = proxyInfoMapFuture.get();
+        Map<Integer, BrowserEnv> browserEnvMap = browserEnvMapFuture.get();
+        Map<Integer, TelegramAccount> telegramAccountMap = telegramAccountMapFuture.get();
+        Map<Integer, Web3Wallet> walletMap = walletMapFuture.get();
+//        Map<Integer, RewordInfo> rewordInfoMap = rewordInfoMapFuture.get();
+
+        accountContexts.forEach(accountContext -> {
+            accountContext.setAccountBaseInfo(accountBaseInfoMap.get(accountContext.getAccountBaseInfoId()));
+            accountContext.setTwitter(twitterAccountMap.get(accountContext.getTwitterId()));
+            accountContext.setDiscord(discordAccountMap.get(accountContext.getDiscordId()));
+            accountContext.setProxy(proxyInfoMap.get(accountContext.getProxyId()));
+            accountContext.setBrowserEnv(browserEnvMap.get(accountContext.getBrowserEnvId()));
+            accountContext.setTelegram(telegramAccountMap.get(accountContext.getTelegramId()));
+            accountContext.setWallet(walletMap.get(accountContext.getWalletId()));
+//            accountContext.setRewordInfo(rewordInfoMap.get(accountContext.getId()));
         });
     }
-
-    public void clear() {
-        for (Map.Entry<String, BaseBotWSClient<?>> entry : launchedWSClientMap.entrySet()) {
-            BaseBotWSClient<?> client = entry.getValue();
-            client.close();
-        }
-        launchedWSClientMap.clear();
-        wsCCSemapthoreMap.clear();
-    }
 }
-package cn.com.vortexa.script_node;
+package cn.com.vortexa.script_node.util;
 
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.typehandler.JsonTypeHandler;
-import cn.com.vortexa.common.util.typehandler.LocalDateTimeTypeHandler;
-import cn.com.vortexa.common.util.typehandler.MapTextTypeHandler;
-import cn.com.vortexa.db_layer.DBLayerAutoConfig;
-import cn.com.vortexa.db_layer.plugn.table_shard.TableShardInterceptor;
-import cn.com.vortexa.db_layer.plugn.table_shard.strategy.BotIdBasedTableShardStrategy;
-import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
-import cn.com.vortexa.job.JobAutoConfig;
-import cn.com.vortexa.script_node.config.ScriptNodeConfiguration;
-import cn.hutool.core.util.StrUtil;
-import com.baomidou.mybatisplus.core.MybatisConfiguration;
-import com.baomidou.mybatisplus.core.config.GlobalConfig;
-import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
-import com.zaxxer.hikari.HikariDataSource;
-import org.apache.ibatis.plugin.Interceptor;
-import org.apache.ibatis.session.SqlSessionFactory;
-import org.mybatis.spring.SqlSessionFactoryBean;
-import org.mybatis.spring.annotation.MapperScan;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.ComponentScan;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.transaction.PlatformTransactionManager;
-
-import javax.sql.DataSource;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-
-@Configuration
-@ImportAutoConfiguration({DBLayerAutoConfig.class, JobAutoConfig.class})
-@ComponentScan({"cn.com.vortexa.script_node.service.impl", "cn.com.vortexa.script_node.config"})
-@MapperScan(basePackages = "cn.com.vortexa.script_node.mapper")
-public class ScriptNodeAutoConfig {
-
-    @Autowired
-    private JsonTypeHandler jsonTypeHandler;
-
-    @Autowired
-    private MapTextTypeHandler mapTextTypeHandler;
-
-    @Autowired
-    private LocalDateTimeTypeHandler localDateTimeTypeHandler;
-
-    @Autowired
-    private ScriptNodeConfiguration scriptNodeConfiguration;
-
-    @Bean("vortexaDataSource")
-    public DataSource vortexaDataSource() {
-        String botGroup = scriptNodeConfiguration.getBotGroup();
-        if (StrUtil.isBlank(botGroup)) {
-            throw new IllegalArgumentException("botGroup is empty");
-        }
-
-        try {
-            String path = tryCreateDBFile(botGroup);
-            HikariDataSource dataSource = new HikariDataSource();
-            dataSource.setJdbcUrl("jdbc:sqlite:/" + path);
-            return dataSource;
-        } catch (IOException e) {
-            throw new RuntimeException("create Bot[%s]DB file error".formatted(botGroup), e);
-        }
-    }
-
-
-    // @Bean
-    // public SqlSessionFactory sqlSessionFactory(@Qualifier("vortexaDataSource") DataSource dataSource) throws Exception {
-    //     MybatisSqlSessionFactoryBean factoryBean = new MybatisSqlSessionFactoryBean();
-    //     factoryBean.setDataSource(dataSource);
-    //     factoryBean.setMapperLocations(new PathMatchingResourcePatternResolver().getResources("classpath:/mapper/*.xml"));
-    //     factoryBean.setTypeHandlers(
-    //             jsonTypeHandler, mapTextTypeHandler, localDateTimeTypeHandler
-    //     );
-    //     factoryBean.setTypeAliasesPackage("cn.com.vortexa.entity");
-    //     MybatisConfiguration configuration = new MybatisConfiguration();
-    //     factoryBean.setConfiguration(configuration);
-    //     configuration.setMapUnderscoreToCamelCase(true);
-    //
-    //     GlobalConfig globalConfig = new GlobalConfig();
-    //     GlobalConfig.DbConfig dbConfig = new GlobalConfig.DbConfig();
-    //     dbConfig.setLogicDeleteField("isValid");
-    //     dbConfig.setLogicDeleteValue("0");
-    //     dbConfig.setLogicNotDeleteValue("1");
-    //     globalConfig.setDbConfig(dbConfig);
-    //     factoryBean.setGlobalConfig(globalConfig);
-    //     factoryBean.setPlugins(tableShardInterceptor());
-    //     return factoryBean.getObject();
-    // }
-
-    // 配置事务管理器
-    @Bean(name = "transactionManager")
-    public PlatformTransactionManager transactionManager() {
-        return new DataSourceTransactionManager(vortexaDataSource());
-    }
-
-    @Bean
-    public ITableShardStrategy tableShardStrategy() {
-        return new BotIdBasedTableShardStrategy();
-    }
-
-    @Bean
-    public Interceptor tableShardInterceptor() {
-        return new TableShardInterceptor(tableShardStrategy());
-    }
-
-
-    /**
-     * 尝试创建DB File
-     *
-     * @param scriptNodeGroup scriptNodeGroup
-     * @return db file absolutePath
-     * @throws IOException IOException
-     */
-    private static String tryCreateDBFile(String scriptNodeGroup) throws IOException {
-        // 创建BotKey对应的数据库文件
-        Path absolutePath = Paths.get(
-                FileUtil.getBotAppConfigPath(),
-                scriptNodeGroup,
-                "script_node_" + scriptNodeGroup + ".db"
-        );
-
-        if (Files.notExists(absolutePath)) {
-            if (Files.notExists(absolutePath.getParent())) {
-                Files.createDirectories(absolutePath.getParent());
-            }
-            Files.createFile(absolutePath);
-        }
-
-        return absolutePath.toString();
-    }
-}
-package cn.com.vortexa.script_node;
-
-import cn.com.vortexa.common.dto.config.ClassInfo;
-import cn.com.vortexa.common.exception.BotInitException;
-import cn.com.vortexa.common.exception.BotStartException;
-import cn.com.vortexa.common.util.DynamicJavaLoader;
+import cn.com.vortexa.common.dto.BotMetaInfo;
+import cn.com.vortexa.script_node.util.classloader.DynamicJarLoader;
+import cn.com.vortexa.script_node.anno.BotApplication;
 import cn.com.vortexa.script_node.bot.AutoLaunchBot;
 import cn.com.vortexa.common.dto.config.AutoBotConfig;
 import cn.com.vortexa.script_node.config.ScriptNodeConfiguration;
 import cn.com.vortexa.script_node.constants.BotStatus;
 import cn.com.vortexa.script_node.scriptagent.BotScriptAgent;
 import cn.com.vortexa.script_node.service.BotApi;
-import cn.com.vortexa.script_node.util.ScriptBotLauncher;
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.com.vortexa.common.exception.BotStartException;
+import cn.com.vortexa.script_node.view.ScriptNodeCMDLineMenu;
+import cn.com.vortexa.script_node.view.commandMenu.DefaultMenuType;
+import cn.hutool.core.util.StrUtil;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.ApplicationListener;
-import org.springframework.stereotype.Component;
-
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 @Slf4j
-@Component
-public class ScriptNodeStartupListener implements ApplicationListener<ApplicationReadyEvent> {
+public class ScriptBotLauncher {
+    private static final ScriptNodeCMDLineMenu scriptNodeCMDLineMenu = new ScriptNodeCMDLineMenu(List.of(
+            DefaultMenuType.START_BOT_TASK, DefaultMenuType.LAUNCH_SCRIPT
+    ));
+    private static final ConcurrentHashMap<String, ScriptBotMetaInfo> botMetaInfoMap = new ConcurrentHashMap<>();
+    public volatile static ScriptBotLauncher INSTANCE;
 
-    @Autowired
-    private ScriptNodeConfiguration scriptNodeConfiguration;
+    private final ScriptNodeConfiguration scriptNodeConfiguration;
+    private final BotApi botApi;
+    private final BotScriptAgent botScriptAgent;
 
-    @Autowired
-    private BotApi botApi;
-
-    @Autowired
-    private BotScriptAgent botScriptAgent;
-
-    @Override
-    @SuppressWarnings("unchecked")
-    public void onApplicationEvent(ApplicationReadyEvent event) {
-        log.info("start launch script bot...");
-
-        Set<String> autoLaunchBotKeys = scriptNodeConfiguration.getAutoLaunchBotKeys();
-
-        // 启动配置的bot
-        for (Map.Entry<String, AutoBotConfig> entry : scriptNodeConfiguration.getBotKeyConfigMap().entrySet()) {
-            String botKey = entry.getKey();
-            AutoBotConfig botConfig = entry.getValue();
-
-            log.info("[{}] start launch...", botKey);
-            try {
-                // 加载extra class
-                List<ClassInfo> extraClass = botConfig.getExtraClass();
-                if (extraClass != null && !extraClass.isEmpty()) {
-                    for (ClassInfo classInfo : extraClass) {
-                        loadScriptNodeResourceClass(classInfo.getClassFilePath(), classInfo.getClassName());
-                    }
+    public static ScriptBotLauncher buildScriptBotLauncher(ScriptNodeConfiguration scriptNodeConfiguration, BotApi botApi, BotScriptAgent botScriptAgent) {
+        if (INSTANCE == null) {
+            synchronized (ScriptBotLauncher.class) {
+                if (INSTANCE == null) {
+                    INSTANCE = new ScriptBotLauncher(scriptNodeConfiguration, botApi, botScriptAgent);
                 }
+            }
+        }
+        return INSTANCE;
+    }
 
-                // 1 不是class，编译位class
-                String classFilePath = botConfig.getClassFilePath();
+    protected ScriptBotLauncher(ScriptNodeConfiguration scriptNodeConfiguration, BotApi botApi, BotScriptAgent botScriptAgent) {
+        this.scriptNodeConfiguration = scriptNodeConfiguration;
+        this.botApi = botApi;
+        this.botScriptAgent = botScriptAgent;
+    }
 
-                // 2 加载class
-                Class<?> aClass = loadScriptNodeResourceClass(classFilePath, botConfig.getClassName());
+    /**
+     * 加载并启动bot
+     *
+     * @param botKey botKey
+     */
+    public void loadAndLaunchBot(String botKey) {
+        // AutoBotConfig botConfig = scriptNodeConfiguration.getBotNameMetaInfoMap().get(botKey);
+        // if (botConfig == null) {
+        //     throw new IllegalArgumentException("no bot in script node" + botKey);
+        // }
+        // loadAndLaunchBot(botConfig);
+    }
 
-                log.info("[{}] class load success ", botKey);
-
-                if (AutoLaunchBot.class.equals(aClass.getSuperclass())) {
-                    Class<AutoLaunchBot<?>> botClass = (Class<AutoLaunchBot<?>>) aClass;
-
-                    boolean launch = autoLaunchBotKeys.contains(botKey);
-
-                    // Step 3 启动bot
-                    AutoLaunchBot<?> autoLaunchBot = ScriptBotLauncher.launch(botClass, botConfig, botApi, bot -> {
-                        bot.setBotStatusChangeHandler((oldStatus, newStatus) -> {
-                            // 3.1 添加监听， bot状态改变时上报
-                            if (newStatus == BotStatus.RUNNING) {
-                                botScriptAgent.addRunningBot(bot.getBotInfo().getName(), botKey, bot);
-                            }
-
-                            if (newStatus == BotStatus.STOPPED || newStatus == BotStatus.SHUTDOWN) {
-                                botScriptAgent.removeRunningBot(bot.getBotInfo().getName(), botKey);
-                            }
-                        });
-                        return true;
-                    }, launch);
-
-                    // Step 4 添加进菜单
-                    if (botConfig.isCommandMenu()) {
-                        ScriptBotLauncher.addBotInMenu(botKey, autoLaunchBot);
-                    }
-                } else {
-                    log.info("[{}] class[{}} illegal, must extends AutoLaunchBot.class", botKey, classFilePath);
-                }
-
-            } catch (BotStartException | BotInitException e) {
-                log.error("script botKey[{}] auto launch error", botKey, e);
-            } catch (Exception e) {
-                throw new RuntimeException("load class error", e);
+    /**
+     * 加载并启动bot
+     *
+     * @param botConfig botConfig
+     */
+    public void loadAndLaunchBot(AutoBotConfig botConfig) {
+        String botKey = botConfig.getBotKey();
+        ScriptBotMetaInfo rowBotMetaInfo = botMetaInfoMap.get(botKey);
+        if (rowBotMetaInfo != null) {
+            if (rowBotMetaInfo.getBot().getStatus() == BotStatus.RUNNING) {
+                throw new IllegalArgumentException(botKey + " in running..please stop it first");
             }
         }
 
-        // 启动CMD
-        ScriptBotLauncher.startCommandLineMenu();
+        BotMetaInfo metaInfo = botConfig.getMetaInfo();
+
+        log.info("[{}] start launch...", botKey);
+        String className = metaInfo.getClassName();
+        if (StrUtil.isBlank(className)) {
+            throw new IllegalArgumentException(botKey + " config class name is null");
+        }
+        try {
+            // 加载 class
+            // 1 编译为class
+            // 2 加载class
+            Class<?> aClass = loadScriptNodeResourceClass(
+                metaInfo.getClassJarPath(),
+                className,
+                metaInfo.getExtraClassNameList()
+            );
+
+            log.info("[{}] class load success ", botKey);
+            if (isClassInInheritanceChain(aClass, AutoLaunchBot.class)) {
+                Class<AutoLaunchBot<?>> botClass = (Class<AutoLaunchBot<?>>) aClass;
+                // Step 3 启动bot
+                AutoLaunchBot<?> autoLaunchBot = launch(botClass, botConfig, bot -> {
+                    bot.setBotStatusChangeHandler((oldStatus, newStatus) -> {
+                        // 3.1 添加监听， bot状态改变时上报
+                        if (newStatus == BotStatus.RUNNING) {
+                            botScriptAgent.addRunningBot(bot.getBotInfo().getName(), botKey, bot);
+                        }
+
+                        if (newStatus == BotStatus.STOPPED || newStatus == BotStatus.SHUTDOWN) {
+                            botScriptAgent.removeRunningBot(bot.getBotInfo().getName(), botKey);
+                        }
+                    });
+                    return true;
+                });
+
+                // Step 4 添加进菜单
+                setLoadedBotInMenu(botKey, autoLaunchBot);
+            } else {
+                log.info("[{}] class[{}} illegal, must extends AutoLaunchBot.class", botKey, className);
+            }
+        } catch (BotStartException | BotInitException e) {
+            log.error("script botKey[{}] auto launch error", botKey, e);
+        } catch (Exception e) {
+            log.error("script botKey[{}] auto launch error", botKey, e);
+            throw new RuntimeException("load class error", e);
+        }
+    }
+
+
+    /**
+     * 启动bot
+     *
+     * @param botClass botClass
+     * @return ApplicationContext
+     * @throws BotStartException BotStartException
+     * @throws BotInitException  BotInitException
+     */
+    public AutoLaunchBot<?> launch(
+            Class<? extends AutoLaunchBot<?>> botClass,
+            AutoBotConfig botConfig,
+            Function<AutoLaunchBot<?>, Boolean> initHandler
+    ) throws BotStartException, BotInitException {
+        String botKey = botConfig.getBotKey();
+        if (StrUtil.isBlank(botKey)) {
+            throw new BotStartException("bot key is empty");
+        }
+
+        System.setProperty("spring.application.name", botKey);
+
+        // 解析注解上的bot name
+        BotApplication annotation = botClass.getAnnotation(BotApplication.class);
+        String botName = null;
+        if (annotation == null || StrUtil.isBlank((botName = annotation.name()))) {
+            throw new BotStartException("bot must have @BotApplication annotation and must have name");
+        }
+
+        // Step 1 创建bot实例
+        Constructor<? extends AutoLaunchBot<?>> constructor = null;
+        AutoLaunchBot<?> bot = null;
+        try {
+            constructor = botClass.getConstructor();
+            bot = constructor.newInstance();
+        } catch (NoSuchMethodException | InstantiationException | IllegalAccessException |
+                 InvocationTargetException e) {
+            throw new BotInitException(e);
+        }
+
+        botConfig.setBotName(botName);
+        bot.setBotName(botName);
+        bot.setBotKey(botKey);
+        botMetaInfoMap.put(botKey, new ScriptBotMetaInfo(
+                bot,
+                botConfig,
+                initHandler
+        ));
+
+        // Step 3 启动bot
+        launchResolvedScriptBot(botKey);
+
+        return bot;
+    }
+
+    /**
+     * 启动命令行菜单
+     */
+    public static void startCommandLineMenu() {
+        scriptNodeCMDLineMenu.start();
+    }
+
+    /**
+     * 添加Bot到菜单
+     *
+     * @param botKey botKey
+     */
+    public void addBotInMenu(String botKey) {
+        scriptNodeCMDLineMenu.getUsableBotKeySet().add(botKey);
+    }
+
+    /**
+     * 添加加载完成的bot到菜单
+     *
+     * @param botKey botKey
+     * @param bot    bot
+     */
+    public void setLoadedBotInMenu(String botKey, AutoLaunchBot<?> bot) {
+        scriptNodeCMDLineMenu.getLoadedBotMap().put(botKey, bot);
+    }
+
+    private void launchResolvedScriptBot(String botKey) throws BotStartException, BotInitException {
+        ScriptBotMetaInfo scriptBotMetaInfo = botMetaInfoMap.get(botKey);
+        if (scriptBotMetaInfo == null) {
+            throw new BotStartException(botKey + " didn't resolved by ScriptBotLauncher, place invoke ScriptBotLauncher.launch(...) first");
+        }
+
+        log.info("bot[{}] start launch", botKey);
+        scriptBotMetaInfo.getBot().launch(
+                scriptNodeConfiguration,
+                scriptBotMetaInfo.botConfig,
+                botApi,
+                scriptBotMetaInfo.initHandler
+        );
     }
 
     /**
      * 加载script bot的class文件
      *
-     * @param classFilePath classFilePath
-     * @param className className
+     * @param jarPath            jarPath
+     * @param className          className
+     * @param extraClassNameList extraClassNameList
      * @return 已加载的BotClass文件
      * @throws Exception Exception
      */
-    private Class<?> loadScriptNodeResourceClass(String classFilePath, String className) throws Exception {
-        if (classFilePath.endsWith(".java") && !DynamicJavaLoader.compileJavaFile(classFilePath)) {
-            throw new RuntimeException(classFilePath + " compile to class error");
-        }
-        classFilePath = classFilePath.replace(".java", ".class");
+    private static Class<?> loadScriptNodeResourceClass(
+            String jarPath,
+            String className,
+            List<String> extraClassNameList
+    ) throws Exception {
+        return DynamicJarLoader.loadClassFromJar(jarPath, className, extraClassNameList);
+    }
 
-        return DynamicJavaLoader.loadClassFromFile(classFilePath, className);
+    public static boolean isClassInInheritanceChain(Class<?> subclass, Class<?> superclass) {
+        Class<?> currentClass = subclass;
+        while (currentClass != null) {
+            if (currentClass.equals(superclass)) {
+                return true;
+            }
+            currentClass = currentClass.getSuperclass();
+        }
+        return false;
+    }
+
+    /**
+     * 获取bot状态
+     *
+     * @param botKey botKey
+     * @return BotStatus
+     */
+    public BotStatus getBotStatus(String botKey) {
+        ScriptBotMetaInfo botMetaInfo = botMetaInfoMap.get(botKey);
+        if (botMetaInfo == null) {
+            return BotStatus.NOT_LOADED;
+        }
+        return botMetaInfo.getBot().getStatus();
+    }
+
+    /**
+     * 根据botKey 获取bot
+     *
+     * @param botKey botKey
+     * @return AutoLaunchBot
+     */
+    public AutoLaunchBot<?> getBotByBotKey(String botKey) {
+        ScriptBotMetaInfo botMetaInfo = botMetaInfoMap.get(botKey);
+        return botMetaInfo == null ? null : botMetaInfo.getBot();
+    }
+
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    public static class ScriptBotMetaInfo {
+        private AutoLaunchBot<?> bot;
+        private AutoBotConfig botConfig;
+        Function<AutoLaunchBot<?>, Boolean> initHandler;
     }
 }
