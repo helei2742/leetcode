@@ -1,1615 +1,1035 @@
-package cn.com.vortexa.common.entity;
+package cn.com.vortexa.web3.constants;
 
-import com.baomidou.mybatisplus.annotation.*;
+import cn.com.vortexa.common.util.YamlConfigLoadUtil;
+import cn.com.vortexa.web3.dto.Web3ChainInfo;
+import lombok.Data;
 
-import cn.com.vortexa.common.dto.job.AutoBotJobParam;
-import lombok.*;
-
-import java.io.Serial;
-import java.io.Serializable;
-import java.time.LocalDateTime;
-import java.util.HashMap;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
- * @author com.helei
- * @since 2025-02-18
+ * @author h30069248
+ * @since 2025/4/23 10:27
  */
-@Getter
-@Setter
-@Builder
-@AllArgsConstructor
-@NoArgsConstructor
-@TableName("t_bot_instance")
-public class BotInstance implements Serializable {
-    public static final String BOT_INSTANCE_STATUS_KEY = "bot_instance_status";
+@Data
+public class Web3ChainDict {
+    public static final String RESOURCE_FILE_NAME = "chain-info.yaml";
+    public static final List<String> PREFIX = List.of("vortexa", "web3");
+    public static final Web3ChainDict INSTANCE;
 
-    @Serial
-    private static final long serialVersionUID = 4984719841947412242L;
+    static {
+        try (InputStream is = Web3ChainDict.class.getClassLoader().getResourceAsStream(RESOURCE_FILE_NAME)){
+            INSTANCE = YamlConfigLoadUtil.load(RESOURCE_FILE_NAME, is, PREFIX, Web3ChainDict.class);
+            if (INSTANCE.chainInfo != null) {
+                INSTANCE.name2ChainInfoMap = INSTANCE.chainInfo.stream().collect(Collectors.toMap(Web3ChainInfo::getName, w->w));
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
+    private List<Web3ChainInfo> chainInfo;
 
-    @TableId(value = "id", type = IdType.AUTO)
-    private Integer id;
+    private Map<String, Web3ChainInfo> name2ChainInfoMap;
 
-    @TableField("bot_id")
-    private Integer botId;
+    public Web3ChainInfo getChainInfo(String name) {
+        return name2ChainInfoMap.get(name);
+    }
 
-    @TableField("bot_name")
-    private String botName;
-
-    @TableField("script_node_name")
-    private String scriptNodeName;
-
-    @TableField("bot_key")
-    private String botKey;
-
-    @TableField("account_table_name")
-    private String accountTableName;
-
-    @TableField("job_params")
-    private Map<String, AutoBotJobParam> jobParams = new HashMap<>();
-
-    @TableField("params")
-    private Map<String, Object> params;
-
-    @TableField(value = "insert_datetime", fill = FieldFill.INSERT)
-    private LocalDateTime insertDatetime;
-
-    @TableField(value = "update_datetime", fill = FieldFill.INSERT_UPDATE)
-    private LocalDateTime updateDatetime;
-
-    @TableField(value = "valid", fill = FieldFill.INSERT)
-    @TableLogic
-    private Integer valid;
-
-    @TableField(exist = false)
-    public BotInfo botInfo;
-
-    public synchronized void addParam(String key, Object value) {
-        if (params == null) params = new HashMap<>();
-        params.put(key, value);
+    public static void main(String[] args) {
+        System.out.println(INSTANCE);
     }
 }
-package cn.com.vortexa.common.entity;
-
-import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.TableField;
-import com.baomidou.mybatisplus.annotation.TableId;
-import com.baomidou.mybatisplus.annotation.TableName;
-import java.io.Serializable;
-import java.time.LocalDateTime;
-import lombok.Getter;
-import lombok.Setter;
+package cn.com.vortexa.web3.constants;
 
 /**
- * <p>
- * 
- * </p>
- *
- * @author com.helei
- * @since 2025-04-21
+ * @author h30069248
+ * @since 2025/4/23 10:54
  */
-@Getter
-@Setter
-@TableName("t_web3_wallet")
-public class Web3Wallet implements Serializable {
-
-    private static final long serialVersionUID = 1L;
-
-    @TableId(value = "id", type = IdType.AUTO)
-    private Long id;
-
-    @TableField("mnemonic")
-    private String mnemonic;
-
-    @TableField("privateKey")
-    private String privateKey;
-
-    @TableField("eth_address")
-    private String ethAddress;
-
-    @TableField("sol_address")
-    private String solAddress;
-
-    @TableField("bsc_address")
-    private String bscAddress;
-
-    @TableField("btc_address")
-    private String btcAddress;
-
-    @TableField("insert_datetime")
-    private LocalDateTime insertDatetime;
-
-    @TableField("update_datetime")
-    private LocalDateTime updateDatetime;
-
-    @TableField("valid")
-    private Boolean valid;
+public enum Web3jFunctionType {
+    Uint256,
+    Address
 }
-package cn.com.vortexa.websocket.netty.base;
+package cn.com.vortexa.web3.dto;
 
-import cn.com.vortexa.common.entity.ProxyInfo;
-import cn.com.vortexa.websocket.netty.constants.NettyConstants;
-import cn.com.vortexa.websocket.netty.constants.WebsocketClientStatus;
-import io.netty.bootstrap.Bootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
-import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.handler.codec.http.HttpHeaders;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
+import lombok.Data;
 
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.Consumer;
-
-import javax.net.ssl.SSLException;
+import java.io.Serializable;
 
 /**
  * @author helei
- * @since 2025/3/18 10:52
+ * @since 2025/4/23 10:05
  */
-@Slf4j
-@Setter
-@Getter
-public abstract class AutoConnectWSService implements IWSService {
-    public static final int UN_LIMIT_RECONNECT_MARK = -1;   // 无限重连标记
-    private static final AtomicReferenceFieldUpdater<AutoConnectWSService, Channel> CHANNEL_ATOMIC_UPDATER
-            = AtomicReferenceFieldUpdater.newUpdater(AutoConnectWSService.class, Channel.class, "channel");
-    private static volatile EventLoopGroup eventLoopGroup;    //netty线程组
-    private final AtomicInteger reconnectTimes = new AtomicInteger(0);  //重链接次数
-    private final ReentrantLock reconnectLock = new ReentrantLock();    //重连锁
-    private final Condition startingWaitCondition = reconnectLock.newCondition();   //启动中阻塞的condition
-    private final String url; //websocket的url字符串
-    private Bootstrap bootstrap; //netty bootstrap
-    private volatile Channel channel;    //连接channel
-    private String host;    //连接host
-    private int port;    //连接port
-    private boolean useSSL; //是否ssl
-    private HttpHeaders headers;    //请求头
-    private ProxyInfo proxy = null; //代理
-    private int reconnectCountDownSecond = 180; //重连次数减少的间隔
-    private int reconnectLimit = 3; //重连次数限制
-    private int eventLoopGroupThreads = 1; // 线程数
-    private volatile WebsocketClientStatus clientStatus = WebsocketClientStatus.NEW;    //客户端当前状态
-    private Consumer<WebsocketClientStatus> clientStatusChangeHandler = socketCloseStatus -> {
-    };    //clientStatus更新的回调
-
-    protected AutoConnectWSService(String url) {
-        this.url = url;
-    }
-
-    protected abstract void init() throws SSLException, URISyntaxException;
+@Data
+public class ContractABI implements Serializable {
 
     /**
-     * 连接
-     *
-     * @return CompletableFuture<Boolean>
+     * 链的类型
      */
-    public final CompletableFuture<Boolean> connect() {
-        return switch (clientStatus) {
-            case NEW, STOP -> reconnect();
-            case STARTING -> waitForStarting();
-            case RUNNING -> {
-                log.warn("ws service [{}] in running, clientStatus[{}]", getName(), clientStatus);
-                yield CompletableFuture.supplyAsync(() -> true);
-            }
-            case SHUTDOWN -> throw new RuntimeException("");
-        };
-    }
+    private String chainType;
 
     /**
-     * 重连接
-     *
-     * @return CompletableFuture<Boolean>
+     * 合约地址
      */
-    public CompletableFuture<Boolean> reconnect() {
-        return switch (clientStatus) {
-            case NEW, STOP -> reconnectLogic();
-            case STARTING -> waitForStarting().thenApplyAsync(success -> {
-                if (success) {
-                    return true;
-                }
-                try {
-                    return reconnectLogic().get();
-                } catch (InterruptedException | ExecutionException e) {
-                    throw new RuntimeException(e);
-                }
-            });
-            case RUNNING -> {
-                log.warn("ws service [{}] in running, can't reconnect. clientStatus[{}]", getName(), clientStatus);
-                yield CompletableFuture.supplyAsync(() -> true);
-            }
-            case SHUTDOWN -> CompletableFuture.supplyAsync(() -> {
-                log.error("client[{}] already shutdown", getName());
-                return false;
-            });
-        };
-    }
+    private String contractAddress;
 
     /**
-     * 重连接逻辑
-     *
-     * @return CompletableFuture<Boolean>
+     * abi内容的字符串
      */
-    private CompletableFuture<Boolean> reconnectLogic() {
-        updateClientStatus(WebsocketClientStatus.STARTING);
+    private String abiContent;
+}
+package cn.com.vortexa.web3.dto;
 
-        String name = getName();
+import cn.com.vortexa.web3.constants.Web3jFunctionType;
+import cn.hutool.core.lang.Pair;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
-        return CompletableFuture.supplyAsync(() -> {
-            //Step 1 重连次数超过限制，关闭
-            if (reconnectLimit != UN_LIMIT_RECONNECT_MARK && reconnectTimes.get() >= reconnectLimit) {
-                log.error("reconnect times out of limit [{}], close websocket client", reconnectLimit);
-                shutdown();
-                return false;
-            }
 
-            AtomicBoolean isSuccess = new AtomicBoolean(false);
+import java.io.Serializable;
+import java.util.List;
 
-            //Step 2 重连逻辑
-            //Step 2.1 加锁保证只要一个线程进行重连
-            reconnectLock.lock();
-            try {
-                //Step 2.2 已经再running状态，直接返回true。变为shutdown、stop状态，直接返回false
-                if (clientStatus.equals(WebsocketClientStatus.RUNNING)) {
-                    log.info("client started by other thread");
-                    return true;
-                } else if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
-                    log.error("clint {} when client starting", clientStatus);
-                    return false;
-                }
-
-                //Step 3 初始化
-                log.info("start init Websocket client");
-                try {
-                    resolveParamFromUrl();
-
-                    init();
-                } catch (SSLException | URISyntaxException e) {
-                    throw new RuntimeException("init websocket client error", e);
-                }
-                log.info("init Websocket finish，start connect server [{}]", url);
-
-                //Step 4 链接服务器
-                if (reconnectTimes.incrementAndGet() <= reconnectLimit || reconnectLimit == UN_LIMIT_RECONNECT_MARK) {
-
-                    //Step 4.1 每进行重连都会先将次数加1并设置定时任务将重连次数减1
-                    getEventLoopGroup().schedule(() -> {
-                        reconnectTimes.decrementAndGet();
-                    }, reconnectCountDownSecond, TimeUnit.SECONDS);
-
-                    int waitingConnectTime = getWaitingConnectTime();
-                    log.info("start connect client [{}], url[{}], current times [{}], start after [{}]s",
-                            name, url, reconnectTimes.get(), waitingConnectTime);
-
-                    //Step 4.2 latch用于同步等等链接完成
-                    CountDownLatch latch = new CountDownLatch(1);
-
-                    //Step 4.3 延迟再进行连接
-                    getEventLoopGroup().schedule(() -> {
-                        try {
-                            ChannelFuture connect = bootstrap.connect(host, port);
-                            connect.addListener(future -> {
-                                try {
-                                    if (future.isSuccess()) {
-                                        setChannel(connect.channel());
-                                        afterBoostrapConnected(getChannel());
-
-                                        log.info("success connect to {}", url);
-                                        //Step 4.4 连接成功设置标识
-                                        isSuccess.set(true);
-                                    } else {
-                                        log.error("connect client [{}], url[{}] error, times [{}]",
-                                                name, url, reconnectTimes.get(), future.cause());
-
-                                        isSuccess.set(false);
-                                    }
-                                } finally {
-                                    if (latch.getCount() != 0) {
-                                        latch.countDown();
-                                    }
-                                }
-                            });
-                        } catch (Exception e) {
-                            log.error("connect client [{}], url[{}] error, times [{}]", name, url, reconnectTimes.get(),
-                                    e);
-                            isSuccess.set(false);
-                            latch.countDown();
-                        }
-                    }, waitingConnectTime, TimeUnit.SECONDS);
-
-                    //Step 4.5 等待链接完成
-                    try {
-                        latch.await();
-                    } catch (InterruptedException e) {
-                        log.error("connect client [{}], url[{}] interrupted, times [{}]", name, url,
-                                reconnectTimes.get(), e);
-                    }
-
-                    //Step 6 未成功启动，关闭
-                    if (!isSuccess.get()) {
-                        log.info("connect client [{}], url[{}] fail, current times [{}]", name, url,
-                                reconnectTimes.get());
-
-                        close();
-                    } else {
-                        log.info("connect client [{}], url[{}] success, current times [{}]", name, url,
-                                reconnectTimes.get());
-
-                        updateClientStatus(WebsocketClientStatus.RUNNING);
-                    }
-                }
-            } catch (Exception e) {
-                //exception 遇到未处理异常，直接关闭
-                log.error("connect client [{}] appear unknown error", name, e);
-                close();
-                throw new RuntimeException(String.format("connect client [%s] appear unknown error", name), e);
-            } finally {
-                //Step 5 释放等待启动的线程
-                startingWaitCondition.signalAll();
-                reconnectLock.unlock();
-            }
-
-            return isSuccess.get();
-        }, getCallbackInvoker());
-    }
-
-    protected int getWaitingConnectTime() {
-        int times = Math.min(Math.max(0, reconnectTimes.get()), NettyConstants.RECONNECT_DELAY_SECONDS.length - 1);
-        return NettyConstants.RECONNECT_DELAY_SECONDS[times];
-    }
+/**
+ * @author h30069248
+ * @since 2025/4/23 11:05
+ */
+@Data
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+public class SCInvokeParams implements Serializable {
+    /**
+     * 钱包id
+     */
+    private Integer walletId;
 
     /**
-     * 关闭
+     * 钱包信息
      */
-    public void close() {
-        if (clientStatus.equals(WebsocketClientStatus.STOP)
-                || clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
-            return;
-        }
-
-        updateClientStatus(WebsocketClientStatus.STOP);
-
-        log.info("closing websocket client [{}], [{}]", getName(), channel == null ? "null" : getChannel().hashCode());
-        if (channel != null) {
-            channel.close();
-            setChannel(null);
-        }
-        log.warn("web socket client [{}] closed", getName());
-    }
+    private WalletInfo walletInfo;
 
     /**
-     * 终止
+     * 链信息
      */
-    public final void shutdown() {
-        updateClientStatus(WebsocketClientStatus.SHUTDOWN);
-
-        if (channel != null) {
-            channel.close();
-            setChannel(null);
-        }
-        getEventLoopGroup().shutdownGracefully();
-        log.warn("web socket client [{}] already shutdown !", getName());
-    }
+    private Web3ChainInfo chainInfo;
 
     /**
-     * 更新status
-     *
-     * @param newStatus newStatus
+     * 调用的合约地址
      */
-    protected void updateClientStatus(WebsocketClientStatus newStatus) {
-        synchronized ("CLIENT_STATUS_LOCK") {
-            if (clientStatus.equals(newStatus)) {
-                return;
-            }
+    private String contractAddress;
+    /**
+     * abi方法名
+     */
+    private String functionName;
+    /**
+     * 只读方法
+     */
+    private Boolean readFunction;
+    /**
+     * 参数类型
+     */
+    private List<Pair<Web3jFunctionType, Object>> paramsTypes;
+    /**
+     * 返回值类型
+     */
+    private List<Web3jFunctionType> resultTypes;
+}
+package cn.com.vortexa.web3.dto;
 
-            if (clientStatus.equals(WebsocketClientStatus.SHUTDOWN)) {
-                throw new IllegalArgumentException("client status is shutdown，new status can not be " + newStatus);
-            }
+import lombok.Data;
 
-            try {
-                if (newStatus != clientStatus && clientStatusChangeHandler != null) {
-                    clientStatusChangeHandler.accept(newStatus);
-                }
-            } finally {
-                log.debug("client[{}] status [{}] -> [{}]", getName(), clientStatus, newStatus);
-                clientStatus = newStatus;
+import java.io.Serializable;
+import java.util.List;
+
+/**
+ * @author h30069248
+ * @since 2025/4/23 11:48
+ */
+@Data
+public class SCInvokeResult implements Serializable {
+
+    /**
+     * 交易类型合约交互时返回的交易hash
+     */
+    private String transactionHash;
+
+    /**
+     * 查询类型合约交互时得到的结果
+     */
+    private List<Object> result;
+}
+package cn.com.vortexa.web3.dto;
+
+
+import cn.com.vortexa.common.constants.ChainType;
+import cn.com.vortexa.common.entity.Web3Wallet;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.io.Serializable;
+
+/**
+ * @author helei
+ * @since 2025-04-05
+ */
+@Data
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+public class WalletInfo implements Serializable {
+    private String address;
+    private String privateKey;
+    private String publicKey;
+    private String mnemonic;
+
+    public WalletInfo(ChainType chainType, Web3Wallet web3Wallet) {
+        switch (chainType) {
+            case ETH -> {
+                this.address = web3Wallet.getEthAddress();
+                this.privateKey = web3Wallet.getEthPrivateKey();
+            }
+            case SOL -> {
+                this.address = web3Wallet.getSolAddress();
+                this.privateKey = web3Wallet.getSolPrivateKey();
             }
         }
-    }
-
-    protected EventLoopGroup getEventLoopGroup() {
-        if (eventLoopGroup == null) {
-            synchronized (AutoConnectWSService.class) {
-                if (eventLoopGroup == null) {
-                    eventLoopGroup = new NioEventLoopGroup(eventLoopGroupThreads);
-                }
-            }
-        }
-        return eventLoopGroup;
-    }
-
-    /**
-     * 获取回调执行线程池
-     *
-     * @return ExecutorService
-     */
-    public abstract ExecutorService getCallbackInvoker();
-
-    /**
-     * 每次netty bootstrap 连接后调用
-     *
-     * @throws InterruptedException InterruptedException
-     */
-    protected abstract void afterBoostrapConnected(Channel channel) throws InterruptedException;
-
-    /**
-     * 等待启动完成
-     *
-     * @return CompletableFuture<Void>
-     */
-    private CompletableFuture<Boolean> waitForStarting() {
-        return CompletableFuture.supplyAsync(() -> {
-            log.warn("client [{}] is starting, waiting for complete", getName());
-            reconnectLock.lock();
-            try {
-                while (clientStatus.equals(WebsocketClientStatus.STARTING)) {
-                    startingWaitCondition.await();
-                }
-
-                if (clientStatus.equals(WebsocketClientStatus.STOP) || clientStatus.equals(
-                        WebsocketClientStatus.SHUTDOWN)) {
-                    log.error("启动WS客户端[{}]失败, ClientStatus [{}}", getName(), clientStatus);
-                    return false;
-                }
-                return true;
-            } catch (InterruptedException e) {
-                log.error("waiting for start client [{}] error", getName());
-                throw new RuntimeException(e);
-            } finally {
-                reconnectLock.unlock();
-            }
-        }, getCallbackInvoker());
-    }
-
-    public Channel getChannel() {
-        return CHANNEL_ATOMIC_UPDATER.get(this);
-    }
-
-    public void setChannel(Channel channel) {
-        CHANNEL_ATOMIC_UPDATER.set(this, channel);
-    }
-
-    /**
-     * 解析参数
-     *
-     * @throws URISyntaxException url解析错误
-     */
-    private void resolveParamFromUrl() throws URISyntaxException {
-        URI uri = new URI(url);
-        String scheme = uri.getScheme() == null ? "ws" : uri.getScheme();
-        host = uri.getHost() == null ? "127.0.0.1" : uri.getHost();
-        if (uri.getPort() == -1) {
-            if ("ws".equalsIgnoreCase(scheme)) {
-                port = 80;
-            } else if ("wss".equalsIgnoreCase(scheme)) {
-                port = 443;
-            } else {
-                port = -1;
-            }
-        } else {
-            port = uri.getPort();
-        }
-
-        if (!"ws".equalsIgnoreCase(scheme) && !"wss".equalsIgnoreCase(scheme)) {
-            log.error("Only WS(S) is supported.");
-            throw new IllegalArgumentException("url error, Only WS(S) is supported.");
-        }
-
-        useSSL = "wss".equalsIgnoreCase(scheme);
+        this.mnemonic = web3Wallet.getMnemonic();
     }
 }
-package cn.com.vortexa.websocket.netty.constants;
+package cn.com.vortexa.web3.dto;
 
-import io.netty.util.AttributeKey;
 
-public class NettyConstants {
+import cn.com.vortexa.common.constants.ChainType;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
+import java.io.Serializable;
+
+@Data
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+public class Web3ChainInfo implements Serializable {
     /**
-     * 一朕的最大长度
+     * 链类型
      */
-    public final static int MAX_FRAME_LENGTH = 1024;
+    private ChainType chainType;
 
+    private String rpcUrl;
 
-    /**
-     * 放在netty channel 里的 client_name 的 key
-     */
-    public static final AttributeKey<String> CLIENT_NAME = AttributeKey.valueOf("client_name");
+    private String name;
 
-    /**
-     * 请求等待时间
-     */
-    public static final long REQUEST_WAITE_SECONDS = 60;
+    private Integer chainId;
 
-    /**
-     * netty客户端断线重连时间
-     */
-    public static final int[] RECONNECT_DELAY_SECONDS = {0, 0, 10, 60, 180, 300, 600};
+    private String originTokenSymbol;
 
-
-    /**
-     * netty客户端断线重连次数
-     */
-    public static final int RECONNECT_LIMIT = 3;
+    private String blockExploreUrl;
 }
+package cn.com.vortexa.web3.util;
+
+import cn.com.vortexa.web3.constants.Web3jFunctionType;
+
+import org.web3j.abi.TypeReference;
+import org.web3j.abi.datatypes.Address;
+import org.web3j.abi.datatypes.Function;
+import org.web3j.abi.datatypes.Type;
+import org.web3j.abi.datatypes.generated.Uint256;
+
+import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * @author h30069248
+ * @since 2025/4/23 10:51
+ */
+public class ABIFunctionBuilder {
+    private String functionName;
+    private final List<Type> parameterTypes = new ArrayList<>();
+    private final List<TypeReference<?>> returnTypes = new ArrayList<>();
+
+    public static ABIFunctionBuilder builder() {
+        return new ABIFunctionBuilder();
+    }
+
+    public ABIFunctionBuilder functionName(String functionName) {
+        this.functionName = functionName;
+        return this;
+    }
+
+    public ABIFunctionBuilder addParameterType(Web3jFunctionType type, Object value) {
+        parameterTypes.add(switch (type) {
+            case Uint256 -> new Uint256(BigInteger.valueOf((Long) value));
+            case Address -> new Address(String.valueOf(value));
+        });
+        return this;
+    }
+
+    public ABIFunctionBuilder addReturnType(Web3jFunctionType type) {
+        returnTypes.add(switch (type) {
+            case Uint256 -> new TypeReference<Uint256>() {};
+            case Address -> new TypeReference<Address>() {};
+        });
+        return this;
+    }
+
+    public Function build() {
+        return new Function(functionName, parameterTypes, returnTypes);
+    }
+}
+package cn.com.vortexa.web3;
+
+import cn.com.vortexa.web3.dto.WalletInfo;
+import cn.com.vortexa.web3.util.ABIFunctionBuilder;
+
+import org.bitcoinj.crypto.*;
+import org.web3j.abi.FunctionEncoder;
+import org.web3j.abi.FunctionReturnDecoder;
+import org.web3j.abi.datatypes.Function;
+import org.web3j.abi.datatypes.Type;
+import org.web3j.crypto.*;
+import org.web3j.protocol.Web3j;
+import org.web3j.protocol.core.DefaultBlockParameterName;
+import org.web3j.protocol.core.methods.request.Transaction;
+import org.web3j.protocol.core.methods.response.EthCall;
+import org.web3j.protocol.core.methods.response.EthGetTransactionCount;
+import org.web3j.protocol.core.methods.response.EthSendTransaction;
+import org.web3j.protocol.http.HttpService;
+import org.web3j.tx.gas.DefaultGasProvider;
+import org.web3j.utils.Numeric;
+
+import java.io.IOException;
+import java.math.BigInteger;
+import java.security.SecureRandom;
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * @author helei
+ * @since 2025/3/28 11:16
+ */
+public class EthWalletUtil {
+
+    private static final SecureRandom secureRandom = new SecureRandom();
+
+    public static WalletInfo generateEthWallet() {
+        return generateWalletInfoFromMnemonic(generateMnemonic());
+    }
+
+    public static String generateMnemonic() {
+        // 1. 生成助记词
+        SecureRandom secureRandom = new SecureRandom();
+        byte[] entropy = new byte[16]; // 128 bits entropy
+        secureRandom.nextBytes(entropy);
+
+        // 使用 bitcoinj 生成助记词
+        var mnemonicCode = MnemonicCode.INSTANCE;
+        List<String> mnemonicWords = null;
+        try {
+            mnemonicWords = mnemonicCode.toMnemonic(entropy);
+        } catch (MnemonicException.MnemonicLengthException e) {
+            throw new RuntimeException(e);
+        }
+        return String.join(" ", mnemonicWords);
+    }
+
+    public static WalletInfo generateWalletInfoFromMnemonic(String mnemonic) {
+        // 2. 生成 seed
+        byte[] seed = MnemonicUtils.generateSeed(mnemonic, ""); // passphrase 可设置
+
+        // 3. 创建 HD 钱包根节点 (BIP32 Root Key)
+        DeterministicKey rootPrivateKey = HDKeyDerivation.createMasterPrivateKey(seed);
+
+        // 4. 分步派生 BIP44 路径 m/44'/60'/0'/0/0
+        DeterministicKey purposeKey = HDKeyDerivation.deriveChildKey(rootPrivateKey, new ChildNumber(44, true));
+        DeterministicKey coinTypeKey = HDKeyDerivation.deriveChildKey(purposeKey, new ChildNumber(60, true));
+        DeterministicKey accountKey = HDKeyDerivation.deriveChildKey(coinTypeKey, new ChildNumber(0, true));
+        DeterministicKey externalKey = HDKeyDerivation.deriveChildKey(accountKey, ChildNumber.ZERO); // change = 0
+        DeterministicKey addressKey = HDKeyDerivation.deriveChildKey(externalKey,
+            ChildNumber.ZERO); // address index = 0
+
+        byte[] privateKeyBytes = addressKey.getPrivKeyBytes();
+
+        // 转为 web3j 的 ECKeyPair
+        ECKeyPair keyPair = ECKeyPair.create(privateKeyBytes);
+        Credentials credentials = Credentials.create(keyPair);
+
+        // 6. 输出钱包信息
+        return WalletInfo.builder()
+            .mnemonic(mnemonic)
+            .privateKey(keyPair.getPrivateKey().toString(16))
+            .publicKey(keyPair.getPublicKey().toString(16))
+            .address(credentials.getAddress())
+            .build();
+    }
+
+    public static Sign.SignatureData signatureMessage2Data(String privateKey, String message) {
+        byte[] contentHashBytes = message.getBytes();
+        // 根据私钥获取凭证对象
+        Credentials credentials = Credentials.create(privateKey);
+        return Sign.signPrefixedMessage(contentHashBytes, credentials.getEcKeyPair());
+    }
+
+    public static String signatureMessage2String(String privateKey, String message) {
+        Sign.SignatureData signMessage = signatureMessage2Data(privateKey, message);
+
+        byte[] r = signMessage.getR();
+        byte[] s = signMessage.getS();
+        byte[] v = signMessage.getV();
+
+        byte[] signByte = Arrays.copyOf(r, v.length + r.length + s.length);
+        System.arraycopy(s, 0, signByte, r.length, s.length);
+        System.arraycopy(v, 0, signByte, r.length + s.length, v.length);
+
+        return Numeric.toHexString(signByte);
+    }
+
+    public static String getETHAddress(String privateKeyHex) {
+        Credentials credentials = Credentials.create(privateKeyHex);
+
+        // 获取原始地址（小写）
+        String rawAddress = credentials.getAddress();
+
+        // 将地址转换为区分大小写的 Checksum 地址
+        return Keys.toChecksumAddress(rawAddress);
+    }
+
+    public static BigInteger getNonce(String rpcUrl, String address) throws IOException {
+        Web3j web3j = Web3j.build(new HttpService(rpcUrl));
+
+        EthGetTransactionCount transactionCount = web3j.ethGetTransactionCount(
+                address, org.web3j.protocol.core.DefaultBlockParameterName.LATEST)
+            .send();
+
+        return transactionCount.getTransactionCount();
+    }
+
+    public static String getRandomNonce() {
+        // 生成 32 字节的随机数
+        byte[] randomBytes = new byte[32];
+        secureRandom.nextBytes(randomBytes);
+
+        // 将字节数组转换为十六进制字符串
+        return toHex(randomBytes);
+    }
+
+    // 将字节数组转换为十六进制字符串
+    public static String toHex(byte[] bytes) {
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : bytes) {
+            hexString.append(String.format("%02x", b));  // 格式化为两位十六进制
+        }
+        return hexString.toString();
+    }
+
+    /**
+     * 制度的智能合约调用
+     *
+     * @param rpcUrl rpcUrl
+     * @param contractAddress contractAddress
+     * @param address address
+     * @param functionBuilder functionBuilder
+     * @return List<Type>
+     * @throws IOException IOException
+     */
+    public static List<Type> smartContractCallInvoke(
+        String rpcUrl,
+        String contractAddress,
+        String address,
+        ABIFunctionBuilder functionBuilder
+    ) throws IOException {
+        Web3j web3j = Web3j.build(new HttpService(rpcUrl));
+
+        Function function = functionBuilder.build();
+        Transaction transaction = Transaction.createEthCallTransaction(
+            address,
+            contractAddress,
+            FunctionEncoder.encode(function)
+        );
+
+        EthCall response = web3j.ethCall(
+            transaction,
+            DefaultBlockParameterName.LATEST
+        ).send();
+        return FunctionReturnDecoder.decode(response.getValue(), function.getOutputParameters());
+    }
+
+    /**
+     * 制度的智能合约调用
+     *
+     * @param rpcUrl rpcUrl
+     * @param contractAddress contractAddress
+     * @param address address
+     * @param functionBuilder functionBuilder
+     * @return String   ethSendTransaction
+     * @throws IOException IOException
+     */
+    public static String smartContractTransactionInvoke(
+        String rpcUrl,
+        String contractAddress,
+        String address,
+        ABIFunctionBuilder functionBuilder
+    ) throws IOException {
+        Web3j web3j = Web3j.build(new HttpService(rpcUrl));
+
+        Function function = functionBuilder.build();
+
+        Transaction transaction = Transaction.createFunctionCallTransaction(
+            address,
+            null,
+            DefaultGasProvider.GAS_PRICE,
+            DefaultGasProvider.GAS_LIMIT,
+            contractAddress,
+            FunctionEncoder.encode(function)
+        );
+        EthSendTransaction ethSendTransaction = web3j.ethSendTransaction(transaction).send();
+        return ethSendTransaction.getTransactionHash();
+    }
+}
+vortexa:
+  web3:
+    chain-info:
+      - name: Monad_Testnet
+        rpcUrl: https://testnet-rpc.monad.xyz/
+        chainId: 10143
+        originTokenSymbol: MON
+        blockExploreUrl: https://testnet.monadexplorer.com
+
+      - name: Eth_Sepora
+        rpcUrl: https://testnet-rpc.monad.xyz/
+        chainId: 10143
+        originTokenSymbol: MON
+        blockExploreUrl: https://testnet.monadexplorer.com
+
 package cn.com.vortexa.bot_platform.controller;
 
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import cn.com.vortexa.bot_platform.service.IScriptNodeService;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.dto.control.RegisteredScriptNode;
+import cn.hutool.core.util.StrUtil;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+
+import java.io.IOException;
+import java.util.List;
 
 /**
  * <p>
- *  前端控制器
+ * 前端控制器
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-04-08
+ */
+@RestController
+@RequestMapping("/script-node")
+public class ScriptNodeController {
+
+    @Autowired
+    private IScriptNodeService scriptNodeService;
+
+    @PostMapping("/remote-config/{scriptNodeName}")
+    public Result remoteConfig(@PathVariable("scriptNodeName") String scriptNodeName) {
+        String configStr = null;
+        try {
+            configStr = scriptNodeService.loadScriptNodeConfig(scriptNodeName);
+            if (StrUtil.isBlank(configStr)) {
+                return Result.fail(scriptNodeName + " config is empty");
+            }
+            return Result.ok(configStr);
+        } catch (IOException e) {
+            return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+        }
+    }
+
+    @PostMapping("/remote-config")
+    public Result botRemoteConfig(
+            @RequestParam("scriptNodeName") String scriptNodeName,
+            @RequestParam("botKey") String botKey
+    ) {
+        String configStr = null;
+        try {
+            configStr = scriptNodeService.loadScriptNodeBotConfig(scriptNodeName, botKey);
+            if (StrUtil.isBlank(configStr)) {
+                return Result.fail(" config is empty");
+            }
+            return Result.ok(configStr);
+        } catch (IOException e) {
+            return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+        }
+    }
+
+    @PostMapping("/all")
+    public Result queryAllScriptNode() {
+        List<RegisteredScriptNode> list = scriptNodeService.queryAllScriptNode();
+        return Result.ok(list);
+    }
+}
+
+package cn.com.vortexa.bot_platform.controller;
+
+import cn.com.vortexa.bot_platform.service.IWeb3WalletService;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.dto.web3.SignatureMessage;
+import cn.com.vortexa.web3.dto.SCInvokeParams;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.io.IOException;
+
+/**
+ * <p>
+ * 前端控制器
  * </p>
  *
  * @author com.helei
  * @since 2025-04-21
  */
 @RestController
-@RequestMapping("/core/web3Wallet")
+@RequestMapping("/web3")
 public class Web3WalletController {
+    @Autowired
+    public IWeb3WalletService web3WalletService;
 
-}
-package cn.com.vortexa.bot_platform.mapper;
+    @PostMapping("/signature")
+    public Result signatureWalletMessage(SignatureMessage message) {
+        return Result.ok(web3WalletService.signatureMessage(message));
+    }
 
-import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-
-import cn.com.vortexa.common.entity.Web3Wallet;
-
-/**
- * <p>
- *  Mapper 接口
- * </p>
- *
- * @author com.helei
- * @since 2025-04-21
- */
-public interface Web3WalletMapper extends BaseMapper<Web3Wallet> {
-
+    @PostMapping("/smart_contract_invoke")
+    public Result smartContractInvoke(@RequestBody SCInvokeParams invokeParams) {
+        try {
+            return web3WalletService.smartContractInvoke(invokeParams);
+        } catch (Exception e) {
+            return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+        }
+    }
 }
 package cn.com.vortexa.bot_platform.service.impl;
 
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import static cn.com.vortexa.common.entity.Web3Wallet.PUBLIC_FIELDS;
+
+import cn.com.vortexa.bot_platform.web3.SmartContractInvoker;
+import cn.com.vortexa.web3.dto.SCInvokeParams;
+import cn.com.vortexa.web3.dto.SCInvokeResult;
+import cn.com.vortexa.web3.dto.Web3ChainInfo;
+import cn.hutool.core.collection.CollUtil;
+
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 
 import cn.com.vortexa.bot_platform.mapper.Web3WalletMapper;
 import cn.com.vortexa.bot_platform.service.IWeb3WalletService;
+import cn.com.vortexa.common.dto.Result;
 import cn.com.vortexa.common.entity.Web3Wallet;
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.excel.ExcelReadUtil;
+import cn.com.vortexa.db_layer.service.AbstractBaseService;
+import cn.com.vortexa.rpc.api.platform.IWeb3WalletRPC;
+import cn.com.vortexa.web3.EthWalletUtil;
+import cn.com.vortexa.web3.SolanaWalletUtil;
+import cn.com.vortexa.common.constants.ChainType;
+import cn.com.vortexa.common.dto.web3.SignatureMessage;
+import cn.com.vortexa.web3.dto.WalletInfo;
+import cn.hutool.core.util.StrUtil;
+import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.stereotype.Service;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.Serializable;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
 /**
  * <p>
- *  服务实现类
+ * 服务实现类
  * </p>
  *
  * @author com.helei
  * @since 2025-04-21
  */
+@Slf4j
 @Service
-public class Web3WalletServiceImpl extends ServiceImpl<Web3WalletMapper, Web3Wallet> implements IWeb3WalletService {
+public class Web3WalletServiceImpl extends AbstractBaseService<Web3WalletMapper, Web3Wallet>
+    implements IWeb3WalletRPC, IWeb3WalletService {
 
+    private final Web3WalletMapper web3WalletMapper;
+
+    public Web3WalletServiceImpl(Web3WalletMapper web3WalletMapper) {
+        super();
+        this.web3WalletMapper = web3WalletMapper;
+    }
+
+    @Override
+    public Result signatureMessageRPC(SignatureMessage message) {
+        return signatureMessage(message);
+    }
+
+    @Override
+    public List<Web3Wallet> batchQueryByIdsRPC(List<Serializable> ids) {
+        return batchQueryByIds(ids);
+    }
+
+    @Override
+    public List<Web3Wallet> batchQueryByIds(List<Serializable> ids) {
+        if (CollUtil.isEmpty(ids)) {
+            return List.of();
+        }
+        QueryWrapper<Web3Wallet> queryWrapper = new QueryWrapper<>();
+        queryWrapper.select(PUBLIC_FIELDS);
+        queryWrapper.in("id", ids);
+        return baseMapper.selectList(queryWrapper);
+    }
+
+    @Override
+    public Result signatureMessage(SignatureMessage signatureMessage) {
+        Integer walletId;
+        String message;
+        if ((walletId = signatureMessage.getWalletId()) == null || walletId < 0 || StrUtil.isBlank(
+            message = signatureMessage.getMessage())) {
+            return Result.fail("params illegal");
+        }
+
+        Web3Wallet web3Wallet = baseMapper.selectOne(new QueryWrapper<>(Web3Wallet.builder().id(walletId).build()));
+        if (web3Wallet == null) {
+            return Result.fail("wallet %s not exist".formatted(walletId));
+        }
+
+        ChainType chainType = signatureMessage.getChainType();
+        try {
+            String signature = switch (chainType) {
+                case ETH -> EthWalletUtil.signatureMessage2String(web3Wallet.getEthPrivateKey(), message);
+                case SOL -> SolanaWalletUtil.signatureMessage2String(web3Wallet.getSolPrivateKey(), message);
+                case null -> throw new IllegalArgumentException("chain type[%s] not support".formatted(chainType));
+            };
+            return Result.ok(signature);
+        } catch (Exception e) {
+            log.error("{} signature chain[{}] message[{}] fail", walletId, chainType, message, e);
+            return Result.fail("signature failed");
+        }
+    }
+
+    @Override
+    public Result smartContractInvoke(SCInvokeParams invokeParams) throws IOException {
+        if (invokeParams.getWalletId() == null && invokeParams.getWalletInfo() == null) {
+            return Result.fail("walletId or walletInfo must be provided");
+        }
+
+        Web3ChainInfo chainInfo = invokeParams.getChainInfo();
+        if (chainInfo == null) {
+            return Result.fail("chainInfo must be provided");
+        }
+
+        WalletInfo wallet = invokeParams.getWalletInfo() == null
+            ? new WalletInfo(chainInfo.getChainType(), web3WalletMapper.selectById(invokeParams.getWalletId()))
+            : invokeParams.getWalletInfo();
+
+        SCInvokeResult result = switch (chainInfo.getChainType()) {
+            case ETH -> SmartContractInvoker.CHAIN.ETH.invokeSCFunction(wallet, chainInfo, invokeParams);
+            default ->
+                throw new IllegalArgumentException("chain type[%s] not support".formatted(chainInfo.getChainType()));
+        };
+
+        return Result.ok(result);
+    }
+
+    @Override
+    public Integer importFromExcel(String fileBotConfigPath) throws SQLException {
+        String proxyFilePath = FileUtil.getAppResourceSystemConfigDir() + File.separator + fileBotConfigPath;
+        try {
+            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(proxyFilePath);
+            return importFromRaw(rawLines);
+        } catch (Exception e) {
+            log.error("read wallet file[{}] error", proxyFilePath, e);
+            return 0;
+        }
+    }
+
+    @Override
+    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
+        List<Web3Wallet> web3Wallets = new ArrayList<>();
+        for (Map<String, Object> line : rawLines) {
+            String mnemonic = String.valueOf(line.get("mnemonic"));
+            Web3Wallet.Web3WalletBuilder builder = Web3Wallet.builder().mnemonic(mnemonic);
+
+            WalletInfo ethWallet = EthWalletUtil.generateWalletInfoFromMnemonic(mnemonic);
+            builder.ethPrivateKey(ethWallet.getPrivateKey());
+            builder.ethAddress(ethWallet.getAddress());
+
+            WalletInfo solWallet = SolanaWalletUtil.generateWalletInfoFromMnemonic(mnemonic);
+            builder.solPrivateKey(solWallet.getPrivateKey());
+            builder.solAddress(solWallet.getAddress());
+        }
+        return insertOrUpdateBatch(web3Wallets);
+    }
 }
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="cn.com.vortexa.bot_platform.mapper.BotInstanceMapper">
+package cn.com.vortexa.bot_platform.service;
 
-    <!-- 通用查询映射结果 -->
-    <resultMap id="BaseResultMap" type="cn.com.vortexa.common.entity.BotInstance">
-        <id column="id" property="id"/>
-        <result column="bot_id" property="botId"/>
-        <result column="bot_name" property="botName"/>
-        <result column="script_node_name" property="scriptNodeName"/>
-        <result column="bot_key" property="botKey"/>
-        <result column="account_table_name" property="accountTableName"/>
-        <result column="job_params" property="jobParams"/>
-        <result column="params" property="params"/>
-        <result column="insert_datetime" property="insertDatetime"/>
-        <result column="update_datetime" property="updateDatetime"/>
-        <result column="valid" property="valid"/>
-    </resultMap>
+import com.baomidou.mybatisplus.extension.service.IService;
 
-    <insert id="insertOrUpdate" parameterType="cn.com.vortexa.common.entity.BotInstance">
-        INSERT INTO t_bot_instance
-        (bot_id, bot_name, script_node_name, bot_key, account_table_name, job_params, params, update_datetime, valid)
-        VALUES (
-        #{botId}, #{botName}, #{scriptNodeName}, #{botKey}, #{accountTableName}, #{jobParams}, #{params}, now(), 1
-        )
-        ON DUPLICATE KEY UPDATE
-        <trim suffixOverrides=",">
-            <if test="botId != null">
-                bot_id = values (bot_id),
-            </if>
-            <if test="accountTableName != null">
-                account_table_name = values (account_table_name),
-            </if>
-            <if test="jobParams != null">
-                job_params =values (job_params),
-            </if>
-            <if test="params != null">
-                params = values (params),
-            </if>
-            <if test="updateDatetime != null">
-                update_datetime = values (update_datetime),
-            </if>
-            <if test="valid != null">
-                valid = values(valid),
-            </if>
-        </trim>
-    </insert>
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.dto.web3.SignatureMessage;
+import cn.com.vortexa.common.entity.Web3Wallet;
+import cn.com.vortexa.db_layer.service.ImportService;
+import cn.com.vortexa.web3.dto.SCInvokeParams;
 
-    <insert id="insertOrUpdateBatch" parameterType="java.util.List">
-        INSERT INTO t_bot_instance
-        (bot_id, bot_name, script_node_name, bot_key, account_table_name, job_params, params, update_datetime, valid)
-        VALUES
-        <foreach collection="list" item="item" separator=",">
-            (#{item.botId}, #{item.botName}, #{item.scriptNodeName}, #{item.botKey}, #{item.accountTableName}, #{item.jobParams},
-            #{item.params}, current_timestamp, 1)
-        </foreach>
-        ON DUPLICATE KEY UPDATE
-        bot_id = values(bot_id),
-        account_table_name = values(account_table_name),
-        job_params = values(job_params),
-        params = values(params),
-        update_datetime = values(updateDatetime),
-        valid =values (valid)
-    </insert>
+import java.io.IOException;
 
+/**
+ * <p>
+ * 服务类
+ * </p>
+ *
+ * @author com.helei
+ * @since 2025-04-21
+ */
+public interface IWeb3WalletService extends IService<Web3Wallet>, ImportService {
 
-    <select id="multipleConditionQuery"
-            parameterType="cn.com.vortexa.common.entity.BotInstance"
-            resultType="cn.com.vortexa.common.entity.BotInstance">
-        select
-        t.id as id,
-        t.bot_id as botId,
-        t.bot_name as botName,
-        t.script_node_name as scriptNodeName,
-        t.bot_key as botKey,
-        t.account_table_name as accountTableName,
-        t.job_params as jobParams,
-        t.params,
-        t.insert_datetime as insertDatetime,
-        t.update_datetime as updateDatetime,
-        t.valid as valid
-        from
-        t_bot_instance t
-        <where>
-            valid = 1
-            <if test="botId != null">
-                and t.bot_id = #{botId}
-            </if>
-            <if test="scriptNodeName != null">
-                and t.script_node_name = #{scriptNodeName}
-            </if>
-            <if test="botKey != null">
-                and t.bot_key = #{botKey}
-            </if>
-            <if test="botName != null">
-                and t.bot_name = #{botName}
-            </if>
-            <if test="accountTableName != null">
-                and t.account_table_name = #{accountTableName}
-            </if>
-            <if test="params != null and !params.isEmpty()">
-                AND JSON_CONTAINS(
-                t.params,
-                <foreach collection="params" item='value' index='key' separator=',' open="JSON_OBJECT(" close=")">
-                    #{key}, #{value}
-                </foreach>
-                )
-            </if>
-        </where>
-    </select>
-</mapper>
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="cn.com.helei.bot.core.mapper.Web3WalletMapper">
+    Result signatureMessage(SignatureMessage signatureMessage);
 
-    <!-- 通用查询映射结果 -->
-    <resultMap id="BaseResultMap" type="cn.com.helei.bot.core.entity.Web3Wallet">
-        <id column="id" property="id" />
-        <result column="mnemonic" property="mnemonic" />
-        <result column="privateKey" property="privateKey" />
-        <result column="eth_address" property="ethAddress" />
-        <result column="sol_address" property="solAddress" />
-        <result column="bsc_address" property="bscAddress" />
-        <result column="btc_address" property="btcAddress" />
-        <result column="insert_datetime" property="insertDatetime" />
-        <result column="update_datetime" property="updateDatetime" />
-        <result column="valid" property="valid" />
-    </resultMap>
+    /**
+     * 智能合约交互
+     *
+     * @param invokeParams  invokeParams
+     * @return  Result
+     */
+    Result smartContractInvoke(SCInvokeParams invokeParams) throws IOException;
+}
+package cn.com.vortexa.bot_platform.web3;
 
-</mapper>
-create table t_web3_wallet(
-    id bigint primary key auto_increment,
-    mnemonic varchar(520),
-    privateKey varchar(520),
-    eth_address varchar(520),
-    sol_address varchar(520),
-    bsc_address varchar(520),
-    btc_address varchar(520),
+import cn.com.vortexa.web3.EthWalletUtil;
+import cn.com.vortexa.web3.constants.Web3jFunctionType;
+import cn.com.vortexa.web3.dto.SCInvokeParams;
+import cn.com.vortexa.web3.dto.SCInvokeResult;
+import cn.com.vortexa.web3.dto.WalletInfo;
+import cn.com.vortexa.web3.dto.Web3ChainInfo;
+import cn.com.vortexa.web3.util.ABIFunctionBuilder;
+import cn.hutool.core.collection.CollUtil;
+import cn.hutool.core.lang.Pair;
 
-    insert_datetime datetime   default CURRENT_TIMESTAMP null,
-    update_datetime datetime   default CURRENT_TIMESTAMP null on update CURRENT_TIMESTAMP,
-    valid           tinyint(1) default 1                 null,
-    unique (mnemonic),
-    unique (privateKey)
-)
+import org.web3j.abi.datatypes.Type;
 
+import java.io.IOException;
 
-package cn.com.vortexa.script_node.bot;
+import java.util.List;
+/**
+ * 智能合约调用器
+ *
+ * @author helei
+ * @since 2025/4/23 10:11
+ */
+public interface SmartContractInvoker {
+    /**
+     * 执行智能合约交互
+     *
+     * @param walletInfo  钱包信息
+     * @param chainInfo  链信息
+     * @param scInvokeParams 调用参数
+     * @return  SCInvokeResult
+     * @throws IOException  IOException
+     */
+    SCInvokeResult invokeSCFunction(
+        WalletInfo walletInfo,
+        Web3ChainInfo chainInfo,
+        SCInvokeParams scInvokeParams
+    ) throws IOException;
 
-import static cn.com.vortexa.script_node.service.impl.BotAccountContextServiceImpl.BOT_ACCOUNT_CONTEXT_TABLE_PREFIX;
-import static cn.com.vortexa.common.entity.BotInfo.BASIC_JOB_LIST_KEY;
+    enum CHAIN implements SmartContractInvoker {
+        ETH {
+            @Override
+            public  SCInvokeResult invokeSCFunction(
+                WalletInfo walletInfo,
+                Web3ChainInfo chainInfo,
+                SCInvokeParams scInvokeParams
+            ) throws IOException {
+                List<Web3jFunctionType> resultTypes = scInvokeParams.getResultTypes();
 
-import cn.com.vortexa.script_node.config.ScriptNodeConfiguration;
-import cn.com.vortexa.script_node.service.BotApi;
-import cn.com.vortexa.script_node.constants.BotStatus;
-import cn.com.vortexa.common.constants.BotJobType;
+                // Step 1 构建合约调用方法
+                ABIFunctionBuilder functionBuilder = ABIFunctionBuilder
+                    .builder()
+                    .functionName(scInvokeParams.getFunctionName());
+
+                if (CollUtil.isNotEmpty(scInvokeParams.getParamsTypes())) {
+                    for (Pair<Web3jFunctionType, Object> paramsType : scInvokeParams.getParamsTypes()) {
+                        functionBuilder.addParameterType(paramsType.getKey(), paramsType.getValue());
+                    }
+                }
+                if (CollUtil.isNotEmpty(resultTypes)) {
+                    for (Web3jFunctionType resultType : resultTypes) {
+                        functionBuilder.addReturnType(resultType);
+                    }
+                }
+
+                // Step 3 调用合约
+                SCInvokeResult result = new SCInvokeResult();
+                if (scInvokeParams.getReadFunction()) {
+                    List<Type> types = EthWalletUtil.smartContractCallInvoke(
+                        chainInfo.getRpcUrl(),
+                        scInvokeParams.getContractAddress(),
+                        walletInfo.getAddress(),
+                        functionBuilder
+                    );
+                    result.setResult(types.stream().map(Type::getValue).toList());
+                } else {
+                    String transactionHash = EthWalletUtil.smartContractTransactionInvoke(
+                        chainInfo.getRpcUrl(),
+                        scInvokeParams.getContractAddress(),
+                        walletInfo.getAddress(),
+                        functionBuilder
+                    );
+                    result.setTransactionHash(transactionHash);
+                }
+
+                return result;
+            }
+        }
+    }
+}
+package cn.com.vortexa.script_node.config;
+
 import cn.com.vortexa.common.constants.HttpMethod;
-import cn.com.vortexa.common.dto.job.AutoBotJobParam;
-import cn.com.vortexa.script_node.util.log.AppendLogger;
-import cn.com.vortexa.common.dto.AutoBotRuntimeInfo;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.common.entity.BotInfo;
-import cn.com.vortexa.common.entity.BotInstance;
-import cn.com.vortexa.common.entity.ProxyInfo;
-import cn.com.vortexa.common.exception.BotInitException;
-import cn.com.vortexa.common.exception.BotStatusException;
+import cn.com.vortexa.common.dto.Result;
 import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.NamedThreadFactory;
+import cn.com.vortexa.common.util.YamlConfigLoadUtil;
 import cn.com.vortexa.common.util.http.RestApiClientFactory;
-import cn.hutool.core.util.RandomUtil;
-import cn.hutool.core.util.StrUtil;
-
-import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
-
-import lombok.Getter;
-import lombok.Setter;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.env.EnvironmentPostProcessor;
+import org.springframework.core.env.ConfigurableEnvironment;
+import org.springframework.core.env.MapPropertySource;
+import org.yaml.snakeyaml.Yaml;
 
 import java.io.File;
 import java.io.IOException;
-import java.sql.SQLException;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.*;
-import java.util.function.Supplier;
+import java.util.concurrent.ExecutionException;
 
-public abstract class AbstractAutoBot {
+public class RemoteConfigLoader implements EnvironmentPostProcessor {
 
-    private static final ProxyInfo DEFAULT_PROXY = new ProxyInfo();
 
-    public AppendLogger logger;
-
-    /**
-     * 代理并发控制
-     */
-    private final Map<ProxyInfo, Semaphore> networkSyncControllerMap;
-
-    /**
-     * bot api
-     */
-    @Getter
-    private BotApi botApi;
-
-    /**
-     * bot运行时信息
-     */
-    @Getter
-    private final AutoBotRuntimeInfo autoBotRuntimeInfo;
-
-    /**
-     * 请求并发数量
-     */
-    @Getter
-    @Setter
-    private int requestConcurrentCount = 5;
-
-    /**
-     * bot信息
-     */
-    @Getter
-    private BotInfo botInfo;
-
-    @Getter
-    private BotInstance botInstance;
-
-    /**
-     * script node配置
-     */
-    @Getter
-    private ScriptNodeConfiguration scriptNodeConfiguration;
-
-    /**
-     * 配置
-     */
-    @Getter
-    private AutoBotConfig autoBotConfig;
-
-    /**
-     * 执行异步任务的线程池
-     */
-    @Getter
-    private ExecutorService executorService;
-
-    /**
-     * 状态
-     */
-    @Getter
-    private BotStatus status = BotStatus.NEW;
-
-    public AbstractAutoBot() {
-        this.networkSyncControllerMap = new ConcurrentHashMap<>();
-        this.autoBotRuntimeInfo = new AutoBotRuntimeInfo();
-    }
-
-    /**
-     * 初始化方法
-     *
-     * @param autoBotConfig autoBotConfig
-     * @throws BotInitException BotInitException
-     */
-    public final void init(
-            ScriptNodeConfiguration scriptNodeConfiguration, BotApi botApi, AutoBotConfig autoBotConfig
-    ) throws BotInitException {
+    @Override
+    public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
         try {
-            this.logger = new AppendLogger(
-                    scriptNodeConfiguration.getScriptNodeName(),
-                    autoBotConfig.getBotName(),
-                    autoBotConfig.getBotKey()
+            final String appConfigPath = FileUtil.USER_DIR + File.separator + "config" + File.separator + "application.yaml";
+            ScriptNodeConfiguration preLoadSNConfig = YamlConfigLoadUtil.load(new File(appConfigPath),
+                List.of("vortexa", "scriptNode"), ScriptNodeConfiguration.class);
+
+            String configUrl = preLoadSNConfig.buildRemoteConfigRestApi();
+            String scriptNodeName = preLoadSNConfig.getScriptNodeName();
+            if (configUrl == null || scriptNodeName == null) {
+                System.err.println("no remote.config-url or script node name，skip load remote config");
+                return;
+            }
+
+            // 拉取 YAML 内容
+            String yamlContent = fetchRemoteConfig(configUrl, scriptNodeName);
+            Yaml yaml = new Yaml();
+
+            // 使用 SnakeYAML 2.2 解析成 Map
+            Map<String, Object> yamlMap = yaml.load(yamlContent);
+
+            // 转成 PropertySource，放在最前面
+            MapPropertySource propertySource = new MapPropertySource(
+                    "remote-config", YamlConfigLoadUtil.flattenMap(yamlMap)
             );
-        } catch (IOException e) {
-            throw new BotInitException("bot logger create error", e);
-        }
-
-        this.scriptNodeConfiguration = scriptNodeConfiguration;
-        this.botApi = botApi;
-
-        // Step 1 参数校验
-        if (StrUtil.isBlank(autoBotConfig.getBotKey())) {
-            throw new IllegalArgumentException("bot key is empty!");
-        }
-
-        // Step 2 进入INIT状态，获取参数
-        updateState(BotStatus.INIT);
-        this.autoBotConfig = autoBotConfig;
-        try {
-            // Step 2.1 获取BotInfo,解析Bot Job
-            botInfo = buildBotInfo();
-            resolveBotJobMethod();
+            environment.getPropertySources().addFirst(propertySource);
         } catch (Exception e) {
-            throw new BotInitException("resolve bot job error", e);
+            System.err.println("remote config load error，use local config: " + e.getMessage());
         }
+    }
 
-        // Step 2.2 保存bot info
+    private String fetchRemoteConfig(String configUrl, String scriptNodeName) throws IOException {
         try {
-            if (botApi.getBotInfoRPC().insertOrUpdateRPC(botInfo) == 1) {
-                Map<String, Object> query = new HashMap<>();
-                query.put("name", botInfo.getName());
-                // 保存成还需查询botId
-                Integer id = botApi.getBotInfoRPC().conditionQueryRPC(query).getFirst().getId();
-                botInfo.setId(id);
-                logger.info("save bot info success, id:" + botInfo.getId());
-            }
-        } catch (SQLException e) {
-            throw new BotInitException("save bot info error", e);
-        }
-
-        this.botInstance = BotInstance.builder()
-                .botId(botInfo.getId())
-                .botName(botInfo.getName())
-                .scriptNodeName(scriptNodeConfiguration.getScriptNodeName())
-                .botKey(autoBotConfig.getBotKey())
-                .build();
-
-        // Step 2.3 设置logger前缀与线程池
-        this.executorService = Executors.newThreadPerTaskExecutor(
-                new NamedThreadFactory(botInfo.getName() + "-executor"));
-
-        try {
-            // Step 2.4 初始化存储的Table
-            logger.info("start init database table");
-            // 检查对应分表是否存在
-            if (!botApi.getBotAccountService()
-                    .checkAndCreateShardedTable(botInfo.getId(), getAutoBotConfig().getBotKey(), true)) {
-                throw new RuntimeException("bot account table create error");
-            }
-            logger.info("database table init finish");
-
-            // Step 2.5 初始化BotInstance实例
-            logger.info("start init bot instance");
-
-            BotInstance dbInstance = getBotApi().getBotInstanceRPC().selectOneRPC(botInstance);
-
-            // 数据库存在bot instance实例信息并且job信息没变化，用数据库的。 否则用BotInfo信息生成BotInstance信息写入库
-            if (dbInstance != null && !compareBotJobParamsChanged(botInfo, dbInstance)) {
-                this.botInstance = dbInstance;
-                logger.info("exist botInstance, use exist instance config");
+            String response = RestApiClientFactory.getClient().request(
+                    configUrl + "/script-node/remote-config" + scriptNodeName,
+                    HttpMethod.POST,
+                    new HashMap<>(),
+                    null,
+                    new JSONObject()
+            ).get();
+            Result result = JSONObject.parseObject(response, Result.class);
+            if (result.getSuccess()) {
+                return String.valueOf(result.getData());
             } else {
-                logger.info("no instance or instance job update, create it...");
-
-                String tableName = getBotApi().getTableShardStrategy().generateTableName(
-                        BOT_ACCOUNT_CONTEXT_TABLE_PREFIX,
-                        new Object[]{botInstance.getBotId(), botInstance.getBotKey()}
-                );
-                botInstance.setBotName(botInfo.getName());
-                botInstance.setAccountTableName(tableName);
-                botInstance.setJobParams(botInfo.getJobParams());
-                botInstance.setParams(botInfo.getParams());
-
-                if (botApi.getBotInstanceRPC().insertOrUpdateRPC(botInstance) > 0) {
-                    logger.info("new bot instance create success");
-                } else {
-                    throw new BotInitException("new bot instance create error");
-                }
+                throw new IOException(result.getErrorMsg());
             }
-
-            // Step 2.5 子类初始化
-            doInit();
-
-            // Step 2。6 更新状态
-            updateState(BotStatus.INIT_FINISH);
-        } catch (Exception e) {
-            logger.error("init error", e);
-            updateState(BotStatus.INIT_ERROR);
+        } catch (InterruptedException | ExecutionException e) {
+            throw new IOException("fetch remote config error", e);
         }
-    }
-
-    /**
-     * 初始化方法
-     */
-    protected abstract void doInit() throws BotInitException;
-
-    /**
-     * 停止Bot
-     */
-    public void stop() {
-        updateState(BotStatus.STOPPING);
-        try {
-            networkSyncControllerMap.clear();
-            doStop();
-            updateState(BotStatus.STOPPED);
-        } catch (Exception e) {
-            logger.error("stop bot error, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
-            updateState(BotStatus.SHUTDOWN);
-        }
-    }
-
-    protected abstract void doStop();
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<String> response str
-     */
-    public CompletableFuture<String> syncRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body
-    ) {
-        return syncRequest(proxy, url, method, headers, params, body, 1);
-    }
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<String> response str
-     */
-    public CompletableFuture<String> syncRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body,
-            int retryTimes
-    ) {
-        return syncRequest(proxy, url, method, headers, params, body, null, retryTimes);
-    }
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<Response> String
-     */
-    public CompletableFuture<JSONObject> syncJSONRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body,
-            Supplier<String> requestStart
-    ) {
-        return syncRequest(
-                proxy,
-                url,
-                method,
-                headers,
-                params,
-                body,
-                requestStart,
-                1
-        ).thenApply(responseStr -> {
-            if (responseStr == null) return null;
-            return JSONObject.parseObject(responseStr);
-        });
-    }
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<Response> String
-     */
-    public CompletableFuture<String> syncRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body,
-            Supplier<String> requestStart
-    ) {
-        return syncRequest(
-                proxy,
-                url,
-                method,
-                headers,
-                params,
-                body,
-                requestStart,
-                1
-        );
-    }
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<Response> String
-     */
-    public CompletableFuture<String> syncRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body,
-            Supplier<String> requestStart,
-            int retryTimes
-    ) {
-        return syncCCHandler(proxy, requestStart, () -> {
-            try {
-                return RestApiClientFactory.getClient(proxy).request(
-                        url,
-                        method,
-                        headers,
-                        params,
-                        body,
-                        retryTimes
-                ).get();
-            } catch (InterruptedException | ExecutionException e) {
-                throw new RuntimeException(e);
-            }
-        });
-    }
-
-    /**
-     * 同步请求，使用syncController控制并发
-     *
-     * @param proxy   proxy
-     * @param url     url
-     * @param method  method
-     * @param headers headers
-     * @param params  params
-     * @param body    body
-     * @return CompletableFuture<Response> String
-     */
-    public CompletableFuture<List<String>> syncStreamRequest(
-            ProxyInfo proxy,
-            String url,
-            HttpMethod method,
-            Map<String, String> headers,
-            JSONObject params,
-            JSONObject body,
-            Supplier<String> requestStart
-    ) {
-        return syncCCHandler(proxy, requestStart, () -> {
-            try {
-                return RestApiClientFactory.getClient(proxy).streamRequest(
-                        url,
-                        method,
-                        headers,
-                        params,
-                        body
-                ).get();
-            } catch (InterruptedException | ExecutionException e) {
-                throw new RuntimeException(e);
-            }
-        });
-    }
-
-    public <R> CompletableFuture<R> syncCCHandler(
-            ProxyInfo proxy,
-            Supplier<String> requestStart,
-            Supplier<R> request
-    ) {
-
-        Semaphore networkController = networkSyncControllerMap
-                .compute(proxy == null ? DEFAULT_PROXY : proxy, (k, v) -> {
-                    if (v == null) {
-                        v = new Semaphore(requestConcurrentCount);
-                    }
-                    return v;
-                });
-
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                networkController.acquire();
-                // 随机延迟
-                TimeUnit.MILLISECONDS.sleep(RandomUtil.randomLong(1000, 3000));
-
-                String str = "start network request";
-                if (requestStart != null) {
-                    str = requestStart.get();
-                }
-                logger.debug("同步器允许发送请求 - " + str);
-
-                return request.get();
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            } finally {
-                networkController.release();
-            }
-        }, executorService);
-    }
-
-    /**
-     * 打印BotRuntimeInfo
-     *
-     * @return string
-     */
-    public String printBotRuntimeInfo() {
-        StringBuilder sb = new StringBuilder();
-        getAutoBotRuntimeInfo().getKeyValueInfoMap().forEach((k, v) -> {
-            sb.append(k).append(": ").append(v).append("\n");
-        });
-        return sb.toString();
-    }
-
-    /**
-     * 获取app的配置目录
-     *
-     * @return String
-     */
-    public String getAppConfigDir() {
-        return FileUtil.getAppResourceAppConfigDir() + File.separator + getBotInstance().getBotKey();
-    }
-
-    /**
-     * 更新BotStatus
-     *
-     * @param newStatus 新状态
-     */
-    public synchronized void updateState(BotStatus newStatus) throws BotStatusException {
-
-        boolean b = switch (status) {
-            //当前为NEW，新状态才能为NEW,SHUTDOWN
-            case NOT_LOADED -> BotStatus.NEW.equals(newStatus);
-            case NEW -> BotStatus.INIT.equals(newStatus);
-            //当前为INIT，新状态只能为INIT_FINISH、INIT_ERROR,SHUTDOWN
-            case INIT -> newStatus.equals(BotStatus.INIT_FINISH)
-                    || newStatus.equals(BotStatus.INIT_ERROR);
-            //当前为INIT_ERROR,新状态只能为ACCOUNT_LOADING, SHUTDOWN
-            case INIT_ERROR -> newStatus.equals(BotStatus.INIT);
-            //当前状态为INIT_FINISH，新状态只能为ACCOUNT_LIST_CONNECT, SHUTDOWN
-            case INIT_FINISH -> newStatus.equals(BotStatus.STARTING);
-            //当前状态为STARING，新状态只能为RUNNING,SHUTDOWN
-            case STARTING -> newStatus.equals(BotStatus.RUNNING);
-            //RUNNING，新状态只能为 SHUTDOWN
-            case RUNNING -> newStatus.equals(BotStatus.STOPPING);
-            case STOPPING -> newStatus.equals(BotStatus.STOPPED) || newStatus.equals(BotStatus.SHUTDOWN);
-            case STOPPED -> newStatus.equals(BotStatus.INIT);
-            case SHUTDOWN -> throw new BotStatusException("bot already shutdown");
-        };
-
-        if (b) {
-            logger.debug("Status change [%s] => [%s]".formatted(status, newStatus));
-            this.status = newStatus;
-        } else {
-            throw new BotStatusException(
-                    String.format("%s status can't from[%s] -> to[%s]", runtimeBotName(), status, newStatus));
-        }
-    }
-
-    public String runtimeBotName() {
-        return "Bot[%s]-[%s]".formatted(botInstance.getBotName(), autoBotConfig.getBotKey());
-    }
-
-    public String getScriptNodeName() {
-        return scriptNodeConfiguration.getScriptNodeName();
-    }
-
-    protected synchronized Map<String, AutoBotJobParam> getJobParams() {
-        return this.botInstance == null ? new HashMap<>() : this.botInstance.getJobParams();
-    }
-
-    protected synchronized AutoBotJobParam getJobParam(String jobName) {
-        return this.botInfo.getJobParams() == null ? null : this.botInfo.getJobParams().get(jobName);
-    }
-
-    protected synchronized void setJobParam(String jobKey, AutoBotJobParam jobParam) {
-        this.botInfo.getJobParams().put(jobKey, jobParam);
-    }
-
-    protected synchronized void addBasicJob(BotJobType jobType) {
-        if (this.botInfo.getParams() == null) {
-            this.botInfo.setParams(new HashMap<>());
-        }
-
-        this.botInfo.getParams().compute(BASIC_JOB_LIST_KEY, (k, v) -> {
-            if (v == null) {
-                v = new HashSet<String>();
-            }
-            if (v instanceof JSONArray t) {
-                v = new HashSet<String>();
-                for (int i = 0; i < t.size(); i++) {
-                    ((HashSet<String>) v).add(t.getString(i));
-                }
-            }
-            Set<String> set = (HashSet<String>) v;
-            set.add(jobType.name());
-            return v;
-        });
-    }
-
-    protected abstract BotInfo buildBotInfo() throws BotInitException;
-
-    protected abstract void resolveBotJobMethod();
-
-    /**
-     * 比较botInfo 和 BotInstance是否发生变化
-     *
-     * @param botInfo    botInfo
-     * @param dbInstance dbInstance
-     * @return boolean
-     */
-    private boolean compareBotJobParamsChanged(BotInfo botInfo, BotInstance dbInstance) {
-        Map<String, AutoBotJobParam> botJobParam = botInfo.getJobParams();
-        Map<String, AutoBotJobParam> botInstanceParam = dbInstance.getJobParams();
-
-        // rpc map序列化范型丢失处理
-        Map<String, AutoBotJobParam> jobParams = dbInstance.getJobParams();
-        if (jobParams != null) {
-            for (String key : jobParams.keySet()) {
-                Object param = jobParams.get(key);
-                if (param instanceof JSONObject jb) {
-                    jobParams.put(key, JSONObject.parseObject(JSONObject.toJSONString(jb), AutoBotJobParam.class));
-                }
-            }
-        }
-
-        if (botJobParam.size() != botInstanceParam.size()) return true;
-
-        if (!botJobParam.keySet().containsAll(botInstanceParam.keySet())) {
-            return true;
-        }
-
-        for (Map.Entry<String, AutoBotJobParam> entry : botJobParam.entrySet()) {
-            String jobName = entry.getKey();
-            AutoBotJobParam param = entry.getValue();
-            AutoBotJobParam instanceParam = botInstanceParam.get(jobName);
-
-            if (param.getParams() == null) {
-                param.setParams(new HashMap<>());
-            }
-            if (!param.equals(instanceParam)) {
-                return true;
-            }
-        }
-        return false;
     }
 }
 
-package cn.com.vortexa.script_agent;
+package cn.com.vortexa.script_node.constants;
 
-import cn.com.vortexa.script_agent.config.ScriptAgentConfig;
-import cn.com.vortexa.control.constant.*;
-import cn.com.vortexa.script_agent.dto.RemoteControlServerStatus;
-import cn.com.vortexa.control.dto.RemotingCommand;
-import cn.com.vortexa.common.dto.control.ServiceInstance;
-import cn.com.vortexa.control.exception.CustomCommandException;
-import cn.com.vortexa.control.handler.CustomRequestHandler;
-import cn.com.vortexa.control.processor.CustomCommandProcessor;
-import cn.com.vortexa.script_agent.processor.ScriptAgentProcessorAdaptor;
-import cn.com.vortexa.common.util.protocol.Serializer;
-import cn.com.vortexa.script_agent.service.ScriptAgentMetricsUploadService;
-import cn.com.vortexa.control.util.DistributeIdMaker;
-import cn.com.vortexa.control.util.RemotingCommandDecoder;
-import cn.com.vortexa.control.util.RemotingCommandEncoder;
-import cn.com.vortexa.websocket.netty.base.AbstractWebsocketClient;
-import cn.com.vortexa.websocket.netty.base.AutoConnectWSService;
-import cn.com.vortexa.websocket.netty.constants.NettyConstants;
-import cn.hutool.core.util.StrUtil;
-import io.netty.channel.*;
-import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
-import io.netty.handler.codec.LengthFieldPrepender;
-import io.netty.handler.timeout.IdleStateHandler;
-import lombok.Getter;
-import lombok.Setter;
-import lombok.extern.slf4j.Slf4j;
-
-import java.io.Serializable;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.function.BiFunction;
-import java.util.function.Consumer;
-import java.util.function.Supplier;
 
 /**
  * @author helei
- * @since 2025-03-13
+ * @since 2025-04-19
  */
-@Slf4j
-@Getter
-public class ScriptAgent extends AbstractWebsocketClient<RemotingCommand> {
+public class ScriptNodeConstants {
 
-    private final ScriptAgentConfig clientConfig;  // 配置
-    private final ServiceInstance serviceInstance;
-    private final RemoteControlServerStatus remoteStatus; // 远程服务命名中心状态
-    private final CustomCommandProcessor customCommandProcessor;    // 自定义命令处理器
-    private final ScriptAgentMetricsUploadService metricsUploadService; // 指标上传服务
-    private final Map<Integer, BiFunction<Channel, RemotingCommand, RemotingCommand>> customRemotingCommandHandlerMap = new HashMap<>();
-
-    @Setter
-    private Supplier<Serializable> registryBodySetter = null; // 注册时的body
-    @Setter
-    private Consumer<RemotingCommand> afterRegistryHandler = null;  // 注册成功后回调
-
-    public ScriptAgent(ScriptAgentConfig clientConfig) {
-        this(clientConfig, new ScriptAgentProcessorAdaptor(clientConfig));
-        // 设置无需重连
-        super.setReconnectLimit(AutoConnectWSService.UN_LIMIT_RECONNECT_MARK);
-    }
-
-    public ScriptAgent(ScriptAgentConfig clientConfig, ScriptAgentProcessorAdaptor scriptAgentProcessorAdaptor) {
-        super(clientConfig.getRegistryCenterUrl(), clientConfig.getServiceInstance().toString(),
-                scriptAgentProcessorAdaptor);
-        super.setHandshake(false);
-        this.clientConfig = clientConfig;
-        this.serviceInstance = clientConfig.getServiceInstance();
-        super.setName(this.serviceInstance.toString());
-        this.remoteStatus = new RemoteControlServerStatus();
-        this.customCommandProcessor = new CustomCommandProcessor();
-
-        this.metricsUploadService = new ScriptAgentMetricsUploadService(this, this.getCallbackInvoker());
-        ((ScriptAgentProcessorAdaptor) getHandler()).setScriptAgent(this);
-    }
-
-    @Override
-    protected void afterBoostrapConnected(Channel channel) {
-        // 每次连接成功，都发送注册消息
-        channel.attr(NettyConstants.CLIENT_NAME).set(getName());
-        sendRegistryCommand();
-    }
-
-    @Override
-    public void addPipeline(ChannelPipeline p) {
-        p.addLast(new IdleStateHandler(0,
-                0, clientConfig.getServiceOfflineTtl()));
-
-        p.addLast(new LengthFieldBasedFrameDecoder(WSControlSystemConstants.MAX_FRAME_LENGTH,
-                0, 4, 0, 4));
-        p.addLast(new LengthFieldPrepender(4));
-
-        p.addLast(new RemotingCommandDecoder());
-        p.addLast(new RemotingCommandEncoder());
-        p.addLast(getHandler());
-    }
-
-    @Override
-    protected void doSendMessage(RemotingCommand message, boolean b) {
-        log.debug("send message to nameserver: {}", message);
-
-        ServiceInstance serviceInstance = clientConfig.getServiceInstance();
-
-        if (b && StrUtil.isBlank(message.getTransactionId())) {
-            message.setTransactionId(nextTxId());
-        }
-
-        message.setGroup(serviceInstance.getGroupId());
-        message.setServiceId(serviceInstance.getServiceId());
-        message.setInstanceId(serviceInstance.getInstanceId());
-
-        Channel channel;
-        if ((channel = getChannel()) != null) {
-            channel.writeAndFlush(message);
-        } else {
-            throw new RuntimeException("channel is null");
-        }
-    }
-
-    /**
-     * 发送服务注册命令
-     */
-    public void sendRegistryCommand() {
-        RemotingCommand remotingCommand = newRequestCommand(RemotingCommandFlagConstants.CLIENT_REGISTRY_SERVICE);
-        Serializable body = null;
-        if (registryBodySetter != null) {
-            body = registryBodySetter.get();
-        }
-        remotingCommand.setObjBody(body);
-
-        sendRequest(remotingCommand).whenComplete((response, throwable) -> {
-            if (throwable != null) {
-                log.error("{} -> [{}] channel active error",
-                        clientConfig.getServiceInstance(), clientConfig.getRegistryCenterUrl(), throwable);
-            }
-
-            // 注册成功
-            if (response.getCode() == RemotingCommandCodeConstants.SUCCESS) {
-                log.info("{} client registry success", clientConfig.getServiceInstance());
-                if (afterRegistryHandler != null) {
-                    afterRegistryHandler.accept(response);
-                }
-
-                ServiceInstance nameserviceInstance = Serializer.Algorithm.Protostuff
-                        .deserialize(response.getBody(), ServiceInstance.class);
-
-                remoteStatus.setNameserverInstance(nameserviceInstance);
-            } else {
-                // 注册失败
-                log.error("{} client registry failed, response: {}", clientConfig.getServiceInstance(), response);
-                close();
-            }
-
-            remoteStatus.setLastUpdateTimestamp(System.currentTimeMillis());
-            remoteStatus.setControlServerState(ControlServerState.valueOf(
-                    response.getExtFieldsValue(ExtFieldsConstants.NAMESERVER_STATUS)
-            ));
-        });
-    }
-
-    /**
-     * 添加自定义命令处理器,flag为CUSTOM_COMMAND，参数的commandFlag是放RemotingCommand的extFields里的
-     *
-     * @param commandFlag          commandFlag 命令标识
-     * @param customRequestHandler customRequestHandler    处理器
-     */
-    public void addCustomCommandHandler(String commandFlag, CustomRequestHandler customRequestHandler)
-            throws CustomCommandException {
-        customCommandProcessor.addCustomCommandHandler(commandFlag, customRequestHandler);
-    }
-
-    /**
-     * 添加自定义远程命令处理器
-     * 与addCustomCommandHandler(String commandFlag, CustomRequestHandler customRequestHandler)不同的是，
-     * 这个注册的RemotingCommand 的flag为 commandFlag
-     *
-     * @param commandFlag commandFlag
-     * @param handler     handler
-     */
-    public void addCustomRemotingCommandHandler(
-            Integer commandFlag,
-            BiFunction<Channel, RemotingCommand, RemotingCommand> handler
-    ) {
-        customRemotingCommandHandlerMap.put(commandFlag, handler);
-    }
-
-    /**
-     * 处理自定义请求
-     *
-     * @param remotingCommand request
-     * @return response
-     */
-    public RemotingCommand tryResolveCustomRequest(RemotingCommand remotingCommand) {
-        RemotingCommand response = null;
-        try {
-            response = customCommandProcessor.tryInvokeCustomCommandHandler(getChannel(), remotingCommand);
-        } catch (Exception e) {
-            log.error("custom request[{}] execute error, ", remotingCommand, e);
-            response = new RemotingCommand();
-            response.setTransactionId(remotingCommand.getTransactionId());
-            response.setCode(RemotingCommandCodeConstants.FAIL);
-            response.setBody(
-                    Serializer.Algorithm.Protostuff.serialize(e)
-            );
-        }
-        return response;
-    }
-
-    /**
-     * 构建命令
-     *
-     * @param commandFlag commandFlag
-     * @return RemotingCommand
-     */
-    public RemotingCommand newRequestCommand(int commandFlag) {
-        return newRequestCommand(commandFlag, true);
-    }
-
-    /**
-     * 构建命令
-     *
-     * @param commandFlag commandFlag
-     * @return RemotingCommand
-     */
-    public RemotingCommand newRequestCommand(int commandFlag, boolean needTxId) {
-        RemotingCommand command = new RemotingCommand();
-        command.setGroup(serviceInstance.getGroupId());
-        command.setServiceId(serviceInstance.getServiceId());
-        command.setInstanceId(serviceInstance.getInstanceId());
-        command.setTransactionId(needTxId ? nextTxId() : null);
-
-        command.setFlag(commandFlag);
-        return command;
-    }
-
-    /**
-     * 获取下一个事务id
-     *
-     * @return String
-     */
-    public String nextTxId() {
-        return DistributeIdMaker.DEFAULT.nextId(getName());
-    }
 }
+spring:
+  datasource:
+    driver-class-name: org.sqlite.JDBC
+    url:
+    username:
+    password:
+  quartz:
+    job-store-type: jdbc
+    jdbc:
+      table-prefix: QRTZ_
+      driver-class: com.mysql.cj.jdbc.Driver
+      url: jdbc:mysql://localhost:3306/job_store
+      user: helei
+      password: 123456
+      scheduler:
+        instance-name: QuartzScheduler
+
+
+vortexa:
+  script-node:
+    remote-rest-url: http://192.168.1.98:10110
+    script-node-name: helei-macbook
+    auto-launch-bot-keys:
+      # - optim_ai_test
+#      - klok_test
+      # - flow3_bot_test
+      - taker_google
+      - magic_newton_v2
+#      - beamable_test
+  #    bot-instance-locations: "reactive:"
+    bot-common-config:
+      two_captcha_api_key: ''
+    bot-instance-jar-names:
+      - vortexa-script-bot
+
+  script-agent:
+    registryCenterUrl: ws://localhost:18848
+    nio-thread-count: 1
+    service-offline-ttl: 60
+    serviceInstance:
+      host: localhost
+      port: 20001
+      groupId: default
+      serviceId: script-node
+      instanceId: script-node-macbook
+
