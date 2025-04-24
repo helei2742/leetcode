@@ -4,6 +4,7 @@ import cn.com.vortexa.common.util.YamlConfigLoadUtil;
 import cn.com.vortexa.web3.dto.Web3ChainInfo;
 import lombok.Data;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
@@ -31,6 +32,10 @@ public class Web3ChainDict {
         }
     }
 
+    public static Web3ChainDict loadCustomConfigDict(String path) {
+        return YamlConfigLoadUtil.load(new File(path), PREFIX, Web3ChainDict.class);
+    }
+
     private List<Web3ChainInfo> chainInfo;
 
     private Map<String, Web3ChainInfo> name2ChainInfoMap;
@@ -42,6 +47,17 @@ public class Web3ChainDict {
     public static void main(String[] args) {
         System.out.println(INSTANCE);
     }
+
+    public void marge(Web3ChainDict defaultChainDict) {
+        List<Web3ChainInfo> list = defaultChainDict.getChainInfo();
+        for (Web3ChainInfo web3ChainInfo : list) {
+            String name = web3ChainInfo.getName();
+            if (name2ChainInfoMap.containsKey(name)) {
+                throw new IllegalArgumentException("chain [%s] already exist in default chain info dict".formatted(name));
+            }
+            name2ChainInfoMap.put(name, web3ChainInfo);
+        }
+    }
 }
 package cn.com.vortexa.web3.constants;
 
@@ -51,35 +67,8 @@ package cn.com.vortexa.web3.constants;
  */
 public enum Web3jFunctionType {
     Uint256,
+    Bool,
     Address
-}
-package cn.com.vortexa.web3.dto;
-
-import lombok.Data;
-
-import java.io.Serializable;
-
-/**
- * @author helei
- * @since 2025/4/23 10:05
- */
-@Data
-public class ContractABI implements Serializable {
-
-    /**
-     * 链的类型
-     */
-    private String chainType;
-
-    /**
-     * 合约地址
-     */
-    private String contractAddress;
-
-    /**
-     * abi内容的字符串
-     */
-    private String abiContent;
 }
 package cn.com.vortexa.web3.dto;
 
@@ -92,6 +81,7 @@ import lombok.NoArgsConstructor;
 
 
 import java.io.Serializable;
+import java.math.BigInteger;
 import java.util.List;
 
 /**
@@ -122,6 +112,17 @@ public class SCInvokeParams implements Serializable {
      * 调用的合约地址
      */
     private String contractAddress;
+
+    /**
+     * gas limit
+     */
+    private BigInteger gasLimit;
+
+    /**
+     * 交易金额
+     */
+    private BigInteger value;
+
     /**
      * abi方法名
      */
@@ -141,78 +142,16 @@ public class SCInvokeParams implements Serializable {
 }
 package cn.com.vortexa.web3.dto;
 
+
+import cn.com.vortexa.common.constants.ChainType;
+import cn.hutool.core.collection.CollUtil;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
 import java.util.List;
-
-/**
- * @author h30069248
- * @since 2025/4/23 11:48
- */
-@Data
-public class SCInvokeResult implements Serializable {
-
-    /**
-     * 交易类型合约交互时返回的交易hash
-     */
-    private String transactionHash;
-
-    /**
-     * 查询类型合约交互时得到的结果
-     */
-    private List<Object> result;
-}
-package cn.com.vortexa.web3.dto;
-
-
-import cn.com.vortexa.common.constants.ChainType;
-import cn.com.vortexa.common.entity.Web3Wallet;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import java.io.Serializable;
-
-/**
- * @author helei
- * @since 2025-04-05
- */
-@Data
-@Builder
-@AllArgsConstructor
-@NoArgsConstructor
-public class WalletInfo implements Serializable {
-    private String address;
-    private String privateKey;
-    private String publicKey;
-    private String mnemonic;
-
-    public WalletInfo(ChainType chainType, Web3Wallet web3Wallet) {
-        switch (chainType) {
-            case ETH -> {
-                this.address = web3Wallet.getEthAddress();
-                this.privateKey = web3Wallet.getEthPrivateKey();
-            }
-            case SOL -> {
-                this.address = web3Wallet.getSolAddress();
-                this.privateKey = web3Wallet.getSolPrivateKey();
-            }
-        }
-        this.mnemonic = web3Wallet.getMnemonic();
-    }
-}
-package cn.com.vortexa.web3.dto;
-
-
-import cn.com.vortexa.common.constants.ChainType;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import java.io.Serializable;
 
 @Data
 @Builder
@@ -224,7 +163,7 @@ public class Web3ChainInfo implements Serializable {
      */
     private ChainType chainType;
 
-    private String rpcUrl;
+    private List<String> rpcUrls;
 
     private String name;
 
@@ -233,6 +172,180 @@ public class Web3ChainInfo implements Serializable {
     private String originTokenSymbol;
 
     private String blockExploreUrl;
+
+    public String getRpcUrl() {
+        return CollUtil.isEmpty(rpcUrls) ? null : rpcUrls.getFirst();
+    }
+}
+package cn.com.vortexa.web3.service;
+
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.dto.web3.SignatureMessage;
+import cn.com.vortexa.common.entity.Web3Wallet;
+import cn.com.vortexa.web3.constants.Web3jFunctionType;
+import cn.com.vortexa.web3.dto.SCInvokeParams;
+import cn.com.vortexa.web3.dto.Web3ChainInfo;
+import cn.hutool.core.lang.Pair;
+
+import java.io.IOException;
+import java.io.Serializable;
+import java.math.BigInteger;
+import java.util.List;
+
+/**
+ * @author h30069248
+ * @since 2025/4/24 16:08
+ */
+public interface IWeb3WalletOPTRPC {
+    /**
+     * 对消息签名
+     * 必须使用已注册的钱包，使用钱包id标识签名的钱包
+     *
+     * @param message message
+     * @return Result
+     */
+    Result signatureMessageRPC(SignatureMessage message);
+
+    /**
+     * id批量查
+     *
+     * @param ids ids
+     * @return TwitterAccount
+     */
+    List<Web3Wallet> batchQueryByIdsRPC(List<Serializable> ids);
+
+    /**
+     * 调用erc20 abi方法
+     *
+     * @param scInvokeParams abi调用参数
+     * @return 调用结果
+     */
+    Result erc20ABIInvokeRPC(SCInvokeParams scInvokeParams) throws IOException;
+
+    /**
+     * 代币授权
+     *
+     * @param chainInfo chainInfo
+     * @param walletId 钱包id
+     * @param tokenContract 合约地址
+     * @param amount 授权数量
+     * @return Result
+     * @throws IOException  IOException
+     */
+    default Boolean erc20ApproveRPC(Web3ChainInfo chainInfo, Integer walletId, String tokenContract, String spenderAddress, BigInteger amount)
+        throws IOException {
+        Result result = erc20ABIInvokeRPC(SCInvokeParams.builder()
+            .walletId(walletId)
+            .chainInfo(chainInfo)
+            .functionName("approve")
+            .contractAddress(tokenContract)
+            .paramsTypes(List.of(
+                Pair.of(Web3jFunctionType.Address, spenderAddress),
+                Pair.of(Web3jFunctionType.Uint256, amount)
+            ))
+            .resultTypes(List.of(Web3jFunctionType.Bool))
+            .build()
+        );
+
+        if (result.getSuccess()) {
+            return (Boolean) result.getData();
+        } else {
+            throw new IOException("erc20 approve rpc error, " + result.getErrorMsg());
+        }
+    }
+
+    /**
+     * 查某token的数量
+     *
+     * @param chainInfo chainInfo
+     * @param walletId 钱包id
+     * @param tokenContract 合约地址
+     * @param walletAddress 钱包地址
+     * @return  Result
+     * @throws IOException  IOException
+     */
+    default BigInteger erc20BalanceOfRPC(Web3ChainInfo chainInfo, Integer walletId, String tokenContract, String walletAddress)
+        throws IOException {
+        Result result = erc20ABIInvokeRPC(SCInvokeParams.builder()
+            .walletId(walletId)
+            .chainInfo(chainInfo)
+            .readFunction(true)
+            .functionName("balanceOf")
+            .contractAddress(tokenContract)
+            .paramsTypes(List.of(
+                Pair.of(Web3jFunctionType.Address, walletAddress)
+            ))
+            .resultTypes(List.of(Web3jFunctionType.Uint256))
+            .build()
+        );
+
+        if (result.getSuccess()) {
+            return (BigInteger) result.getData();
+        } else {
+            throw new IOException("erc20 balanceOf rpc error, " + result.getErrorMsg());
+        }
+    }
+
+    /**
+     * 查看spenderAddress能够使用的tokenContract的数量
+     *
+     * @param chainInfo chainInfo
+     * @param walletId 钱包id
+     * @param tokenContract 合约地址
+     * @param spenderAddress spenderAddress
+     * @return  Result
+     * @throws IOException  IOException
+     */
+    default BigInteger erc20AllowanceRPC(Web3ChainInfo chainInfo, Integer walletId, String tokenContract, String spenderAddress, String walletAddress)
+        throws IOException {
+        Result result = erc20ABIInvokeRPC(SCInvokeParams.builder()
+            .walletId(walletId)
+            .chainInfo(chainInfo)
+            .functionName("allowance")
+            .contractAddress(tokenContract)
+            .paramsTypes(List.of(
+                Pair.of(Web3jFunctionType.Address, walletAddress),
+                Pair.of(Web3jFunctionType.Address, spenderAddress)
+            ))
+            .resultTypes(List.of(Web3jFunctionType.Uint256))
+            .build()
+        );
+
+        if (result.getSuccess()) {
+            return (BigInteger) result.getData();
+        } else {
+            throw new IOException("erc20 allowance rpc error, " + result.getErrorMsg());
+        }
+    }
+
+    /**
+     * 查看spenderAddress能够使用的tokenContract的数量
+     *
+     * @param chainInfo chainInfo
+     * @param walletId 钱包id
+     * @param tokenContract 合约地址
+     * @return  Result
+     * @throws IOException  IOException
+     */
+    default BigInteger erc20DecimalsRPC(Web3ChainInfo chainInfo, Integer walletId, String tokenContract)
+        throws IOException {
+        Result result = erc20ABIInvokeRPC(SCInvokeParams.builder()
+            .walletId(walletId)
+            .chainInfo(chainInfo)
+            .functionName("decimals")
+            .readFunction(true)
+            .contractAddress(tokenContract)
+            .paramsTypes(List.of())
+            .resultTypes(List.of(Web3jFunctionType.Uint256))
+            .build()
+        );
+
+        if (result.getSuccess()) {
+            return (BigInteger) result.getData();
+        } else {
+            throw new IOException("erc20 decimals rpc error, " + result.getErrorMsg());
+        }
+    }
 }
 package cn.com.vortexa.web3.util;
 
@@ -240,6 +353,7 @@ import cn.com.vortexa.web3.constants.Web3jFunctionType;
 
 import org.web3j.abi.TypeReference;
 import org.web3j.abi.datatypes.Address;
+import org.web3j.abi.datatypes.Bool;
 import org.web3j.abi.datatypes.Function;
 import org.web3j.abi.datatypes.Type;
 import org.web3j.abi.datatypes.generated.Uint256;
@@ -268,7 +382,8 @@ public class ABIFunctionBuilder {
 
     public ABIFunctionBuilder addParameterType(Web3jFunctionType type, Object value) {
         parameterTypes.add(switch (type) {
-            case Uint256 -> new Uint256(BigInteger.valueOf((Long) value));
+            case Uint256 -> new Uint256((BigInteger) value);
+            case Bool -> new Bool((Boolean) value);
             case Address -> new Address(String.valueOf(value));
         });
         return this;
@@ -277,6 +392,7 @@ public class ABIFunctionBuilder {
     public ABIFunctionBuilder addReturnType(Web3jFunctionType type) {
         returnTypes.add(switch (type) {
             case Uint256 -> new TypeReference<Uint256>() {};
+            case Bool -> new TypeReference<Bool>() {};
             case Address -> new TypeReference<Address>() {};
         });
         return this;
@@ -288,10 +404,12 @@ public class ABIFunctionBuilder {
 }
 package cn.com.vortexa.web3;
 
+import cn.com.vortexa.web3.constants.Web3jFunctionType;
 import cn.com.vortexa.web3.dto.WalletInfo;
 import cn.com.vortexa.web3.util.ABIFunctionBuilder;
 
 import org.bitcoinj.crypto.*;
+import org.jetbrains.annotations.NotNull;
 import org.web3j.abi.FunctionEncoder;
 import org.web3j.abi.FunctionReturnDecoder;
 import org.web3j.abi.datatypes.Function;
@@ -301,10 +419,9 @@ import org.web3j.protocol.Web3j;
 import org.web3j.protocol.core.DefaultBlockParameterName;
 import org.web3j.protocol.core.methods.request.Transaction;
 import org.web3j.protocol.core.methods.response.EthCall;
-import org.web3j.protocol.core.methods.response.EthGetTransactionCount;
+import org.web3j.protocol.core.methods.response.EthEstimateGas;
 import org.web3j.protocol.core.methods.response.EthSendTransaction;
 import org.web3j.protocol.http.HttpService;
-import org.web3j.tx.gas.DefaultGasProvider;
 import org.web3j.utils.Numeric;
 
 import java.io.IOException;
@@ -319,12 +436,27 @@ import java.util.List;
  */
 public class EthWalletUtil {
 
+    /**
+     * 默认Gas limit
+     */
+    private static final BigInteger DEFAULT_GAS_LIMIT = BigInteger.valueOf(200_000);
+
     private static final SecureRandom secureRandom = new SecureRandom();
 
+    /**
+     * 生成eth钱包信息
+     *
+     * @return  WalletInfo
+     */
     public static WalletInfo generateEthWallet() {
         return generateWalletInfoFromMnemonic(generateMnemonic());
     }
 
+    /**
+     * 生成助记词
+     *
+     * @return  String
+     */
     public static String generateMnemonic() {
         // 1. 生成助记词
         SecureRandom secureRandom = new SecureRandom();
@@ -342,6 +474,12 @@ public class EthWalletUtil {
         return String.join(" ", mnemonicWords);
     }
 
+    /**
+     * 助记词生成钱包信息
+     *
+     * @param mnemonic  mnemonic
+     * @return  WalletInfo
+     */
     public static WalletInfo generateWalletInfoFromMnemonic(String mnemonic) {
         // 2. 生成 seed
         byte[] seed = MnemonicUtils.generateSeed(mnemonic, ""); // passphrase 可设置
@@ -355,7 +493,7 @@ public class EthWalletUtil {
         DeterministicKey accountKey = HDKeyDerivation.deriveChildKey(coinTypeKey, new ChildNumber(0, true));
         DeterministicKey externalKey = HDKeyDerivation.deriveChildKey(accountKey, ChildNumber.ZERO); // change = 0
         DeterministicKey addressKey = HDKeyDerivation.deriveChildKey(externalKey,
-            ChildNumber.ZERO); // address index = 0
+                ChildNumber.ZERO); // address index = 0
 
         byte[] privateKeyBytes = addressKey.getPrivKeyBytes();
 
@@ -365,13 +503,20 @@ public class EthWalletUtil {
 
         // 6. 输出钱包信息
         return WalletInfo.builder()
-            .mnemonic(mnemonic)
-            .privateKey(keyPair.getPrivateKey().toString(16))
-            .publicKey(keyPair.getPublicKey().toString(16))
-            .address(credentials.getAddress())
-            .build();
+                .mnemonic(mnemonic)
+                .privateKey(keyPair.getPrivateKey().toString(16))
+                .publicKey(keyPair.getPublicKey().toString(16))
+                .address(credentials.getAddress())
+                .build();
     }
 
+    /**
+     * 前面消息
+     *
+     * @param privateKey    privateKey
+     * @param message   message
+     * @return  Sign.SignatureData
+     */
     public static Sign.SignatureData signatureMessage2Data(String privateKey, String message) {
         byte[] contentHashBytes = message.getBytes();
         // 根据私钥获取凭证对象
@@ -379,6 +524,13 @@ public class EthWalletUtil {
         return Sign.signPrefixedMessage(contentHashBytes, credentials.getEcKeyPair());
     }
 
+    /**
+     * 前签名消息成String
+     *
+     * @param privateKey    privateKey
+     * @param message   message
+     * @return  String
+     */
     public static String signatureMessage2String(String privateKey, String message) {
         Sign.SignatureData signMessage = signatureMessage2Data(privateKey, message);
 
@@ -393,6 +545,12 @@ public class EthWalletUtil {
         return Numeric.toHexString(signByte);
     }
 
+    /**
+     * 私钥获取地址
+     *
+     * @param privateKeyHex privateKeyHex
+     * @return  String
+     */
     public static String getETHAddress(String privateKeyHex) {
         Credentials credentials = Credentials.create(privateKeyHex);
 
@@ -403,15 +561,7 @@ public class EthWalletUtil {
         return Keys.toChecksumAddress(rawAddress);
     }
 
-    public static BigInteger getNonce(String rpcUrl, String address) throws IOException {
-        Web3j web3j = Web3j.build(new HttpService(rpcUrl));
 
-        EthGetTransactionCount transactionCount = web3j.ethGetTransactionCount(
-                address, org.web3j.protocol.core.DefaultBlockParameterName.LATEST)
-            .send();
-
-        return transactionCount.getTransactionCount();
-    }
 
     public static String getRandomNonce() {
         // 生成 32 字节的随机数
@@ -424,208 +574,211 @@ public class EthWalletUtil {
 
     // 将字节数组转换为十六进制字符串
     public static String toHex(byte[] bytes) {
-        StringBuilder hexString = new StringBuilder();
-        for (byte b : bytes) {
-            hexString.append(String.format("%02x", b));  // 格式化为两位十六进制
-        }
-        return hexString.toString();
+        return Numeric.toHexString(bytes);
     }
 
     /**
-     * 制度的智能合约调用
+     * approve token
      *
-     * @param rpcUrl rpcUrl
+     * @param rpcUrl    rpcUrl
+     * @param tokenAddress 代币地址
+     * @param spenderAddress 代币合约地址
+     * @param walletPrimaryKey  钱包私钥
+     * @param walletAddress 钱包公钥
+     * @param amount    授权数量
+     * @return  String
+     * @throws IOException  IOException
+     */
+    public static String erc20ApproveToken(
+        String rpcUrl, String tokenAddress, String spenderAddress, String walletPrimaryKey, String walletAddress, BigInteger amount
+    ) throws IOException {
+        return EthWalletUtil.smartContractTransactionInvoke(
+            rpcUrl, tokenAddress, walletPrimaryKey, walletAddress, null, amount,
+            ABIFunctionBuilder.builder()
+                .functionName("approve")
+                .addParameterType(Web3jFunctionType.Address, spenderAddress)
+                .addParameterType(Web3jFunctionType.Uint256, amount)
+        );
+    }
+
+    /**
+     * 智能合约调用 只读
+     *
+     * @param rpcUrl          rpcUrl
      * @param contractAddress contractAddress
-     * @param address address
+     * @param address         address
      * @param functionBuilder functionBuilder
      * @return List<Type>
      * @throws IOException IOException
      */
     public static List<Type> smartContractCallInvoke(
-        String rpcUrl,
-        String contractAddress,
-        String address,
-        ABIFunctionBuilder functionBuilder
+            String rpcUrl,
+            String contractAddress,
+            String address,
+            ABIFunctionBuilder functionBuilder
     ) throws IOException {
         Web3j web3j = Web3j.build(new HttpService(rpcUrl));
 
         Function function = functionBuilder.build();
         Transaction transaction = Transaction.createEthCallTransaction(
-            address,
-            contractAddress,
-            FunctionEncoder.encode(function)
+                address,
+                contractAddress,
+                FunctionEncoder.encode(function)
         );
 
         EthCall response = web3j.ethCall(
-            transaction,
-            DefaultBlockParameterName.LATEST
+                transaction,
+                DefaultBlockParameterName.LATEST
         ).send();
         return FunctionReturnDecoder.decode(response.getValue(), function.getOutputParameters());
     }
 
     /**
-     * 制度的智能合约调用
+     * 智能合约调用 上链
      *
-     * @param rpcUrl rpcUrl
-     * @param contractAddress contractAddress
-     * @param address address
+     * @param rpcUrl          rpcUrl
+     * @param contractAddress 合约地址
+     * @param primaryKey    钱包私钥
+     * @param address        钱包地址
+     * @param gasLimit  gasLimit
+     * @param value         发生金额
      * @param functionBuilder functionBuilder
-     * @return String   ethSendTransaction
-     * @throws IOException IOException
+     * @return transaction hash
+     * @throws IOException 网络不通， 获取hash失败都会抛出次异常
      */
     public static String smartContractTransactionInvoke(
-        String rpcUrl,
-        String contractAddress,
-        String address,
-        ABIFunctionBuilder functionBuilder
+            String rpcUrl,
+            String contractAddress,
+            String primaryKey,
+            String address,
+            BigInteger gasLimit,
+            BigInteger value,
+            ABIFunctionBuilder functionBuilder
     ) throws IOException {
         Web3j web3j = Web3j.build(new HttpService(rpcUrl));
 
+        // Step 1 构建transaction
         Function function = functionBuilder.build();
+        String encodeFunction = FunctionEncoder.encode(function);
+        BigInteger nonce = getNonce(web3j, address);
+        BigInteger gasPrice = getGasPrice(web3j);
+        if (gasLimit == null) {
+            gasLimit = dynamicCalGasLimit(
+                web3j, contractAddress, address, gasPrice, encodeFunction
+            );
+        }
+        if (value == null) value = BigInteger.ZERO;
 
-        Transaction transaction = Transaction.createFunctionCallTransaction(
-            address,
-            null,
-            DefaultGasProvider.GAS_PRICE,
-            DefaultGasProvider.GAS_LIMIT,
-            contractAddress,
-            FunctionEncoder.encode(function)
+        // Step 2 构建交易信息
+        RawTransaction rawTX = RawTransaction.createTransaction(
+            nonce, gasPrice, gasLimit, contractAddress, value, encodeFunction
         );
-        EthSendTransaction ethSendTransaction = web3j.ethSendTransaction(transaction).send();
-        return ethSendTransaction.getTransactionHash();
+
+        byte[] signedMessage = TransactionEncoder.signMessage(rawTX, Credentials.create(primaryKey));
+        String hexString = Numeric.toHexString(signedMessage);
+
+        // Step 3 发生交友
+        EthSendTransaction send = web3j.ethSendRawTransaction(hexString).send();
+
+        // Step 4 获取交易hash值
+        if (send.hasError()) {
+            throw new IOException("Transaction Error: " + send.getError().getMessage());
+        }
+        return send.getTransactionHash();
+    }
+
+    /**
+     * 动态计算gasLimit
+     * @return  BigInteger
+     */
+    public static BigInteger dynamicCalGasLimit(
+        Web3j web3j,
+        String contractAddress,
+        String walletAddress,
+        BigInteger gasPrice,
+        String encodeFunction
+    ) throws IOException {
+
+        EthEstimateGas ethEstimateGas = web3j.ethEstimateGas(Transaction.createFunctionCallTransaction(
+            contractAddress,
+            null,
+            gasPrice,
+            null,
+            walletAddress,
+            BigInteger.ZERO,
+            encodeFunction
+        )).send();
+        return ethEstimateGas.getAmountUsed();
+    }
+
+    /**
+     * 获取地址nonce
+     *
+     * @param rpcUrl rpcUrl
+     * @param address address
+     * @return  nonce
+     * @throws IOException IOException
+     */
+    public static BigInteger getNonce(String rpcUrl, String address) throws IOException {
+        return getNonce(Web3j.build(new HttpService(rpcUrl)), address);
+    }
+
+    /**
+     * 获取地址nonce
+     *
+     * @param web3j web3j
+     * @param address address
+     * @return  nonce
+     * @throws IOException IOException
+     */
+    public static BigInteger getNonce(@NotNull Web3j web3j, String address) throws IOException {
+        return web3j.ethGetTransactionCount(address, DefaultBlockParameterName.PENDING)
+            .send().getTransactionCount();
+    }
+
+    /**
+     * 获取rpc的gas
+     *
+     * @param rpcUrl rpcUrl
+     * @return  nonce
+     * @throws IOException IOException
+     */
+    public static BigInteger getGasPrice(String rpcUrl) throws IOException {
+        return getGasPrice(Web3j.build(new HttpService(rpcUrl)));
+    }
+
+    /**
+     * 获取rpc的gas
+     *
+     * @param web3j web3j
+     * @return  nonce
+     * @throws IOException IOException
+     */
+    public static BigInteger getGasPrice(@NotNull Web3j web3j) throws IOException {
+        return web3j.ethGasPrice().send().getGasPrice();
     }
 }
 vortexa:
   web3:
     chain-info:
-      - name: Monad_Testnet
-        rpcUrl: https://testnet-rpc.monad.xyz/
-        chainId: 10143
-        originTokenSymbol: MON
-        blockExploreUrl: https://testnet.monadexplorer.com
+      - name: Sepolia
+        rpcUrls:
+          - https://ethereum-sepolia-rpc.publicnode.com
+          - https://rpc.sepolia.org
+        chainId: 11155111
+        originTokenSymbol: ETH
+        blockExploreUrl: https://sepolia.etherscan.io
 
-      - name: Eth_Sepora
-        rpcUrl: https://testnet-rpc.monad.xyz/
-        chainId: 10143
-        originTokenSymbol: MON
-        blockExploreUrl: https://testnet.monadexplorer.com
-
-package cn.com.vortexa.bot_platform.controller;
-
-import cn.com.vortexa.bot_platform.service.IScriptNodeService;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.control.RegisteredScriptNode;
-import cn.hutool.core.util.StrUtil;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.*;
-
-import java.io.IOException;
-import java.util.List;
-
-/**
- * <p>
- * 前端控制器
- * </p>
- *
- * @author com.helei
- * @since 2025-04-08
- */
-@RestController
-@RequestMapping("/script-node")
-public class ScriptNodeController {
-
-    @Autowired
-    private IScriptNodeService scriptNodeService;
-
-    @PostMapping("/remote-config/{scriptNodeName}")
-    public Result remoteConfig(@PathVariable("scriptNodeName") String scriptNodeName) {
-        String configStr = null;
-        try {
-            configStr = scriptNodeService.loadScriptNodeConfig(scriptNodeName);
-            if (StrUtil.isBlank(configStr)) {
-                return Result.fail(scriptNodeName + " config is empty");
-            }
-            return Result.ok(configStr);
-        } catch (IOException e) {
-            return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
-        }
-    }
-
-    @PostMapping("/remote-config")
-    public Result botRemoteConfig(
-            @RequestParam("scriptNodeName") String scriptNodeName,
-            @RequestParam("botKey") String botKey
-    ) {
-        String configStr = null;
-        try {
-            configStr = scriptNodeService.loadScriptNodeBotConfig(scriptNodeName, botKey);
-            if (StrUtil.isBlank(configStr)) {
-                return Result.fail(" config is empty");
-            }
-            return Result.ok(configStr);
-        } catch (IOException e) {
-            return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
-        }
-    }
-
-    @PostMapping("/all")
-    public Result queryAllScriptNode() {
-        List<RegisteredScriptNode> list = scriptNodeService.queryAllScriptNode();
-        return Result.ok(list);
-    }
-}
-
-package cn.com.vortexa.bot_platform.controller;
-
-import cn.com.vortexa.bot_platform.service.IWeb3WalletService;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.web3.SignatureMessage;
-import cn.com.vortexa.web3.dto.SCInvokeParams;
-
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-import java.io.IOException;
-
-/**
- * <p>
- * 前端控制器
- * </p>
- *
- * @author com.helei
- * @since 2025-04-21
- */
-@RestController
-@RequestMapping("/web3")
-public class Web3WalletController {
-    @Autowired
-    public IWeb3WalletService web3WalletService;
-
-    @PostMapping("/signature")
-    public Result signatureWalletMessage(SignatureMessage message) {
-        return Result.ok(web3WalletService.signatureMessage(message));
-    }
-
-    @PostMapping("/smart_contract_invoke")
-    public Result smartContractInvoke(@RequestBody SCInvokeParams invokeParams) {
-        try {
-            return web3WalletService.smartContractInvoke(invokeParams);
-        } catch (Exception e) {
-            return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
-        }
-    }
-}
 package cn.com.vortexa.bot_platform.service.impl;
 
 import static cn.com.vortexa.common.entity.Web3Wallet.PUBLIC_FIELDS;
 
 import cn.com.vortexa.bot_platform.web3.SmartContractInvoker;
+import cn.com.vortexa.control_server.service.IConnectionService;
 import cn.com.vortexa.web3.dto.SCInvokeParams;
 import cn.com.vortexa.web3.dto.SCInvokeResult;
 import cn.com.vortexa.web3.dto.Web3ChainInfo;
+import cn.com.vortexa.web3.service.IWeb3WalletOPTRPC;
 import cn.hutool.core.collection.CollUtil;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
@@ -637,7 +790,6 @@ import cn.com.vortexa.common.entity.Web3Wallet;
 import cn.com.vortexa.common.util.FileUtil;
 import cn.com.vortexa.common.util.excel.ExcelReadUtil;
 import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.rpc.api.platform.IWeb3WalletRPC;
 import cn.com.vortexa.web3.EthWalletUtil;
 import cn.com.vortexa.web3.SolanaWalletUtil;
 import cn.com.vortexa.common.constants.ChainType;
@@ -651,6 +803,7 @@ import org.springframework.stereotype.Service;
 import java.io.File;
 import java.io.IOException;
 import java.io.Serializable;
+import java.math.BigInteger;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -667,7 +820,7 @@ import java.util.Map;
 @Slf4j
 @Service
 public class Web3WalletServiceImpl extends AbstractBaseService<Web3WalletMapper, Web3Wallet>
-    implements IWeb3WalletRPC, IWeb3WalletService {
+        implements IWeb3WalletOPTRPC, IWeb3WalletService {
 
     private final Web3WalletMapper web3WalletMapper;
 
@@ -687,6 +840,11 @@ public class Web3WalletServiceImpl extends AbstractBaseService<Web3WalletMapper,
     }
 
     @Override
+    public Result erc20ABIInvokeRPC(SCInvokeParams scInvokeParams) throws IOException {
+        return smartContractInvoke(scInvokeParams);
+    }
+
+    @Override
     public List<Web3Wallet> batchQueryByIds(List<Serializable> ids) {
         if (CollUtil.isEmpty(ids)) {
             return List.of();
@@ -702,7 +860,7 @@ public class Web3WalletServiceImpl extends AbstractBaseService<Web3WalletMapper,
         Integer walletId;
         String message;
         if ((walletId = signatureMessage.getWalletId()) == null || walletId < 0 || StrUtil.isBlank(
-            message = signatureMessage.getMessage())) {
+                message = signatureMessage.getMessage())) {
             return Result.fail("params illegal");
         }
 
@@ -737,13 +895,13 @@ public class Web3WalletServiceImpl extends AbstractBaseService<Web3WalletMapper,
         }
 
         WalletInfo wallet = invokeParams.getWalletInfo() == null
-            ? new WalletInfo(chainInfo.getChainType(), web3WalletMapper.selectById(invokeParams.getWalletId()))
-            : invokeParams.getWalletInfo();
+                ? new WalletInfo(chainInfo.getChainType(), web3WalletMapper.selectById(invokeParams.getWalletId()))
+                : invokeParams.getWalletInfo();
 
         SCInvokeResult result = switch (chainInfo.getChainType()) {
             case ETH -> SmartContractInvoker.CHAIN.ETH.invokeSCFunction(wallet, chainInfo, invokeParams);
             default ->
-                throw new IllegalArgumentException("chain type[%s] not support".formatted(chainInfo.getChainType()));
+                    throw new IllegalArgumentException("chain type[%s] not support".formatted(chainInfo.getChainType()));
         };
 
         return Result.ok(result);
@@ -779,38 +937,6 @@ public class Web3WalletServiceImpl extends AbstractBaseService<Web3WalletMapper,
         return insertOrUpdateBatch(web3Wallets);
     }
 }
-package cn.com.vortexa.bot_platform.service;
-
-import com.baomidou.mybatisplus.extension.service.IService;
-
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.web3.SignatureMessage;
-import cn.com.vortexa.common.entity.Web3Wallet;
-import cn.com.vortexa.db_layer.service.ImportService;
-import cn.com.vortexa.web3.dto.SCInvokeParams;
-
-import java.io.IOException;
-
-/**
- * <p>
- * 服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-04-21
- */
-public interface IWeb3WalletService extends IService<Web3Wallet>, ImportService {
-
-    Result signatureMessage(SignatureMessage signatureMessage);
-
-    /**
-     * 智能合约交互
-     *
-     * @param invokeParams  invokeParams
-     * @return  Result
-     */
-    Result smartContractInvoke(SCInvokeParams invokeParams) throws IOException;
-}
 package cn.com.vortexa.bot_platform.web3;
 
 import cn.com.vortexa.web3.EthWalletUtil;
@@ -828,6 +954,7 @@ import org.web3j.abi.datatypes.Type;
 import java.io.IOException;
 
 import java.util.List;
+
 /**
  * 智能合约调用器
  *
@@ -845,25 +972,25 @@ public interface SmartContractInvoker {
      * @throws IOException  IOException
      */
     SCInvokeResult invokeSCFunction(
-        WalletInfo walletInfo,
-        Web3ChainInfo chainInfo,
-        SCInvokeParams scInvokeParams
+            WalletInfo walletInfo,
+            Web3ChainInfo chainInfo,
+            SCInvokeParams scInvokeParams
     ) throws IOException;
 
     enum CHAIN implements SmartContractInvoker {
         ETH {
             @Override
             public  SCInvokeResult invokeSCFunction(
-                WalletInfo walletInfo,
-                Web3ChainInfo chainInfo,
-                SCInvokeParams scInvokeParams
+                    WalletInfo walletInfo,
+                    Web3ChainInfo chainInfo,
+                    SCInvokeParams scInvokeParams
             ) throws IOException {
                 List<Web3jFunctionType> resultTypes = scInvokeParams.getResultTypes();
 
                 // Step 1 构建合约调用方法
                 ABIFunctionBuilder functionBuilder = ABIFunctionBuilder
-                    .builder()
-                    .functionName(scInvokeParams.getFunctionName());
+                        .builder()
+                        .functionName(scInvokeParams.getFunctionName());
 
                 if (CollUtil.isNotEmpty(scInvokeParams.getParamsTypes())) {
                     for (Pair<Web3jFunctionType, Object> paramsType : scInvokeParams.getParamsTypes()) {
@@ -880,18 +1007,21 @@ public interface SmartContractInvoker {
                 SCInvokeResult result = new SCInvokeResult();
                 if (scInvokeParams.getReadFunction()) {
                     List<Type> types = EthWalletUtil.smartContractCallInvoke(
-                        chainInfo.getRpcUrl(),
-                        scInvokeParams.getContractAddress(),
-                        walletInfo.getAddress(),
-                        functionBuilder
+                            chainInfo.getRpcUrl(),
+                            scInvokeParams.getContractAddress(),
+                            walletInfo.getAddress(),
+                            functionBuilder
                     );
                     result.setResult(types.stream().map(Type::getValue).toList());
                 } else {
                     String transactionHash = EthWalletUtil.smartContractTransactionInvoke(
-                        chainInfo.getRpcUrl(),
-                        scInvokeParams.getContractAddress(),
-                        walletInfo.getAddress(),
-                        functionBuilder
+                            chainInfo.getRpcUrl(),
+                            scInvokeParams.getContractAddress(),
+                            walletInfo.getPrivateKey(),
+                            walletInfo.getAddress(),
+                            scInvokeParams.getGasLimit(),
+                            scInvokeParams.getValue(),
+                            functionBuilder
                     );
                     result.setTransactionHash(transactionHash);
                 }
@@ -903,133 +1033,509 @@ public interface SmartContractInvoker {
 }
 package cn.com.vortexa.script_node.config;
 
+import com.alibaba.fastjson.JSONObject;
+
 import cn.com.vortexa.common.constants.HttpMethod;
 import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.dto.config.AutoBotAccountConfig;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
 import cn.com.vortexa.common.util.FileUtil;
 import cn.com.vortexa.common.util.YamlConfigLoadUtil;
 import cn.com.vortexa.common.util.http.RestApiClientFactory;
-import com.alibaba.fastjson.JSONObject;
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.env.EnvironmentPostProcessor;
-import org.springframework.core.env.ConfigurableEnvironment;
-import org.springframework.core.env.MapPropertySource;
-import org.yaml.snakeyaml.Yaml;
+import cn.com.vortexa.common.dto.BotMetaInfo;
+import cn.com.vortexa.web3.constants.Web3ChainDict;
+import cn.hutool.core.collection.CollUtil;
+import cn.hutool.core.util.StrUtil;
+import lombok.Data;
+import lombok.extern.slf4j.Slf4j;
+
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.*;
 import java.util.concurrent.ExecutionException;
-
-public class RemoteConfigLoader implements EnvironmentPostProcessor {
-
-
-    @Override
-    public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
-        try {
-            final String appConfigPath = FileUtil.USER_DIR + File.separator + "config" + File.separator + "application.yaml";
-            ScriptNodeConfiguration preLoadSNConfig = YamlConfigLoadUtil.load(new File(appConfigPath),
-                List.of("vortexa", "scriptNode"), ScriptNodeConfiguration.class);
-
-            String configUrl = preLoadSNConfig.buildRemoteConfigRestApi();
-            String scriptNodeName = preLoadSNConfig.getScriptNodeName();
-            if (configUrl == null || scriptNodeName == null) {
-                System.err.println("no remote.config-url or script node name，skip load remote config");
-                return;
-            }
-
-            // 拉取 YAML 内容
-            String yamlContent = fetchRemoteConfig(configUrl, scriptNodeName);
-            Yaml yaml = new Yaml();
-
-            // 使用 SnakeYAML 2.2 解析成 Map
-            Map<String, Object> yamlMap = yaml.load(yamlContent);
-
-            // 转成 PropertySource，放在最前面
-            MapPropertySource propertySource = new MapPropertySource(
-                    "remote-config", YamlConfigLoadUtil.flattenMap(yamlMap)
-            );
-            environment.getPropertySources().addFirst(propertySource);
-        } catch (Exception e) {
-            System.err.println("remote config load error，use local config: " + e.getMessage());
-        }
-    }
-
-    private String fetchRemoteConfig(String configUrl, String scriptNodeName) throws IOException {
-        try {
-            String response = RestApiClientFactory.getClient().request(
-                    configUrl + "/script-node/remote-config" + scriptNodeName,
-                    HttpMethod.POST,
-                    new HashMap<>(),
-                    null,
-                    new JSONObject()
-            ).get();
-            Result result = JSONObject.parseObject(response, Result.class);
-            if (result.getSuccess()) {
-                return String.valueOf(result.getData());
-            } else {
-                throw new IOException(result.getErrorMsg());
-            }
-        } catch (InterruptedException | ExecutionException e) {
-            throw new IOException("fetch remote config error", e);
-        }
-    }
-}
-
-package cn.com.vortexa.script_node.constants;
-
+import java.util.stream.Stream;
 
 /**
  * @author helei
- * @since 2025-04-19
+ * @since 2025-04-04
  */
-public class ScriptNodeConstants {
+@Slf4j
+@Data
+@Component
+@ConfigurationProperties(prefix = "vortexa.script-node")
+public class ScriptNodeConfiguration implements InitializingBean {
+    public static final String CUSTOM_CHAIN_INFO_DICT = "custom-chain-info.yaml";
+    public static final String BOT_META_INF_FILE_NAME = "bot-meta-info.yaml";
+    public static final List<String> BOT_META_INFO_PREFIX = List.of("vortexa", "botMetaInfo");
+    public static final List<String> BOT_INSTANCE_CONFIG_PREFIX = List.of("vortexa", "botInstance");
 
+    /**
+     * bot group（Script Node中运行的bot的group)
+     * ）
+     */
+    private String scriptNodeName;
+
+    /**
+     * 远程REST接口的url
+     */
+    private String remoteRestUrl;
+
+    /**
+     * 链信息字典
+     */
+    private Web3ChainDict chainDict;
+
+    /**
+     * bot-instance jar包名字
+     */
+    private List<String> botInstanceJarNames;
+
+    /**
+     * Script node 基础路径
+     */
+    private String scriptNodeBasePath;
+
+    /**
+     * 是否开启命令行菜单
+     */
+    private boolean commandMenu = true;
+
+    /**
+     * botNameMetaInfoMap, （解析配置文件自动填入）
+     */
+    private Map<String, BotMetaInfo> botNameMetaInfoMap;
+
+    /**
+     * botKeyConfigMap, （解析配置文件自动填入）
+     */
+    private Map<String, AutoBotConfig> botKeyConfigMap;
+
+    /**
+     * 自动时自动启动的botKey
+     */
+    private Set<String> autoLaunchBotKeys;
+
+    /**
+     * bot公共配置，会加载到每个bot的 customConfig下
+     *
+     * @see AutoBotConfig
+     */
+    private Map<String, Object> botCommonConfig;
+
+    @Override
+    public void afterPropertiesSet() throws Exception {
+        // 解析地址，
+        scriptNodeBasePath = FileUtil.getAppResourceAppConfigDir() + File.separator + scriptNodeName;
+
+        initChainDict();
+
+        initBotMetaInfo();
+
+        initBotInstance();
+    }
+
+    /**
+     * 获取远程设置api
+     *
+     * @return  String
+     */
+    public String buildRemoteConfigRestApi() {
+        return remoteRestUrl + "/script-node/remote-config";
+    }
+
+    /**
+     * 链信息列表
+     */
+    private void initChainDict() {
+        Web3ChainDict defaultChainDict = Web3ChainDict.INSTANCE;
+        Web3ChainDict customChainDict = Web3ChainDict.loadCustomConfigDict(CUSTOM_CHAIN_INFO_DICT);
+        if (customChainDict != null) {
+            customChainDict.marge(defaultChainDict);
+        }
+        this.chainDict = customChainDict == null ? defaultChainDict : customChainDict;
+    }
+
+    /**
+     * 初始化BotInstance
+     */
+    private void initBotInstance() {
+        botKeyConfigMap = new HashMap<>();
+        String botInstanceConfigDir = FileUtil.getBotInstanceConfigDir();
+
+        try (Stream<Path> walk = Files.walk(Paths.get(botInstanceConfigDir), 5)) {
+            walk.filter(p -> Files.isRegularFile(p) && p.toString().endsWith(".yaml")).forEach(configFile -> {
+                try {
+                    AutoBotConfig botConfig = YamlConfigLoadUtil.load(configFile.toFile(), BOT_INSTANCE_CONFIG_PREFIX,
+                        AutoBotConfig.class);
+
+                    // 配置文件校验
+                    if (botConfig == null) {
+                        throw new IllegalArgumentException(
+                            "bot instance config file [" + configFile.getFileName() + "] illegal");
+                    }
+
+                    BotMetaInfo botMetaInfo = botNameMetaInfoMap.get(botConfig.getBotName());
+
+                    if (botMetaInfo == null) {
+                        log.warn("botName[{}] didn't loaded in script node", botConfig.getBotName());
+                        return;
+                    }
+
+                    botConfig.setMetaInfo(botMetaInfo);
+
+                    // 相对路径转绝对路径
+                    reactivePathConfigConvert(
+                        botConfig,
+                        botMetaInfo.getResourceDir()
+                    );
+
+                    // 合并bot公共配置
+                    if (botCommonConfig != null) {
+                        botConfig.setCustomConfig(botCommonConfig);
+                    }
+
+                    // 合并远程配置
+                    AutoBotConfig remoteBotConfig = fetchRemoteBotConfig(
+                        buildRemoteConfigRestApi(),
+                        scriptNodeName,
+                        botConfig.getBotKey()
+                    );
+                    if (remoteBotConfig != null) {
+                        mergeRemoteAutoBotConfig(botConfig, remoteBotConfig);
+                    }
+
+                    botKeyConfigMap.put(botConfig.getBotKey(), botConfig);
+                } catch (Exception e) {
+                    log.error("bot instance config[{}] load error, {}",
+                        configFile.getFileName(),
+                        e.getCause() == null ? e.getMessage() : e.getCause().getMessage()
+                    );
+                }
+            });
+        } catch (IOException e) {
+            log.error("load bot instance config error", e);
+        }
+    }
+
+    /**
+     * 初始化bot原信息
+     *
+     * @throws IOException IOException
+     */
+    private void initBotMetaInfo() throws IOException {
+        botNameMetaInfoMap = new HashMap<>();
+        if (CollUtil.isNotEmpty(botInstanceJarNames)) {
+            for (String botInstanceJarName : botInstanceJarNames) {
+                String jarLibraryPath = FileUtil.getLibraryPath(botInstanceJarName);
+                String jarFilePath = FileUtil.getJarFilePath(botInstanceJarName);
+                FileUtil.extractJar(
+                    jarLibraryPath,
+                    jarFilePath
+                );
+
+                // 解析文件夹
+                log.info("start resolve bot meta info config from dir[{}]", jarFilePath);
+                try (Stream<Path> walk = Files.walk(Paths.get(jarFilePath), 5)) {
+                    walk.filter(Files::isDirectory).forEach(dir -> {
+                        Path configFilePath = dir.resolve(BOT_META_INF_FILE_NAME);
+                        if (Files.exists(configFilePath)) {
+                            BotMetaInfo metaInfo = YamlConfigLoadUtil.load(configFilePath.toFile(),
+                                BOT_META_INFO_PREFIX, BotMetaInfo.class);
+
+                            // 配置文件校验
+                            if (metaInfo == null) {
+                                throw new IllegalArgumentException(
+                                    "bot meta info file [" + BOT_META_INF_FILE_NAME + "] illegal");
+                            }
+
+                            // 设置bot资源目录
+                            metaInfo.setResourceDir(dir.toString());
+                            // 设置所在jar包路径
+                            metaInfo.setClassJarPath(jarLibraryPath);
+
+                            botNameMetaInfoMap.put(metaInfo.getBotName(), metaInfo);
+                            log.info("botName [{}] meta info loaded", metaInfo.getBotName());
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    /**
+     * 获取远程配置
+     *
+     * @param configUrl configUrl
+     * @param scriptNodeName scriptNodeName
+     * @param botKey botKey
+     * @return String
+     */
+    private AutoBotConfig fetchRemoteBotConfig(String configUrl, String scriptNodeName, String botKey) {
+        if (StrUtil.isBlank(configUrl)) {
+            return null;
+        }
+
+        try {
+            JSONObject params = new JSONObject();
+            params.put("scriptNodeName", scriptNodeName);
+            params.put("botKey", botKey);
+            String response = RestApiClientFactory.getClient().request(
+                configUrl,
+                HttpMethod.POST,
+                new HashMap<>(),
+                params,
+                new JSONObject()
+            ).get();
+            Result result = JSONObject.parseObject(response, Result.class);
+            if (result.getSuccess()) {
+                AutoBotConfig load = YamlConfigLoadUtil.load(String.valueOf(result.getData()),
+                    BOT_META_INFO_PREFIX, AutoBotConfig.class);
+                log.info("remote config fetch success, merge into [{}] bot config...", botKey);
+                return load;
+            } else {
+                log.warn("script node[{}] botKey[{}] config not found in remote", scriptNodeName, botKey);
+                return null;
+            }
+        } catch (InterruptedException | ExecutionException e) {
+            log.error("script node[{}] botKey[{}] remote fetch error", scriptNodeName, botKey, e);
+            return null;
+        }
+    }
+
+    /**
+     * 合并远程配置
+     *
+     * @param local local
+     * @param remote remote
+     */
+    private void mergeRemoteAutoBotConfig(AutoBotConfig local, AutoBotConfig remote) {
+        if (remote.getAccountConfig() != null) {
+            local.setAccountConfig(remote.getAccountConfig());
+        }
+        if (remote.getCustomConfig() != null) {
+            local.setCustomConfig(remote.getCustomConfig());
+        }
+    }
+
+    /**
+     * 相对路径转换
+     *
+     * @param config config
+     * @param botResourcePath botResourcePath
+     */
+    private void reactivePathConfigConvert(AutoBotConfig config, String botResourcePath) {
+        AutoBotAccountConfig accountConfig = config.getAccountConfig();
+        accountConfig.setConfigFilePath(
+            FileUtil.generateAbsPath(accountConfig.getConfigFilePath(), botResourcePath)
+        );
+
+        Map<String, Object> customConfig = config.getCustomConfig();
+        if (customConfig != null && !customConfig.isEmpty()) {
+            for (Map.Entry<String, Object> entry : customConfig.entrySet()) {
+                Object value = entry.getValue();
+                if (value instanceof String) {
+                    entry.setValue(FileUtil.generateAbsPath((String) value, botResourcePath));
+                }
+            }
+        }
+    }
 }
-spring:
-  datasource:
-    driver-class-name: org.sqlite.JDBC
-    url:
-    username:
-    password:
-  quartz:
-    job-store-type: jdbc
-    jdbc:
-      table-prefix: QRTZ_
-      driver-class: com.mysql.cj.jdbc.Driver
-      url: jdbc:mysql://localhost:3306/job_store
-      user: helei
-      password: 123456
-      scheduler:
-        instance-name: QuartzScheduler
+package cn.com.vortexa.script_node.service.impl;
+
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.com.vortexa.script_node.service.IBotAccountContextService;
+import cn.com.vortexa.script_node.service.IRewordInfoService;
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
+import cn.com.vortexa.rpc.api.bot.IScriptAgentRPC;
+import cn.com.vortexa.rpc.api.platform.IAccountBaseInfoRPC;
+import cn.com.vortexa.rpc.api.platform.IBotInfoRPC;
+import cn.com.vortexa.job.service.BotJobService;
+import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
+import cn.com.vortexa.rpc.api.platform.IBrowserEnvRPC;
+import cn.com.vortexa.rpc.api.platform.IDiscordAccountRPC;
+import cn.com.vortexa.rpc.api.platform.IProxyInfoRPC;
+import cn.com.vortexa.rpc.api.platform.ITelegramAccountRPC;
+import cn.com.vortexa.rpc.api.platform.ITwitterAccountRPC;
+import cn.com.vortexa.control.anno.RPCReference;
+import cn.com.vortexa.script_node.service.IWeb3WalletService;
+import cn.com.vortexa.web3.service.IWeb3WalletOPTRPC;
+import lombok.Getter;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
 
 
+@Getter
+@Component
+public class DBBotApi implements BotApi {
+
+    @Autowired
+    private BotJobService botJobService;
+
+    @Autowired
+    private IBotAccountContextService botAccountService;
+
+    @Autowired
+    private IRewordInfoService rewordInfoService;
+
+
+    @RPCReference
+    private IBotInfoRPC botInfoRPC;
+
+    @RPCReference
+    private IBotInstanceRPC botInstanceRPC;
+
+    @RPCReference
+    private IAccountBaseInfoRPC accountBaseInfoRPC;
+
+    @RPCReference
+    private ITwitterAccountRPC twitterAccountRPC;
+
+    @RPCReference
+    private ITelegramAccountRPC telegramAccountRPC;
+
+    @RPCReference
+    private IProxyInfoRPC proxyInfoRPC;
+
+    @RPCReference
+    private IBrowserEnvRPC browserEnvRPC;
+
+    @RPCReference
+    private IDiscordAccountRPC discordAccountRPC;
+
+    @RPCReference
+    private IWeb3WalletOPTRPC web3WalletRPC;
+
+    @Autowired
+    private IScriptAgentRPC scriptAgentRPC;
+
+    @Autowired
+    private ITableShardStrategy tableShardStrategy;
+
+    @Autowired
+    private IWeb3WalletService web3WalletService;
+}
+package cn.com.vortexa.script_node.service.impl;
+
+import cn.com.vortexa.script_node.service.IWeb3WalletService;
+import cn.com.vortexa.web3.EthWalletUtil;
+import cn.com.vortexa.web3.constants.Web3jFunctionType;
+import cn.com.vortexa.web3.util.ABIFunctionBuilder;
+import cn.hutool.core.collection.CollUtil;
+
+import org.springframework.stereotype.Service;
+import org.web3j.abi.datatypes.Type;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.util.List;
+
+/**
+ * @author h30069248
+ * @since 2025/4/24 10:21
+ */
+@Service
+public class Web3WalletServiceImpl implements IWeb3WalletService {
+    @Override
+    public BigDecimal erc20BalanceCheck(String rpcUrl, String tokenContractAddress, String address) throws IOException {
+        List<Type> result = EthWalletUtil.smartContractCallInvoke(
+            rpcUrl,
+            tokenContractAddress,
+            address,
+            ABIFunctionBuilder
+                .builder()
+                .functionName("balanceOf")
+                .addParameterType(Web3jFunctionType.Address, address)
+                .addReturnType(Web3jFunctionType.Uint256)
+        );
+
+        if (CollUtil.isEmpty(result)) {
+            throw new RuntimeException("erc20 balance check error");
+        } else {
+            return (BigDecimal) result.getFirst().getValue();
+        }
+    }
+}
+package cn.com.vortexa.script_node.service;
+
+
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
+import cn.com.vortexa.job.service.BotJobService;
+import cn.com.vortexa.rpc.api.bot.IScriptAgentRPC;
+import cn.com.vortexa.rpc.api.platform.IAccountBaseInfoRPC;
+import cn.com.vortexa.rpc.api.platform.IBotInfoRPC;
+import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
+import cn.com.vortexa.rpc.api.platform.IBrowserEnvRPC;
+import cn.com.vortexa.rpc.api.platform.IDiscordAccountRPC;
+import cn.com.vortexa.rpc.api.platform.IProxyInfoRPC;
+import cn.com.vortexa.rpc.api.platform.ITelegramAccountRPC;
+import cn.com.vortexa.rpc.api.platform.ITwitterAccountRPC;
+import cn.com.vortexa.web3.service.IWeb3WalletOPTRPC;
+
+public interface BotApi {
+
+    IBotInfoRPC getBotInfoRPC();
+
+    IBotInstanceRPC getBotInstanceRPC();
+
+    IAccountBaseInfoRPC getAccountBaseInfoRPC();
+
+    IBrowserEnvRPC getBrowserEnvRPC();
+
+    IDiscordAccountRPC getDiscordAccountRPC();
+
+    IProxyInfoRPC getProxyInfoRPC();
+
+    ITwitterAccountRPC getTwitterAccountRPC();
+
+    ITelegramAccountRPC getTelegramAccountRPC();
+
+    ITableShardStrategy getTableShardStrategy();
+
+    IRewordInfoService getRewordInfoService();
+
+    IBotAccountContextService getBotAccountService();
+
+    BotJobService getBotJobService();
+
+    IScriptAgentRPC getScriptAgentRPC();
+
+    IWeb3WalletOPTRPC getWeb3WalletRPC();
+
+    IWeb3WalletService getWeb3WalletService();
+}
+package cn.com.vortexa.script_node.service;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+
+/**
+ * @author h30069248
+ * @since 2025/4/24 10:20
+ */
+public interface IWeb3WalletService {
+
+    BigDecimal erc20BalanceCheck(String rpcUrl, String tokenContractAddress, String address) throws IOException;
+}
 vortexa:
-  script-node:
-    remote-rest-url: http://192.168.1.98:10110
-    script-node-name: helei-macbook
-    auto-launch-bot-keys:
-      # - optim_ai_test
-#      - klok_test
-      # - flow3_bot_test
-      - taker_google
-      - magic_newton_v2
-#      - beamable_test
-  #    bot-instance-locations: "reactive:"
-    bot-common-config:
-      two_captcha_api_key: ''
-    bot-instance-jar-names:
-      - vortexa-script-bot
-
-  script-agent:
-    registryCenterUrl: ws://localhost:18848
-    nio-thread-count: 1
-    service-offline-ttl: 60
-    serviceInstance:
-      host: localhost
-      port: 20001
-      groupId: default
-      serviceId: script-node
-      instanceId: script-node-macbook
-
+  web3:
+    chain-info:
+      - name: Monad_Testnet
+        rpcUrls:
+          - https://testnet-rpc.monad.xyz/
+        chainId: 10143
+        originTokenSymbol: MON
+        blockExploreUrl: https://testnet.monadexplorer.com
+      - name: Plume_Testnet
+        rpcUrls:
+          - https://testnet-rpc.plumenetwork.xyz
+          - https://testnet-explorer.plumenetwork.xyz/
+        chainId: 98867
+        originTokenSymbol:
+        blockExploreUrl: https://testnet-explorer.plumenetwork.xyz
