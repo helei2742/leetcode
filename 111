@@ -1,1541 +1,2348 @@
-package cn.com.vortexa.web3.constants;
+package cn.com.vortexa.common.constants;
 
-import cn.com.vortexa.common.util.YamlConfigLoadUtil;
-import cn.com.vortexa.web3.dto.Web3ChainInfo;
-import lombok.Data;
-
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
+import java.io.Serial;
+import java.io.Serializable;
 
 /**
- * @author h30069248
- * @since 2025/4/23 10:27
+ * Bot Job 类型
  */
-@Data
-public class Web3ChainDict {
-    public static final String RESOURCE_FILE_NAME = "chain-info.yaml";
-    public static final List<String> PREFIX = List.of("vortexa", "web3");
-    public static final Web3ChainDict INSTANCE;
+public enum BotJobType implements Serializable {
+    /**
+     * 查询奖励
+     */
+    QUERY_REWARD,
+    /**
+     * 只运行一次的任务
+     */
+    ONCE_TASK,
+    /**
+     * 定时任务
+     */
+    TIMED_TASK,
+    /**
+     * web socket连接任务
+     */
+    WEB_SOCKET_CONNECT,
 
-    static {
-        try (InputStream is = Web3ChainDict.class.getClassLoader().getResourceAsStream(RESOURCE_FILE_NAME)){
-            INSTANCE = YamlConfigLoadUtil.load(RESOURCE_FILE_NAME, is, PREFIX, Web3ChainDict.class);
-            if (INSTANCE.chainInfo != null) {
-                INSTANCE.name2ChainInfoMap = INSTANCE.chainInfo.stream().collect(Collectors.toMap(Web3ChainInfo::getName, w->w));
-            }
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-    }
+    /**
+     * 按账户拆分后的JOB
+     */
+    ACCOUNT_SPLIT_JOB;
 
-    public static Web3ChainDict loadCustomConfigDict(String path) {
-        return YamlConfigLoadUtil.load(new File(path), PREFIX, Web3ChainDict.class);
-    }
 
-    private List<Web3ChainInfo> chainInfo;
-
-    private Map<String, Web3ChainInfo> name2ChainInfoMap;
-
-    public Web3ChainInfo getChainInfo(String name) {
-        return name2ChainInfoMap.get(name);
-    }
-
-    public static void main(String[] args) {
-        System.out.println(INSTANCE);
-    }
-
-    public void marge(Web3ChainDict defaultChainDict) {
-        List<Web3ChainInfo> list = defaultChainDict.getChainInfo();
-        for (Web3ChainInfo web3ChainInfo : list) {
-            String name = web3ChainInfo.getName();
-            if (name2ChainInfoMap.containsKey(name)) {
-                throw new IllegalArgumentException("chain [%s] already exist in default chain info dict".formatted(name));
-            }
-            name2ChainInfoMap.put(name, web3ChainInfo);
-        }
-    }
+    @Serial
+    private static final long serialVersionUID = 89472398479283L;
 }
-package cn.com.vortexa.web3.constants;
+package cn.com.vortexa.common.entity;
 
-/**
- * @author h30069248
- * @since 2025/4/23 10:54
- */
-public enum Web3jFunctionType {
-    Uint256,
-    Bool,
-    Address
-}
-package cn.com.vortexa.web3.dto;
+import cn.com.vortexa.common.util.propertylisten.PropertyChangeListenClass;
+import cn.com.vortexa.common.util.tableprinter.CommandTableField;
+import cn.com.vortexa.common.util.typehandler.LocalDateTimeTypeHandler;
+import com.baomidou.mybatisplus.annotation.*;
 
-import cn.com.vortexa.web3.constants.Web3jFunctionType;
-import cn.hutool.core.lang.Pair;
+import kotlin.Deprecated;
+import kotlin.jvm.JvmOverloads;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
-import lombok.Data;
+import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Setter;
 
-
+import java.io.Serial;
 import java.io.Serializable;
-import java.math.BigInteger;
-import java.util.List;
-
-/**
- * @author h30069248
- * @since 2025/4/23 11:05
- */
-@Data
-@Builder
-@AllArgsConstructor
-@NoArgsConstructor
-public class SCInvokeParams implements Serializable {
-    /**
-     * 钱包id
-     */
-    private Integer walletId;
-
-    /**
-     * 钱包信息
-     */
-    private WalletInfo walletInfo;
-
-    /**
-     * 链信息
-     */
-    private Web3ChainInfo chainInfo;
-
-    /**
-     * 调用的合约地址
-     */
-    private String contractAddress;
-
-    /**
-     * gas limit
-     */
-    private BigInteger gasLimit;
-
-    /**
-     * 交易金额
-     */
-    private BigInteger value;
-
-    /**
-     * abi方法名
-     */
-    private String functionName;
-    /**
-     * 只读方法
-     */
-    private Boolean readFunction;
-    /**
-     * 参数类型
-     */
-    private List<Pair<Web3jFunctionType, Object>> paramsTypes;
-    /**
-     * 返回值类型
-     */
-    private List<Web3jFunctionType> resultTypes;
-}
-package cn.com.vortexa.web3.dto;
-
-
-import cn.com.vortexa.common.constants.ChainType;
-import cn.hutool.core.collection.CollUtil;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import java.io.Serializable;
-import java.util.List;
-
-@Data
-@Builder
-@AllArgsConstructor
-@NoArgsConstructor
-public class Web3ChainInfo implements Serializable {
-    /**
-     * 链类型
-     */
-    private ChainType chainType;
-
-    private List<String> rpcUrls;
-
-    private String name;
-
-    private Integer chainId;
-
-    private String originTokenSymbol;
-
-    private String blockExploreUrl;
-
-    public String getRpcUrl() {
-        return CollUtil.isEmpty(rpcUrls) ? null : rpcUrls.getFirst();
-    }
-}
-package cn.com.vortexa.web3.service;
-
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.web3.SignatureMessage;
-import cn.com.vortexa.common.entity.Web3Wallet;
-import cn.com.vortexa.web3.constants.Web3jFunctionType;
-import cn.com.vortexa.web3.dto.SCInvokeParams;
-import cn.com.vortexa.web3.dto.Web3ChainInfo;
-import cn.hutool.core.lang.Pair;
-
-import java.io.IOException;
-import java.io.Serializable;
-import java.math.BigInteger;
-import java.util.List;
-
-/**
- * @author h30069248
- * @since 2025/4/24 16:08
- */
-public interface IWeb3WalletOPTRPC {
-    /**
-     * 对消息签名
-     * 必须使用已注册的钱包，使用钱包id标识签名的钱包
-     *
-     * @param message message
-     * @return Result
-     */
-    Result signatureMessageRPC(SignatureMessage message);
-
-    /**
-     * id批量查
-     *
-     * @param ids ids
-     * @return TwitterAccount
-     */
-    List<Web3Wallet> batchQueryByIdsRPC(List<Serializable> ids);
-
-    /**
-     * 调用erc20 abi方法
-     *
-     * @param scInvokeParams abi调用参数
-     * @return 调用结果
-     */
-    Result erc20ABIInvokeRPC(SCInvokeParams scInvokeParams) throws IOException;
-
-    /**
-     * 代币授权
-     *
-     * @param chainInfo chainInfo
-     * @param walletId 钱包id
-     * @param tokenContract 合约地址
-     * @param amount 授权数量
-     * @return Result
-     * @throws IOException  IOException
-     */
-    default Boolean erc20ApproveRPC(Web3ChainInfo chainInfo, Integer walletId, String tokenContract, String spenderAddress, BigInteger amount)
-        throws IOException {
-        Result result = erc20ABIInvokeRPC(SCInvokeParams.builder()
-            .walletId(walletId)
-            .chainInfo(chainInfo)
-            .functionName("approve")
-            .contractAddress(tokenContract)
-            .paramsTypes(List.of(
-                Pair.of(Web3jFunctionType.Address, spenderAddress),
-                Pair.of(Web3jFunctionType.Uint256, amount)
-            ))
-            .resultTypes(List.of(Web3jFunctionType.Bool))
-            .build()
-        );
-
-        if (result.getSuccess()) {
-            return (Boolean) result.getData();
-        } else {
-            throw new IOException("erc20 approve rpc error, " + result.getErrorMsg());
-        }
-    }
-
-    /**
-     * 查某token的数量
-     *
-     * @param chainInfo chainInfo
-     * @param walletId 钱包id
-     * @param tokenContract 合约地址
-     * @param walletAddress 钱包地址
-     * @return  Result
-     * @throws IOException  IOException
-     */
-    default BigInteger erc20BalanceOfRPC(Web3ChainInfo chainInfo, Integer walletId, String tokenContract, String walletAddress)
-        throws IOException {
-        Result result = erc20ABIInvokeRPC(SCInvokeParams.builder()
-            .walletId(walletId)
-            .chainInfo(chainInfo)
-            .readFunction(true)
-            .functionName("balanceOf")
-            .contractAddress(tokenContract)
-            .paramsTypes(List.of(
-                Pair.of(Web3jFunctionType.Address, walletAddress)
-            ))
-            .resultTypes(List.of(Web3jFunctionType.Uint256))
-            .build()
-        );
-
-        if (result.getSuccess()) {
-            return (BigInteger) result.getData();
-        } else {
-            throw new IOException("erc20 balanceOf rpc error, " + result.getErrorMsg());
-        }
-    }
-
-    /**
-     * 查看spenderAddress能够使用的tokenContract的数量
-     *
-     * @param chainInfo chainInfo
-     * @param walletId 钱包id
-     * @param tokenContract 合约地址
-     * @param spenderAddress spenderAddress
-     * @return  Result
-     * @throws IOException  IOException
-     */
-    default BigInteger erc20AllowanceRPC(Web3ChainInfo chainInfo, Integer walletId, String tokenContract, String spenderAddress, String walletAddress)
-        throws IOException {
-        Result result = erc20ABIInvokeRPC(SCInvokeParams.builder()
-            .walletId(walletId)
-            .chainInfo(chainInfo)
-            .functionName("allowance")
-            .contractAddress(tokenContract)
-            .paramsTypes(List.of(
-                Pair.of(Web3jFunctionType.Address, walletAddress),
-                Pair.of(Web3jFunctionType.Address, spenderAddress)
-            ))
-            .resultTypes(List.of(Web3jFunctionType.Uint256))
-            .build()
-        );
-
-        if (result.getSuccess()) {
-            return (BigInteger) result.getData();
-        } else {
-            throw new IOException("erc20 allowance rpc error, " + result.getErrorMsg());
-        }
-    }
-
-    /**
-     * 查看spenderAddress能够使用的tokenContract的数量
-     *
-     * @param chainInfo chainInfo
-     * @param walletId 钱包id
-     * @param tokenContract 合约地址
-     * @return  Result
-     * @throws IOException  IOException
-     */
-    default BigInteger erc20DecimalsRPC(Web3ChainInfo chainInfo, Integer walletId, String tokenContract)
-        throws IOException {
-        Result result = erc20ABIInvokeRPC(SCInvokeParams.builder()
-            .walletId(walletId)
-            .chainInfo(chainInfo)
-            .functionName("decimals")
-            .readFunction(true)
-            .contractAddress(tokenContract)
-            .paramsTypes(List.of())
-            .resultTypes(List.of(Web3jFunctionType.Uint256))
-            .build()
-        );
-
-        if (result.getSuccess()) {
-            return (BigInteger) result.getData();
-        } else {
-            throw new IOException("erc20 decimals rpc error, " + result.getErrorMsg());
-        }
-    }
-}
-package cn.com.vortexa.web3.util;
-
-import cn.com.vortexa.web3.constants.Web3jFunctionType;
-
-import org.web3j.abi.TypeReference;
-import org.web3j.abi.datatypes.Address;
-import org.web3j.abi.datatypes.Bool;
-import org.web3j.abi.datatypes.Function;
-import org.web3j.abi.datatypes.Type;
-import org.web3j.abi.datatypes.generated.Uint256;
-
-import java.math.BigInteger;
-import java.util.ArrayList;
-import java.util.List;
-
-/**
- * @author h30069248
- * @since 2025/4/23 10:51
- */
-public class ABIFunctionBuilder {
-    private String functionName;
-    private final List<Type> parameterTypes = new ArrayList<>();
-    private final List<TypeReference<?>> returnTypes = new ArrayList<>();
-
-    public static ABIFunctionBuilder builder() {
-        return new ABIFunctionBuilder();
-    }
-
-    public ABIFunctionBuilder functionName(String functionName) {
-        this.functionName = functionName;
-        return this;
-    }
-
-    public ABIFunctionBuilder addParameterType(Web3jFunctionType type, Object value) {
-        parameterTypes.add(switch (type) {
-            case Uint256 -> new Uint256((BigInteger) value);
-            case Bool -> new Bool((Boolean) value);
-            case Address -> new Address(String.valueOf(value));
-        });
-        return this;
-    }
-
-    public ABIFunctionBuilder addReturnType(Web3jFunctionType type) {
-        returnTypes.add(switch (type) {
-            case Uint256 -> new TypeReference<Uint256>() {};
-            case Bool -> new TypeReference<Bool>() {};
-            case Address -> new TypeReference<Address>() {};
-        });
-        return this;
-    }
-
-    public Function build() {
-        return new Function(functionName, parameterTypes, returnTypes);
-    }
-}
-package cn.com.vortexa.web3;
-
-import cn.com.vortexa.web3.constants.Web3jFunctionType;
-import cn.com.vortexa.web3.dto.WalletInfo;
-import cn.com.vortexa.web3.util.ABIFunctionBuilder;
-
-import org.bitcoinj.crypto.*;
-import org.jetbrains.annotations.NotNull;
-import org.web3j.abi.FunctionEncoder;
-import org.web3j.abi.FunctionReturnDecoder;
-import org.web3j.abi.datatypes.Function;
-import org.web3j.abi.datatypes.Type;
-import org.web3j.crypto.*;
-import org.web3j.protocol.Web3j;
-import org.web3j.protocol.core.DefaultBlockParameterName;
-import org.web3j.protocol.core.methods.request.Transaction;
-import org.web3j.protocol.core.methods.response.EthCall;
-import org.web3j.protocol.core.methods.response.EthEstimateGas;
-import org.web3j.protocol.core.methods.response.EthSendTransaction;
-import org.web3j.protocol.http.HttpService;
-import org.web3j.utils.Numeric;
-
-import java.io.IOException;
-import java.math.BigInteger;
-import java.security.SecureRandom;
-import java.util.Arrays;
-import java.util.List;
-
-/**
- * @author helei
- * @since 2025/3/28 11:16
- */
-public class EthWalletUtil {
-
-    /**
-     * 默认Gas limit
-     */
-    private static final BigInteger DEFAULT_GAS_LIMIT = BigInteger.valueOf(200_000);
-
-    private static final SecureRandom secureRandom = new SecureRandom();
-
-    /**
-     * 生成eth钱包信息
-     *
-     * @return  WalletInfo
-     */
-    public static WalletInfo generateEthWallet() {
-        return generateWalletInfoFromMnemonic(generateMnemonic());
-    }
-
-    /**
-     * 生成助记词
-     *
-     * @return  String
-     */
-    public static String generateMnemonic() {
-        // 1. 生成助记词
-        SecureRandom secureRandom = new SecureRandom();
-        byte[] entropy = new byte[16]; // 128 bits entropy
-        secureRandom.nextBytes(entropy);
-
-        // 使用 bitcoinj 生成助记词
-        var mnemonicCode = MnemonicCode.INSTANCE;
-        List<String> mnemonicWords = null;
-        try {
-            mnemonicWords = mnemonicCode.toMnemonic(entropy);
-        } catch (MnemonicException.MnemonicLengthException e) {
-            throw new RuntimeException(e);
-        }
-        return String.join(" ", mnemonicWords);
-    }
-
-    /**
-     * 助记词生成钱包信息
-     *
-     * @param mnemonic  mnemonic
-     * @return  WalletInfo
-     */
-    public static WalletInfo generateWalletInfoFromMnemonic(String mnemonic) {
-        // 2. 生成 seed
-        byte[] seed = MnemonicUtils.generateSeed(mnemonic, ""); // passphrase 可设置
-
-        // 3. 创建 HD 钱包根节点 (BIP32 Root Key)
-        DeterministicKey rootPrivateKey = HDKeyDerivation.createMasterPrivateKey(seed);
-
-        // 4. 分步派生 BIP44 路径 m/44'/60'/0'/0/0
-        DeterministicKey purposeKey = HDKeyDerivation.deriveChildKey(rootPrivateKey, new ChildNumber(44, true));
-        DeterministicKey coinTypeKey = HDKeyDerivation.deriveChildKey(purposeKey, new ChildNumber(60, true));
-        DeterministicKey accountKey = HDKeyDerivation.deriveChildKey(coinTypeKey, new ChildNumber(0, true));
-        DeterministicKey externalKey = HDKeyDerivation.deriveChildKey(accountKey, ChildNumber.ZERO); // change = 0
-        DeterministicKey addressKey = HDKeyDerivation.deriveChildKey(externalKey,
-                ChildNumber.ZERO); // address index = 0
-
-        byte[] privateKeyBytes = addressKey.getPrivKeyBytes();
-
-        // 转为 web3j 的 ECKeyPair
-        ECKeyPair keyPair = ECKeyPair.create(privateKeyBytes);
-        Credentials credentials = Credentials.create(keyPair);
-
-        // 6. 输出钱包信息
-        return WalletInfo.builder()
-                .mnemonic(mnemonic)
-                .privateKey(keyPair.getPrivateKey().toString(16))
-                .publicKey(keyPair.getPublicKey().toString(16))
-                .address(credentials.getAddress())
-                .build();
-    }
-
-    /**
-     * 前面消息
-     *
-     * @param privateKey    privateKey
-     * @param message   message
-     * @return  Sign.SignatureData
-     */
-    public static Sign.SignatureData signatureMessage2Data(String privateKey, String message) {
-        byte[] contentHashBytes = message.getBytes();
-        // 根据私钥获取凭证对象
-        Credentials credentials = Credentials.create(privateKey);
-        return Sign.signPrefixedMessage(contentHashBytes, credentials.getEcKeyPair());
-    }
-
-    /**
-     * 前签名消息成String
-     *
-     * @param privateKey    privateKey
-     * @param message   message
-     * @return  String
-     */
-    public static String signatureMessage2String(String privateKey, String message) {
-        Sign.SignatureData signMessage = signatureMessage2Data(privateKey, message);
-
-        byte[] r = signMessage.getR();
-        byte[] s = signMessage.getS();
-        byte[] v = signMessage.getV();
-
-        byte[] signByte = Arrays.copyOf(r, v.length + r.length + s.length);
-        System.arraycopy(s, 0, signByte, r.length, s.length);
-        System.arraycopy(v, 0, signByte, r.length + s.length, v.length);
-
-        return Numeric.toHexString(signByte);
-    }
-
-    /**
-     * 私钥获取地址
-     *
-     * @param privateKeyHex privateKeyHex
-     * @return  String
-     */
-    public static String getETHAddress(String privateKeyHex) {
-        Credentials credentials = Credentials.create(privateKeyHex);
-
-        // 获取原始地址（小写）
-        String rawAddress = credentials.getAddress();
-
-        // 将地址转换为区分大小写的 Checksum 地址
-        return Keys.toChecksumAddress(rawAddress);
-    }
-
-
-
-    public static String getRandomNonce() {
-        // 生成 32 字节的随机数
-        byte[] randomBytes = new byte[32];
-        secureRandom.nextBytes(randomBytes);
-
-        // 将字节数组转换为十六进制字符串
-        return toHex(randomBytes);
-    }
-
-    // 将字节数组转换为十六进制字符串
-    public static String toHex(byte[] bytes) {
-        return Numeric.toHexString(bytes);
-    }
-
-    /**
-     * approve token
-     *
-     * @param rpcUrl    rpcUrl
-     * @param tokenAddress 代币地址
-     * @param spenderAddress 代币合约地址
-     * @param walletPrimaryKey  钱包私钥
-     * @param walletAddress 钱包公钥
-     * @param amount    授权数量
-     * @return  String
-     * @throws IOException  IOException
-     */
-    public static String erc20ApproveToken(
-        String rpcUrl, String tokenAddress, String spenderAddress, String walletPrimaryKey, String walletAddress, BigInteger amount
-    ) throws IOException {
-        return EthWalletUtil.smartContractTransactionInvoke(
-            rpcUrl, tokenAddress, walletPrimaryKey, walletAddress, null, amount,
-            ABIFunctionBuilder.builder()
-                .functionName("approve")
-                .addParameterType(Web3jFunctionType.Address, spenderAddress)
-                .addParameterType(Web3jFunctionType.Uint256, amount)
-        );
-    }
-
-    /**
-     * 智能合约调用 只读
-     *
-     * @param rpcUrl          rpcUrl
-     * @param contractAddress contractAddress
-     * @param address         address
-     * @param functionBuilder functionBuilder
-     * @return List<Type>
-     * @throws IOException IOException
-     */
-    public static List<Type> smartContractCallInvoke(
-            String rpcUrl,
-            String contractAddress,
-            String address,
-            ABIFunctionBuilder functionBuilder
-    ) throws IOException {
-        Web3j web3j = Web3j.build(new HttpService(rpcUrl));
-
-        Function function = functionBuilder.build();
-        Transaction transaction = Transaction.createEthCallTransaction(
-                address,
-                contractAddress,
-                FunctionEncoder.encode(function)
-        );
-
-        EthCall response = web3j.ethCall(
-                transaction,
-                DefaultBlockParameterName.LATEST
-        ).send();
-        return FunctionReturnDecoder.decode(response.getValue(), function.getOutputParameters());
-    }
-
-    /**
-     * 智能合约调用 上链
-     *
-     * @param rpcUrl          rpcUrl
-     * @param contractAddress 合约地址
-     * @param primaryKey    钱包私钥
-     * @param address        钱包地址
-     * @param gasLimit  gasLimit
-     * @param value         发生金额
-     * @param functionBuilder functionBuilder
-     * @return transaction hash
-     * @throws IOException 网络不通， 获取hash失败都会抛出次异常
-     */
-    public static String smartContractTransactionInvoke(
-            String rpcUrl,
-            String contractAddress,
-            String primaryKey,
-            String address,
-            BigInteger gasLimit,
-            BigInteger value,
-            ABIFunctionBuilder functionBuilder
-    ) throws IOException {
-        Web3j web3j = Web3j.build(new HttpService(rpcUrl));
-
-        // Step 1 构建transaction
-        Function function = functionBuilder.build();
-        String encodeFunction = FunctionEncoder.encode(function);
-        BigInteger nonce = getNonce(web3j, address);
-        BigInteger gasPrice = getGasPrice(web3j);
-        if (gasLimit == null) {
-            gasLimit = dynamicCalGasLimit(
-                web3j, contractAddress, address, gasPrice, encodeFunction
-            );
-        }
-        if (value == null) value = BigInteger.ZERO;
-
-        // Step 2 构建交易信息
-        RawTransaction rawTX = RawTransaction.createTransaction(
-            nonce, gasPrice, gasLimit, contractAddress, value, encodeFunction
-        );
-
-        byte[] signedMessage = TransactionEncoder.signMessage(rawTX, Credentials.create(primaryKey));
-        String hexString = Numeric.toHexString(signedMessage);
-
-        // Step 3 发生交友
-        EthSendTransaction send = web3j.ethSendRawTransaction(hexString).send();
-
-        // Step 4 获取交易hash值
-        if (send.hasError()) {
-            throw new IOException("Transaction Error: " + send.getError().getMessage());
-        }
-        return send.getTransactionHash();
-    }
-
-    /**
-     * 动态计算gasLimit
-     * @return  BigInteger
-     */
-    public static BigInteger dynamicCalGasLimit(
-        Web3j web3j,
-        String contractAddress,
-        String walletAddress,
-        BigInteger gasPrice,
-        String encodeFunction
-    ) throws IOException {
-
-        EthEstimateGas ethEstimateGas = web3j.ethEstimateGas(Transaction.createFunctionCallTransaction(
-            contractAddress,
-            null,
-            gasPrice,
-            null,
-            walletAddress,
-            BigInteger.ZERO,
-            encodeFunction
-        )).send();
-        return ethEstimateGas.getAmountUsed();
-    }
-
-    /**
-     * 获取地址nonce
-     *
-     * @param rpcUrl rpcUrl
-     * @param address address
-     * @return  nonce
-     * @throws IOException IOException
-     */
-    public static BigInteger getNonce(String rpcUrl, String address) throws IOException {
-        return getNonce(Web3j.build(new HttpService(rpcUrl)), address);
-    }
-
-    /**
-     * 获取地址nonce
-     *
-     * @param web3j web3j
-     * @param address address
-     * @return  nonce
-     * @throws IOException IOException
-     */
-    public static BigInteger getNonce(@NotNull Web3j web3j, String address) throws IOException {
-        return web3j.ethGetTransactionCount(address, DefaultBlockParameterName.PENDING)
-            .send().getTransactionCount();
-    }
-
-    /**
-     * 获取rpc的gas
-     *
-     * @param rpcUrl rpcUrl
-     * @return  nonce
-     * @throws IOException IOException
-     */
-    public static BigInteger getGasPrice(String rpcUrl) throws IOException {
-        return getGasPrice(Web3j.build(new HttpService(rpcUrl)));
-    }
-
-    /**
-     * 获取rpc的gas
-     *
-     * @param web3j web3j
-     * @return  nonce
-     * @throws IOException IOException
-     */
-    public static BigInteger getGasPrice(@NotNull Web3j web3j) throws IOException {
-        return web3j.ethGasPrice().send().getGasPrice();
-    }
-}
-vortexa:
-  web3:
-    chain-info:
-      - name: Sepolia
-        rpcUrls:
-          - https://ethereum-sepolia-rpc.publicnode.com
-          - https://rpc.sepolia.org
-        chainId: 11155111
-        originTokenSymbol: ETH
-        blockExploreUrl: https://sepolia.etherscan.io
-
-package cn.com.vortexa.bot_platform.service.impl;
-
-import static cn.com.vortexa.common.entity.Web3Wallet.PUBLIC_FIELDS;
-
-import cn.com.vortexa.bot_platform.web3.SmartContractInvoker;
-import cn.com.vortexa.control_server.service.IConnectionService;
-import cn.com.vortexa.web3.dto.SCInvokeParams;
-import cn.com.vortexa.web3.dto.SCInvokeResult;
-import cn.com.vortexa.web3.dto.Web3ChainInfo;
-import cn.com.vortexa.web3.service.IWeb3WalletOPTRPC;
-import cn.hutool.core.collection.CollUtil;
-
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-
-import cn.com.vortexa.bot_platform.mapper.Web3WalletMapper;
-import cn.com.vortexa.bot_platform.service.IWeb3WalletService;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.Web3Wallet;
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.excel.ExcelReadUtil;
-import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.web3.EthWalletUtil;
-import cn.com.vortexa.web3.SolanaWalletUtil;
-import cn.com.vortexa.common.constants.ChainType;
-import cn.com.vortexa.common.dto.web3.SignatureMessage;
-import cn.com.vortexa.web3.dto.WalletInfo;
-import cn.hutool.core.util.StrUtil;
-import lombok.extern.slf4j.Slf4j;
-
-import org.springframework.stereotype.Service;
-
-import java.io.File;
-import java.io.IOException;
-import java.io.Serializable;
-import java.math.BigInteger;
-import java.sql.SQLException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.time.LocalDateTime;
 
 /**
  * <p>
- * 服务实现类
+ *
  * </p>
  *
  * @author com.helei
- * @since 2025-04-21
+ * @since 2025-02-05
  */
-@Slf4j
-@Service
-public class Web3WalletServiceImpl extends AbstractBaseService<Web3WalletMapper, Web3Wallet>
-        implements IWeb3WalletOPTRPC, IWeb3WalletService {
+@Getter
+@Setter
+@TableName("t_reword_info")
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+@PropertyChangeListenClass
+public class RewordInfo implements Serializable {
+    public static final String BOT_REWORD_INFO_TABLE_PREFIX = "t_reword_info";
 
-    private final Web3WalletMapper web3WalletMapper;
+    @Serial
+    private static final long serialVersionUID = 6919845416514161654L;
 
-    public Web3WalletServiceImpl(Web3WalletMapper web3WalletMapper) {
-        super();
-        this.web3WalletMapper = web3WalletMapper;
-    }
+    @TableId(value = "id", type = IdType.AUTO)
+    private Integer id;
 
-    @Override
-    public Result signatureMessageRPC(SignatureMessage message) {
-        return signatureMessage(message);
-    }
+    @TableField(value = "bot_id")
+    private Integer botId;
 
-    @Override
-    public List<Web3Wallet> batchQueryByIdsRPC(List<Serializable> ids) {
-        return batchQueryByIds(ids);
-    }
+    @TableField(value = "bot_key")
+    private String botKey;
 
-    @Override
-    public Result erc20ABIInvokeRPC(SCInvokeParams scInvokeParams) throws IOException {
-        return smartContractInvoke(scInvokeParams);
-    }
+    @TableField(value = "bot_account_id")
+    @CommandTableField
+    private Integer botAccountId;
 
-    @Override
-    public List<Web3Wallet> batchQueryByIds(List<Serializable> ids) {
-        if (CollUtil.isEmpty(ids)) {
-            return List.of();
-        }
-        QueryWrapper<Web3Wallet> queryWrapper = new QueryWrapper<>();
-        queryWrapper.select(PUBLIC_FIELDS);
-        queryWrapper.in("id", ids);
-        return baseMapper.selectList(queryWrapper);
-    }
+    @TableField("total_points")
+    @CommandTableField
+    private Double totalPoints;
 
-    @Override
-    public Result signatureMessage(SignatureMessage signatureMessage) {
-        Integer walletId;
-        String message;
-        if ((walletId = signatureMessage.getWalletId()) == null || walletId < 0 || StrUtil.isBlank(
-                message = signatureMessage.getMessage())) {
-            return Result.fail("params illegal");
-        }
+    @TableField("daily_points")
+    @CommandTableField
+    private Double dailyPoints;
 
-        Web3Wallet web3Wallet = baseMapper.selectOne(new QueryWrapper<>(Web3Wallet.builder().id(walletId).build()));
-        if (web3Wallet == null) {
-            return Result.fail("wallet %s not exist".formatted(walletId));
-        }
+    @TableField(value = "insert_datetime", typeHandler = LocalDateTimeTypeHandler.class, fill = FieldFill.INSERT)
+    private LocalDateTime insertDatetime;
 
-        ChainType chainType = signatureMessage.getChainType();
-        try {
-            String signature = switch (chainType) {
-                case ETH -> EthWalletUtil.signatureMessage2String(web3Wallet.getEthPrivateKey(), message);
-                case SOL -> SolanaWalletUtil.signatureMessage2String(web3Wallet.getSolPrivateKey(), message);
-                case null -> throw new IllegalArgumentException("chain type[%s] not support".formatted(chainType));
-            };
-            return Result.ok(signature);
-        } catch (Exception e) {
-            log.error("{} signature chain[{}] message[{}] fail", walletId, chainType, message, e);
-            return Result.fail("signature failed");
-        }
-    }
+    @TableField(value = "update_datetime", typeHandler = LocalDateTimeTypeHandler.class, fill = FieldFill.INSERT_UPDATE)
+    private LocalDateTime updateDatetime;
 
-    @Override
-    public Result smartContractInvoke(SCInvokeParams invokeParams) throws IOException {
-        if (invokeParams.getWalletId() == null && invokeParams.getWalletInfo() == null) {
-            return Result.fail("walletId or walletInfo must be provided");
-        }
+    @TableField(value = "valid", fill = FieldFill.INSERT)
+    @TableLogic
+    private Integer valid;
 
-        Web3ChainInfo chainInfo = invokeParams.getChainInfo();
-        if (chainInfo == null) {
-            return Result.fail("chainInfo must be provided");
-        }
 
-        WalletInfo wallet = invokeParams.getWalletInfo() == null
-                ? new WalletInfo(chainInfo.getChainType(), web3WalletMapper.selectById(invokeParams.getWalletId()))
-                : invokeParams.getWalletInfo();
+    public RewordInfo newInstance() {
+        RewordInfo rewordInfo = new RewordInfo();
+        rewordInfo.botId = this.botId;
+        rewordInfo.botKey = this.botKey;
+        rewordInfo.botAccountId = this.botAccountId;
+        rewordInfo.totalPoints = this.totalPoints;
+        rewordInfo.dailyPoints = this.dailyPoints;
+        rewordInfo.insertDatetime = this.insertDatetime;
+        rewordInfo.updateDatetime = this.updateDatetime;
+        rewordInfo.valid = this.valid;
 
-        SCInvokeResult result = switch (chainInfo.getChainType()) {
-            case ETH -> SmartContractInvoker.CHAIN.ETH.invokeSCFunction(wallet, chainInfo, invokeParams);
-            default ->
-                    throw new IllegalArgumentException("chain type[%s] not support".formatted(chainInfo.getChainType()));
-        };
-
-        return Result.ok(result);
-    }
-
-    @Override
-    public Integer importFromExcel(String fileBotConfigPath) throws SQLException {
-        String proxyFilePath = FileUtil.getAppResourceSystemConfigDir() + File.separator + fileBotConfigPath;
-        try {
-            List<Map<String, Object>> rawLines = ExcelReadUtil.readExcelToMap(proxyFilePath);
-            return importFromRaw(rawLines);
-        } catch (Exception e) {
-            log.error("read wallet file[{}] error", proxyFilePath, e);
-            return 0;
-        }
-    }
-
-    @Override
-    public Integer importFromRaw(List<Map<String, Object>> rawLines) throws SQLException {
-        List<Web3Wallet> web3Wallets = new ArrayList<>();
-        for (Map<String, Object> line : rawLines) {
-            String mnemonic = String.valueOf(line.get("mnemonic"));
-            Web3Wallet.Web3WalletBuilder builder = Web3Wallet.builder().mnemonic(mnemonic);
-
-            WalletInfo ethWallet = EthWalletUtil.generateWalletInfoFromMnemonic(mnemonic);
-            builder.ethPrivateKey(ethWallet.getPrivateKey());
-            builder.ethAddress(ethWallet.getAddress());
-
-            WalletInfo solWallet = SolanaWalletUtil.generateWalletInfoFromMnemonic(mnemonic);
-            builder.solPrivateKey(solWallet.getPrivateKey());
-            builder.solAddress(solWallet.getAddress());
-        }
-        return insertOrUpdateBatch(web3Wallets);
+        return rewordInfo;
     }
 }
-package cn.com.vortexa.bot_platform.web3;
+package cn.com.vortexa.job.service.impl;
 
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.dto.BotACJobResult;
+import cn.com.vortexa.job.constants.JobStatus;
+import cn.com.vortexa.job.core.AutoBotJobInvoker;
+import cn.com.vortexa.common.dto.job.AutoBotJobParam;
+import cn.com.vortexa.job.dto.AutoBotJob;
+import cn.com.vortexa.job.service.BotJobService;
+import lombok.extern.slf4j.Slf4j;
+import org.quartz.*;
+import org.quartz.impl.matchers.GroupMatcher;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+import static cn.com.vortexa.common.dto.job.AutoBotJobParam.START_AT;
+import static cn.com.vortexa.job.dto.AutoBotJob.BOT_JOB_PARAM_KEY;
+
+
+@Slf4j
+@Service
+public class QuartzBotJobService implements BotJobService {
+
+    private final ConcurrentMap<JobKey, AutoBotJobInvoker> invokerMap;
+
+    @Autowired
+    private Scheduler scheduler;
+
+    public QuartzBotJobService() {
+        this.invokerMap = new ConcurrentHashMap<>();
+    }
+
+    @Override
+    public void registerJobInvoker(String scriptNodeName, String botKey, String jobName, AutoBotJobInvoker invoker) {
+        String group = botQuartzGroupBuilder(scriptNodeName, botKey);
+        JobKey jobKey = new JobKey(jobName, group);
+        registerJobInvoker(jobKey, invoker);
+    }
+
+    @Override
+    public void registerJobInvoker(JobKey jobKey, AutoBotJobInvoker invoker) {
+        this.invokerMap.put(jobKey, invoker);
+    }
+
+
+    @Override
+    public AutoBotJobInvoker getJobInvoker(JobKey jobKey) {
+        return invokerMap.get(jobKey);
+    }
+
+    @Override
+    public List<BotACJobResult> startJobList(
+            String scriptNodeName,
+            String botKey,
+            String jobName,
+            Collection<AutoBotJobParam> autoBotJobParams,
+            AutoBotJobInvoker invoker
+    ) {
+        List<BotACJobResult> resultList = new ArrayList<>(autoBotJobParams.size());
+
+        for (AutoBotJobParam autoBotJob : autoBotJobParams) {
+            resultList.add(startJob(scriptNodeName, botKey, jobName, autoBotJob, invoker));
+        }
+
+        return resultList;
+    }
+
+
+    @Override
+    public BotACJobResult startJob(
+            String scriptNodeName,
+            String botKey,
+            String jobName,
+            AutoBotJobParam jobParam,
+            AutoBotJobInvoker invoker,
+            boolean refreshTrigger
+    ) {
+        String group = botQuartzGroupBuilder(scriptNodeName, botKey);
+
+        JobKey jobKey = new JobKey(jobName, group);
+
+        registerJobInvoker(jobKey, invoker);
+
+        BotACJobResult result = BotACJobResult
+                .builder()
+                .group(group)
+                .jobName(jobName)
+                .success(true)
+                .build();
+
+        try {
+
+            JobStatus status = queryJobStatus(jobKey);
+
+            switch (status) {
+                case PARSED -> resumeJob(jobKey);
+                case STARTED -> {
+                    scheduler.deleteJob(jobKey);
+                    registerJobInvoker(jobKey, invoker);
+//                    updateTrigger(jobParam, refreshTrigger, jobKey, result);
+                }
+                case NOT_REGISTER -> registryAndStartJob(jobKey, jobParam);
+            }
+        } catch (Exception e) {
+            result.setSuccess(false);
+            result.setErrorMsg(e.getMessage());
+
+            log.error("注册[{}]job发生异常", jobKey, e);
+        }
+
+        return result;
+    }
+
+
+    @Override
+    public BotACJobResult startJob(String scriptNodeName, String botKey, String jobName, AutoBotJobParam autoBotJobParam, AutoBotJobInvoker invoker) {
+        return startJob(scriptNodeName, botKey, jobName, autoBotJobParam, invoker, true);
+    }
+
+    @Override
+    public void parseJob(JobKey jobKey) throws SchedulerException {
+        if (scheduler.getJobDetail(jobKey) == null) {
+            log.warn("[{}] not exist, cancel parse", jobKey);
+            return;
+        }
+
+        scheduler.pauseJob(jobKey);
+        log.info("[{}] parsed", jobKey);
+    }
+
+
+    @Override
+    public void parseJob(String scriptNodeName, String botKey, String jobName) throws SchedulerException {
+        JobKey jobKey = new JobKey(jobName, botKey);
+        parseJob(jobKey);
+    }
+
+    @Override
+    public void parseGroupJob(String scriptNodeName, String botKey) throws SchedulerException {
+        String group = botQuartzGroupBuilder(scriptNodeName, botKey);
+        scheduler.pauseJobs(GroupMatcher.jobGroupEquals(group));
+        log.info("{} all job parsed", group);
+    }
+
+    @Override
+    public void resumeJob(String scriptNodeName, String botKey, String jobName) throws SchedulerException {
+        JobKey jobKey = new JobKey(jobName, botQuartzGroupBuilder(scriptNodeName, botKey));
+        resumeJob(jobKey);
+    }
+
+    @Override
+    public void resumeJob(JobKey jobKey) throws SchedulerException {
+        if (scheduler.getJobDetail(jobKey) == null) {
+            log.warn("[{}] not exist, cancel resume", jobKey);
+            return;
+        }
+        scheduler.resumeJob(jobKey);
+        log.info("[{}] resumed", jobKey);
+    }
+
+    @Override
+    public JobStatus queryJobStatus(String scriptNodeName, String botKey, String jobName) throws SchedulerException {
+        JobKey jobKey = new JobKey(jobName, botQuartzGroupBuilder(scriptNodeName, botKey));
+        return queryJobStatus(jobKey);
+    }
+
+    @Override
+    public JobStatus queryJobStatus(JobKey jobKey) throws SchedulerException {
+
+        if (!scheduler.checkExists(jobKey)) {
+            return JobStatus.NOT_REGISTER;
+        }
+        if (scheduler.isStarted()) {
+            return JobStatus.STARTED;
+        }
+        return JobStatus.PARSED;
+    }
+
+
+    /**
+     * 注册并启动job
+     *
+     * @param jobKey   jobKey
+     * @param jobParam jobParam
+     * @throws SchedulerException SchedulerException
+     */
+    private void registryAndStartJob(JobKey jobKey, AutoBotJobParam jobParam) throws SchedulerException {
+        JobDataMap jobDataMap = new JobDataMap();
+        jobDataMap.put(BOT_JOB_PARAM_KEY, jobParam);
+
+        JobDetail jobDetail = JobBuilder.newJob(AutoBotJob.class)
+                .withIdentity(jobKey)
+                .withDescription(jobParam.getDescription())
+                .setJobData(jobDataMap)
+//                        .storeDurably()
+                .build();
+
+        Trigger trigger = generateTriggerFromParam(jobKey, jobParam);
+
+        scheduler.scheduleJob(jobDetail, trigger);
+    }
+
+    /**
+     * 解析参数，生成trigger
+     *
+     * @param jobKey   jobKey
+     * @param jobParam jobParam
+     * @return Trigger
+     */
+    private static Trigger generateTriggerFromParam(JobKey jobKey, AutoBotJobParam jobParam) {
+        TriggerBuilder<Trigger> triggerBuilder = TriggerBuilder.newTrigger()
+                .withIdentity(jobParam.getJobName(), jobKey.getGroup())
+                .startNow();
+
+        if (BotJobType.ONCE_TASK.equals(jobParam.getJobType())
+                || BotJobType.ACCOUNT_SPLIT_JOB.equals(jobParam.getJobType())
+        ) {
+            Map<String, Object> params = jobParam.getParams();
+
+            Object start;
+            if (params == null || (start = params.get(START_AT)) == null) {
+                triggerBuilder.startNow();
+            } else {
+                triggerBuilder.startAt(new Date((Long) start));
+            }
+        } else if (jobParam.getIntervalInSecond() != null) {
+            triggerBuilder
+                    .withSchedule(SimpleScheduleBuilder
+                            .simpleSchedule()
+                            .withIntervalInSeconds(jobParam.getIntervalInSecond())
+                            .repeatForever()
+                    );
+        } else if (jobParam.getCronExpression() != null) {
+            triggerBuilder
+                    .withSchedule(CronScheduleBuilder.cronSchedule(jobParam.getCronExpression()));
+        }
+        return triggerBuilder.build();
+    }
+
+
+    private void updateTrigger(AutoBotJobParam jobParam, boolean refreshTrigger, JobKey jobKey, BotACJobResult result) throws SchedulerException {
+        // 检查是否发生变化
+        JobDetail jobDetail = scheduler.getJobDetail(jobKey);
+        JobDataMap jobDataMap = jobDetail.getJobDataMap();
+
+        // 提取JobDataMap里的参数
+        AutoBotJobParam dbParam = (AutoBotJobParam) jobDataMap.get(BOT_JOB_PARAM_KEY);
+
+        // 发生变化，修改trigger，和jobDetail重新启动
+        if (refreshTrigger && !dbParam.equals(jobParam)) {
+
+            jobDataMap.put(BOT_JOB_PARAM_KEY, jobParam);
+
+            // 更新 JobDetail 到调度器
+            scheduler.deleteJob(jobKey);
+
+            Trigger trigger = generateTriggerFromParam(jobKey, jobParam);
+            scheduler.scheduleJob(jobDetail, trigger);
+
+            // 重新调度，确保 JobDataMap 更新
+            log.info("[{}] trigger 修改成功 new trigger [{}]", jobKey, trigger);
+        } else {
+            result.setSuccess(false);
+            result.setErrorMsg("job exist");
+        }
+    }
+
+
+    private String botQuartzGroupBuilder(String scriptNodeName, String botKey) {
+        return "node{" + scriptNodeName + "}bot{" + botKey + "}";
+    }
+}
+package cn.com.vortexa.bot_platform.config;
+
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.config.GlobalConfig;
+import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
+
+import cn.com.vortexa.common.util.typehandler.JsonTypeHandler;
+import cn.com.vortexa.common.util.typehandler.LocalDateTimeTypeHandler;
+import cn.com.vortexa.common.util.typehandler.MapTextTypeHandler;
+import cn.com.vortexa.db_layer.plugn.table_shard.TableShardInterceptor;
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.BotIdBasedTableShardStrategy;
+import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
+
+import org.apache.ibatis.plugin.Interceptor;
+import org.apache.ibatis.session.SqlSessionFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import org.springframework.web.socket.server.standard.ServerEndpointExporter;
+
+import javax.sql.DataSource;
+
+@Configuration
+public class WebConfig implements WebMvcConfigurer {
+
+    @Autowired
+    private JsonTypeHandler jsonTypeHandler;
+
+    @Autowired
+    private MapTextTypeHandler mapTextTypeHandler;
+
+    @Autowired
+    private LocalDateTimeTypeHandler localDateTimeTypeHandler;
+    @Autowired
+    private MybatisConfiguration mybatisConfiguration;
+
+    @Autowired
+    private GlobalConfig globalConfig;
+
+    @Override
+    public void addCorsMappings(CorsRegistry registry) {
+        registry.addMapping("/**")
+                .allowedOrigins("http://localhost:5181", "http://localhost:5180",
+                        "http://localhost:9531")
+                .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                .allowedHeaders("*")
+                .allowCredentials(true)
+                .maxAge(3600);
+    }
+
+    @Bean
+    public ServerEndpointExporter serverEndpointExporter(){
+        return new ServerEndpointExporter();
+    }
+
+
+    @Bean
+    public SqlSessionFactory sqlSessionFactory(@Qualifier("vortexaDataSource") DataSource dataSource) throws Exception {
+        MybatisSqlSessionFactoryBean factoryBean = new MybatisSqlSessionFactoryBean();
+        factoryBean.setDataSource(dataSource);
+        factoryBean.setMapperLocations(new PathMatchingResourcePatternResolver().getResources("classpath:/mapper/*.xml"));
+        factoryBean.setTypeHandlers(
+            jsonTypeHandler, mapTextTypeHandler, localDateTimeTypeHandler
+        );
+        factoryBean.setTypeAliasesPackage("cn.com.vortexa.entity");
+        factoryBean.setConfiguration(mybatisConfiguration);
+        factoryBean.setGlobalConfig(globalConfig);
+        // 分表插件， 不同bot账户用不同的表
+        factoryBean.setPlugins(tableShardInterceptor());
+        return factoryBean.getObject();
+    }
+
+
+    @Bean
+    public ITableShardStrategy tableShardStrategy() {
+        return new BotIdBasedTableShardStrategy();
+    }
+
+    @Bean
+    public Interceptor tableShardInterceptor() {
+        return new TableShardInterceptor(tableShardStrategy());
+    }
+}
+package cn.com.vortexa.bot_platform.script_control.config;
+
+
+import cn.com.vortexa.rpc.api.platform.*;
+import cn.com.vortexa.control.dto.RPCServiceInfo;
+import cn.com.vortexa.web3.service.IWeb3WalletOPTRPC;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/**
+ * @author helei
+ * @since 2025-03-22
+ */
+@Configuration
+public class ExposeRPCMethodConfig {
+
+    @Bean
+    @ConditionalOnBean(IAccountBaseInfoRPC.class)
+    public RPCServiceInfo<IAccountBaseInfoRPC> accountBaseInfoRPCServiceInfo(
+            IAccountBaseInfoRPC accountBaseInfoRPC
+    ) {
+        return RPCServiceInfo
+                .<IAccountBaseInfoRPC>builder()
+                .interfaces(IAccountBaseInfoRPC.class)
+                .ref(accountBaseInfoRPC)
+                .build();
+    }
+
+    @Bean
+    @ConditionalOnBean(IBotInfoRPC.class)
+    public RPCServiceInfo<IBotInfoRPC> botInfoRPCRPCServiceInfo(
+            IBotInfoRPC botInfoRPC
+    ) {
+        return RPCServiceInfo
+                .<IBotInfoRPC>builder()
+                .interfaces(IBotInfoRPC.class)
+                .ref(botInfoRPC)
+                .build();
+    }
+
+    @Bean
+    @ConditionalOnBean(IBotInstanceRPC.class)
+    public RPCServiceInfo<IBotInstanceRPC> botInstanceRPCRPCServiceInfo(
+            IBotInstanceRPC botInstanceRPC
+    ) {
+        return RPCServiceInfo
+                .<IBotInstanceRPC>builder()
+                .interfaces(IBotInstanceRPC.class)
+                .ref(botInstanceRPC)
+                .build();
+    }
+
+    @Bean
+    @ConditionalOnBean(IBrowserEnvRPC.class)
+    public RPCServiceInfo<IBrowserEnvRPC> browserEnvRPCRPCServiceInfo(
+            IBrowserEnvRPC browserEnvRPC
+    ) {
+        return RPCServiceInfo
+                .<IBrowserEnvRPC>builder()
+                .interfaces(IBrowserEnvRPC.class)
+                .ref(browserEnvRPC)
+                .build();
+    }
+
+    @Bean
+    @ConditionalOnBean(IDiscordAccountRPC.class)
+    public RPCServiceInfo<IDiscordAccountRPC> discordAccountRPCRPCServiceInfo(
+            IDiscordAccountRPC discordAccountRPC
+    ) {
+        return RPCServiceInfo
+                .<IDiscordAccountRPC>builder()
+                .interfaces(IDiscordAccountRPC.class)
+                .ref(discordAccountRPC)
+                .build();
+    }
+
+    @Bean
+    @ConditionalOnBean(IProxyInfoRPC.class)
+    public RPCServiceInfo<IProxyInfoRPC> proxyInfoRPCRPCServiceInfo(
+            IProxyInfoRPC ref
+    ) {
+        return RPCServiceInfo
+                .<IProxyInfoRPC>builder()
+                .interfaces(IProxyInfoRPC.class)
+                .ref(ref)
+                .build();
+    }
+
+    @Bean
+    @ConditionalOnBean(ITelegramAccountRPC.class)
+    public RPCServiceInfo<ITelegramAccountRPC> telegramAccountRPCRPCServiceInfo(
+            ITelegramAccountRPC ref
+    ) {
+        return RPCServiceInfo
+                .<ITelegramAccountRPC>builder()
+                .interfaces(ITelegramAccountRPC.class)
+                .ref(ref)
+                .build();
+    }
+
+    @Bean
+    @ConditionalOnBean(ITwitterAccountRPC.class)
+    public RPCServiceInfo<ITwitterAccountRPC> twitterAccountRPCRPCServiceInfo(
+            ITwitterAccountRPC ref
+    ) {
+        return RPCServiceInfo
+                .<ITwitterAccountRPC>builder()
+                .interfaces(ITwitterAccountRPC.class)
+                .ref(ref)
+                .build();
+    }
+
+    @Bean
+    @ConditionalOnBean(IWeb3WalletOPTRPC.class)
+    public RPCServiceInfo<IWeb3WalletOPTRPC> web3WalletRPCRPCServiceInfo(IWeb3WalletOPTRPC ref) {
+        return RPCServiceInfo
+                .<IWeb3WalletOPTRPC>builder()
+                .interfaces(IWeb3WalletOPTRPC.class)
+                .ref(ref)
+                .build();
+    }
+
+    @Bean
+    @ConditionalOnBean(IRewordInfoRPC.class)
+    public RPCServiceInfo<IRewordInfoRPC> rewordInfoRPCRPCServiceInfo(IRewordInfoRPC ref) {
+        return RPCServiceInfo
+            .<IRewordInfoRPC>builder()
+            .interfaces(IRewordInfoRPC.class)
+            .ref(ref)
+            .build();
+    }
+}
+package cn.com.vortexa.bot_platform.service.impl;
+
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+
+import cn.com.vortexa.bot_platform.mapper.RewordInfoMapper;
+import cn.com.vortexa.common.entity.RewordInfo;
+import cn.com.vortexa.rpc.api.platform.IRewordInfoRPC;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+
+@Service
+public class RewordInfoServiceImpl extends ServiceImpl<RewordInfoMapper, RewordInfo> implements IRewordInfoRPC {
+
+    @Lazy
+    @Autowired
+    private RewordInfoServiceImpl rewordInfoService;
+
+    @Override
+    public void saveBatchRPC(Integer botId, String botKey, List<RewordInfo> rewordInfos) {
+        try {
+            // Step 1 检查表是否存在
+            getBaseMapper().createIfTableNotExist(botId, botKey);
+
+            // Step 2 保存
+            int i = getBaseMapper().saveBatch(botId, botKey, rewordInfos);
+        } catch (Exception e) {
+            throw new RuntimeException("save [%s-%s] reword error, ".formatted(botId, botKey) + e.getMessage());
+        }
+    }
+}
+package cn.com.vortexa.script_bot.daily.klok;
+
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.script_node.anno.BotApplication;
+import cn.com.vortexa.script_node.anno.BotMethod;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.script_node.constants.MapConfigKey;
+import cn.com.vortexa.script_node.service.BotApi;
+import lombok.extern.slf4j.Slf4j;
+
+import java.io.*;
+import java.util.*;
+import java.util.concurrent.ExecutionException;
+
+import static cn.com.vortexa.script_bot.daily.klok.KlokApi.*;
+
+@Slf4j
+@BotApplication(
+        name = "klok_bot",
+        accountParams = {PRIMARY_KEY},
+        configParams = {MapConfigKey.TWO_CAPTCHA_API_KEY}
+)
+public class KlokBot extends AutoLaunchBot<KlokBot> {
+
+    private KlokApi klokApi;
+
+    private String inviteCode;
+
+    @Override
+    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
+        klokApi = new KlokApi(this);
+        inviteCode = (String) botConfig.getCustomConfig().get(REFER_CODE);
+    }
+
+    @Override
+    protected KlokBot getInstance() {
+        return this;
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK, concurrentCount = 5)
+    public Result register(AccountContext exampleAC, List<AccountContext> sameBAIDList, String inviteCode) {
+        return klokApi.registerOrLogin(exampleAC, inviteCode);
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK, concurrentCount = 5)
+    public Result login(AccountContext accountContext) {
+        if (accountContext.getId() != 11) return Result.fail("test");
+        return klokApi.registerOrLogin(accountContext, inviteCode);
+    }
+
+    @BotMethod(jobType = BotJobType.QUERY_REWARD, intervalInSecond = 24 * 60 * 60, uniqueAccount = true)
+    public Result rewordQuery(AccountContext exampleAC, List<AccountContext> sameBAIDList) {
+        return klokApi.rewordQuery(exampleAC);
+    }
+
+    @BotMethod(jobType = BotJobType.TIMED_TASK, intervalInSecond = 6 * 60 * 60, concurrentCount = 10)
+    public void dailyTask(AccountContext accountContext) throws ExecutionException, InterruptedException {
+        klokApi.dailyTask(accountContext, inviteCode);
+    }
+
+    @BotMethod(jobType = BotJobType.TIMED_TASK, intervalInSecond = 60 * 60, concurrentCount = 50)
+    public void autoRefer_v2(AccountContext accountContext) throws ExecutionException, InterruptedException {
+        AutoBotConfig autoBotConfig = getAutoBotConfig();
+        Integer count = (Integer) autoBotConfig.getCustomConfig().get(PEER_ACCOUNT_REFER_KEY);
+        try {
+            klokApi.autoRefer(accountContext, 1);
+        } catch (IOException e) {
+            logger.error(accountContext.getSimpleInfo() + " auto refer error", e);
+        }
+    }
+}
+package cn.com.vortexa.script_bot.daily.monadscore;
+
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.com.vortexa.common.exception.BotStartException;
+import cn.com.vortexa.common.util.http.RestApiClient;
+import cn.com.vortexa.script_node.anno.BotApplication;
+import cn.com.vortexa.script_node.anno.BotMethod;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.script_node.constants.MapConfigKey;
+import cn.com.vortexa.script_node.service.BotApi;
+import com.alibaba.fastjson.JSONObject;
+
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.constants.HttpMethod;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.hutool.core.util.StrUtil;
+import org.jetbrains.annotations.NotNull;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutionException;
+
+/**
+ * @author helei
+ * @since 2025/3/28 9:51
+ */
+@BotApplication(
+        name = "monad_score",
+        configParams = {MapConfigKey.INVITE_CODE_KEY},
+        accountParams = {MonadScoreBot.WALLET_ADDRESS}
+)
+public class MonadScoreBot extends AutoLaunchBot<MonadScoreBot> {
+    public static final String WALLET_ADDRESS = "wallet_address";
+    public static final String TOKEN = "token";
+
+    public static final String BASE_URL = "https://mscore.onrender.com";
+
+    @Override
+    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
+        RestApiClient.readTimeout = 300;
+        RestApiClient.writeTimeout = 300;
+        RestApiClient.connectTimeout = 300;
+        setRequestConcurrentCount(25);
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK, concurrentCount = 25)
+    public Result register(AccountContext uniqueAC, List<AccountContext> sameBIdACList, String inviteCode) {
+        return verify(uniqueAC, inviteCode);
+    }
+
+    @NotNull
+    private Result verify(AccountContext uniqueAC, String inviteCode) {
+        String simpleInfo = uniqueAC.getSimpleInfo();
+
+        if (StrUtil.isBlank(inviteCode)) {
+            logger.warn(simpleInfo + " register cancel, invite code is empty");
+        }
+
+        logger.debug(simpleInfo + " start register, invite code: " + inviteCode);
+
+        String walletAddress = uniqueAC.getParam(WALLET_ADDRESS);
+        JSONObject body = new JSONObject();
+        body.put("wallet", walletAddress);
+        body.put("invite", inviteCode);
+
+        try {
+            String responseStr = syncRequest(
+                    uniqueAC.getProxy(),
+                    BASE_URL + "/user",
+                    HttpMethod.POST,
+                    generateHeader(uniqueAC),
+                    null,
+                    body,
+                    ()->simpleInfo + " send registry request",
+                    2
+            ).get();
+
+            logger.info("%s active node response: %s".formatted(simpleInfo, responseStr));
+
+            JSONObject result = JSONObject.parseObject(responseStr);
+            String token = result.getString(TOKEN);
+
+            uniqueAC.setParam(TOKEN, token);
+            return Result.ok();
+        } catch (InterruptedException | ExecutionException e) {
+            logger.error("%s active node error, %s".formatted(
+                    simpleInfo, e.getCause() == null ? e.getCause().getMessage() : e.getMessage())
+            );
+            return Result.fail(e.getMessage());
+        }
+    }
+
+    @BotMethod(jobType = BotJobType.TIMED_TASK, intervalInSecond = 60 * 60 * 24)
+    public void activeNode(AccountContext accountContext) {
+        String simpleInfo = accountContext.getSimpleInfo();
+        String walletAddress = accountContext.getParam(WALLET_ADDRESS);
+
+        if (StrUtil.isBlank(walletAddress)) {
+            logger.warn("%s didn't have wallet address, skip it".formatted(simpleInfo));
+            return;
+        }
+        logger.debug("%s start active node...".formatted(simpleInfo));
+
+        verify(accountContext, null);
+        String token = accountContext.getParam(TOKEN);
+
+        if (token == null) {
+            logger.warn("%s didn't have token, skip it".formatted(simpleInfo));
+            return;
+        }
+
+        Map<String, String> headers = generateHeader(accountContext);
+        headers.put("authorization", "Bearer " + token);
+
+        JSONObject body = new JSONObject();
+        body.put("wallet", walletAddress);
+        body.put("startTime", System.currentTimeMillis());
+
+        try {
+            String responseStr = syncRequest(
+                    accountContext.getProxy(),
+                    BASE_URL + "/user/update-start-time",
+                    HttpMethod.PUT,
+                    headers,
+                    null,
+                    body
+            ).get();
+            logger.info("%s active node response: %s".formatted(simpleInfo, responseStr));
+        } catch (InterruptedException | ExecutionException e) {
+            logger.error("%s active node error, %s".formatted(
+                    simpleInfo, e.getCause() == null ? e.getCause().getMessage() : e.getMessage())
+            );
+        }
+    }
+
+    @Override
+    protected MonadScoreBot getInstance() {
+        return this;
+    }
+
+    private Map<String, String> generateHeader(AccountContext accountContext) {
+        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
+        headers.put("origin", "https://monadscore.xyz");
+        headers.put("referer", "https://monadscore.xyz/");
+        return headers;
+    }
+
+    public static void main(String[] args) throws BotStartException, BotInitException {
+        List<String> list = new ArrayList<>(List.of(args));
+
+        list.add("--vortexa.botKey=monad_score_google");
+
+        list.add("--vortexa.accountConfig.configFilePath=monad_score_google.xlsx");
+        list.add("--add-opens java.base/java.lang=ALL-UNNAMED");
+
+//        ScriptAppLauncher.launch(MonadScoreBot.class, list.toArray(new String[0]));
+    }
+}
+package cn.com.vortexa.script_bot.daily.parasail;
+
+import cn.com.vortexa.script_node.anno.BotApplication;
+import cn.com.vortexa.script_node.anno.BotMethod;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.script_node.constants.MapConfigKey;
+import cn.com.vortexa.script_node.service.BotApi;
 import cn.com.vortexa.web3.EthWalletUtil;
-import cn.com.vortexa.web3.constants.Web3jFunctionType;
-import cn.com.vortexa.web3.dto.SCInvokeParams;
-import cn.com.vortexa.web3.dto.SCInvokeResult;
-import cn.com.vortexa.web3.dto.WalletInfo;
-import cn.com.vortexa.web3.dto.Web3ChainInfo;
-import cn.com.vortexa.web3.util.ABIFunctionBuilder;
-import cn.hutool.core.collection.CollUtil;
-import cn.hutool.core.lang.Pair;
+import com.alibaba.fastjson.JSONObject;
 
-import org.web3j.abi.datatypes.Type;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.constants.HttpMethod;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.AccountContext;
 
-import java.io.IOException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+
+/**
+ * @author helei
+ * @since 2025/3/28 11:13
+ */
+@BotApplication(
+        name = "parasail_bot",
+        configParams = {MapConfigKey.INVITE_CODE_KEY},
+        accountParams = {ParasailBot.PRIMARY_KEY}
+)
+public class ParasailBot extends AutoLaunchBot<ParasailBot> {
+    public static final String BASE_URL = "https://www.parasail.network/api";
+    public static final String PRIMARY_KEY = "primary_key";
+    private static final Logger log = LoggerFactory.getLogger(ParasailBot.class);
+
+    @Override
+    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
+
+    }
+
+    @Override
+    protected ParasailBot getInstance() {
+        return null;
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK)
+    public Result signIn(AccountContext accountContext) {
+        try {
+            logger.info(accountContext.getSimpleInfo() + " start sign in...");
+            String token = verifyUser(accountContext).get();
+            accountContext.setParam(MapConfigKey.TOKEN_KEY, token);
+
+            logger.info(accountContext.getSimpleInfo() + " sign in success ,token" + token);
+            return Result.ok();
+        } catch (InterruptedException | ExecutionException e) {
+            String errorMsg = accountContext.getSimpleInfo() + " sign in error, "
+                    + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+            logger.error(errorMsg);
+
+            return Result.fail(errorMsg);
+        }
+    }
+
+    public CompletableFuture<String> verifyUser(AccountContext accountContext) {
+        logger.debug("start signature verify message");
+        return generateSignature(accountContext.getParam(PRIMARY_KEY))
+                .thenApply(signatureData -> {
+                    logger.debug("signature verify message success, send verify request");
+
+                    try {
+                        String verifyResponseStr = syncRequest(
+                                accountContext.getProxy(),
+                                BASE_URL + "/user/verify",
+                                HttpMethod.POST,
+                                accountContext.getBrowserEnv().generateHeaders(),
+                                null,
+                                signatureData
+                        ).get();
+
+                        JSONObject response = JSONObject.parseObject(verifyResponseStr);
+                        return response.getJSONObject("data").getString("token");
+                    } catch (InterruptedException | ExecutionException e) {
+                        throw new RuntimeException("verifyUserError", e);
+                    }
+                });
+    }
+
+    public CompletableFuture<JSONObject> generateSignature(String primaryKey) {
+        String message = """
+            By signing this message, you confirm that you agree to the Parasail Terms of Service.
+
+            Parasail (including the Website and Parasail Smart Contracts) is not intended for:
+            (a) access and/or use by Excluded Persons;
+            (b) access and/or use by any person or entity in, or accessing or using the Website from, an Excluded Jurisdiction.
+            
+            Excluded Persons are prohibited from accessing and/or using Parasail (including the Website and Parasail Smart Contracts).
+            
+            For full terms, refer to: https://parasail.network/Parasail_User_Terms.pdf
+            """;
+        return CompletableFuture.supplyAsync(
+                () -> EthWalletUtil.signatureMessage2String(primaryKey, message), getExecutorService()
+        ).thenApply(signatureData -> {
+            JSONObject jsonObject = new JSONObject();
+            jsonObject.put("", signatureData);
+            return jsonObject;
+        });
+    }
+}
+package cn.com.vortexa.script_bot.depin.depin_3_dos;
+
+import cn.com.vortexa.script_node.anno.BotApplication;
+import cn.com.vortexa.script_node.anno.BotMethod;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.constants.HttpMethod;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.com.vortexa.common.exception.BotStartException;
+import cn.hutool.core.util.StrUtil;
+import com.alibaba.fastjson.JSONObject;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ExecutionException;
+
+@Slf4j
+@BotApplication(
+        name = "three_dos_bot"
+)
+public class ThreeDosBot extends AutoLaunchBot<ThreeDosBot> {
+
+    private ThreeDosApi threeDosApi;
+
+    @Override
+    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
+        this.threeDosApi = new ThreeDosApi(this);
+    }
+
+    @Override
+    protected ThreeDosBot getInstance() {
+        return this;
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK, jobName = "自动注册")
+    public Result autoRegister(AccountContext exampleAC, List<AccountContext> sameABIIdList, String inviteCode) {
+        return threeDosApi.register(exampleAC, sameABIIdList, inviteCode);
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK, jobName = "自动获取token")
+    public Result login(AccountContext accountContext) {
+        return threeDosApi.login(accountContext);
+    }
+
+    @BotMethod(jobType = BotJobType.QUERY_REWARD, jobName = "奖励查询", intervalInSecond = 300, uniqueAccount = true)
+    public Result queryReward(AccountContext exampleAC, List<AccountContext> sameABIIdList) {
+        return threeDosApi.updateAccount(exampleAC, sameABIIdList);
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK, jobName = "重发验证邮件", uniqueAccount = true)
+    public void resendEmail(AccountContext exampleAC, List<AccountContext> sameABIIdList) {
+        threeDosApi.resendEmail(exampleAC, sameABIIdList);
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK, jobName = "验证邮箱")
+    public void checkEmail(AccountContext accountContext) {
+        threeDosApi.checkEmail(accountContext);
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK, jobName = "生成秘钥")
+    public void generateSecretKey(AccountContext accountContext) {
+        threeDosApi.generateSecretKey(accountContext);
+    }
+
+    @BotMethod(
+            jobType = BotJobType.TIMED_TASK,
+            jobName = "每日登录",
+            intervalInSecond = 60 * 60 * 12,
+            uniqueAccount = true
+    )
+    public void dailyCheckIn(AccountContext exampleAC, List<AccountContext> sameABIIdList) {
+        threeDosApi.dailyCheckIn(exampleAC, sameABIIdList);
+    }
+
+    @BotMethod(jobType = BotJobType.TIMED_TASK, jobName = "自动Ping", intervalInSecond = 60, dynamicTrigger = true, dynamicTimeWindowMinute = 300)
+    public void keepAlivePing(AccountContext accountContext) {
+        threeDosApi.keepLive(accountContext);
+    }
+
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK)
+    public void registerWhiteList(AccountContext accountContext) throws ExecutionException, InterruptedException {
+        String ethAddress = accountContext.getParam("eth_address");
+        if (StrUtil.isBlank(ethAddress)) return;
+
+        JSONObject body = new JSONObject();
+        body.put("email", accountContext.getAccountBaseInfo().getEmail());
+        body.put("project_identifier", "dev-inflectiv-ai");
+        body.put("wallet_address", ethAddress);
+        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
+        headers.put("origin", "https://whitelist.inflectiv.ai");
+        headers.put("referer", "https://whitelist.inflectiv.ai/");
+
+
+       syncRequest(
+                accountContext.getProxy(),
+                "https://ssrks0qeqf.execute-api.eu-west-2.amazonaws.com/production/whitelist/create",
+                HttpMethod.POST,
+                headers,
+                null,
+                body
+        ).whenComplete((response, throwable) -> {
+            if (throwable != null) {
+                logger.error("register white list error", throwable);
+            }
+            log.info("register white list success, " + response);
+       });
+    }
+
+
+    public static void main(String[] args) throws BotStartException, BotInitException {
+        List<String> list = new ArrayList<>(List.of(args));
+
+        list.add("--bot.botKey=3Mods-Google");
+        list.add("--bot.customConfig.invite_code=WSJQRJD5CB");
+        list.add("--bot.accountConfig.configFilePath=3dos/3dos_google.xlsx");
+        list.add("--add-opens java.base/java.lang=ALL-UNNAMED");
+
+//        ScriptAppLauncher.launch(ThreeDosBot.class, list.toArray(new String[0]));
+    }
+}
+package cn.com.vortexa.script_bot.depin.optimai;
+
+import cn.com.vortexa.captcha.CaptchaResolver;
+import cn.com.vortexa.common.constants.HttpMethod;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.common.entity.ProxyInfo;
+import cn.com.vortexa.common.entity.RewordInfo;
+import cn.com.vortexa.script_node.dto.AccountRewordSnapshot;
+import cn.hutool.core.util.StrUtil;
+
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
+
+import org.jetbrains.annotations.NotNull;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.util.Base64;
+import java.util.Map;
+import java.util.Random;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+
+/**
+ * @author helei
+ * @since 2025/3/24 17:15
+ */
+public class OptimAIAPI {
+    private static final String LOGIN_PAGE_URL = "https://node.optimai.network/login";
+    private static final String LOGIN_WEBSITE_KEY = "0x4AAAAAAA-NTN9roDHAsPQe";
+
+    private static final String SIGN_IN_API = "https://api.optimai.network/auth/signin";
+    private static final String GET_TOKEN_API = "https://api.optimai.network/auth/token";
+    private static final String REFRESH_TOKEN_API = "https://api.optimai.network/auth/refresh";
+    private static final String BASE_API = "https://api.optimai.network";
+    private static final String REWORD_QUERY_API = "/dashboard/stats";
+
+    public static final String ACCESS_TOKEN_KEY = "access_token";
+    public static final String REFRESH_TOKEN_KEY = "refresh_token";
+    public static final String USER_ID_KEY = "user_id";
+    public static final String DEVICE_ID_KEY = "device_id";
+
+    public static final Random random = new Random();
+
+    private final OptimAIBot optimAIBot;
+
+    public OptimAIAPI(OptimAIBot optimAIBot) {
+        this.optimAIBot = optimAIBot;
+    }
+
+    public Result registry(AccountContext uniAC, String inviteCode) {
+
+        return null;
+    }
+
+    /**
+     * 登录
+     *
+     * @param accountContext accountContext
+     * @return Result
+     * @throws Exception Exception
+     */
+    public Result login(AccountContext accountContext) throws Exception {
+        ProxyInfo proxy = accountContext.getProxy();
+        String simpleInfo = accountContext.getSimpleInfo();
+        String userAgent = accountContext.getBrowserEnv().getUserAgent();
+
+//        if (!StrUtil.isBlank(accountContext.getParam(REFRESH_TOKEN_KEY))) return Result.ok();
+
+        optimAIBot.logger.info(simpleInfo + " start cf resolve...");
+        CompletableFuture<Result> future = CaptchaResolver.cloudFlareResolve(
+            proxy,
+            LOGIN_PAGE_URL,
+            LOGIN_WEBSITE_KEY,
+            optimAIBot.getAutoBotConfig().getConfig(OptimAIBot.TWO_CAPTCHA_API_KEY)
+        ).thenApplyAsync(token -> {
+            try {
+                optimAIBot.logger.info(simpleInfo + " cf resolve success");
+
+                JSONObject body = new JSONObject();
+                String codeVerifier = generateCodeVerifier();
+
+                body.put("email", accountContext.getAccountBaseInfo().getEmail());
+                body.put("password", accountContext.getParam(OptimAIBot.PASSWORD_KEY));
+                body.put("code_challenge_method", "S256");
+                body.put("code_challenge", generateCodeChallenge(codeVerifier));
+                body.put("turnstile_token", token);
+
+                Map<String, String> signInHeaders = buildSignInHeader(accountContext, userAgent);
+
+                String signInStr = optimAIBot.syncRequest(
+                    proxy,
+                    SIGN_IN_API,
+                    HttpMethod.POST,
+                    signInHeaders,
+                    null,
+                    body,
+                    () -> simpleInfo + " start login"
+                ).get();
+
+                JSONObject signIn = JSONObject.parseObject(signInStr);
+                String authorizationCode = signIn.getString("authorization_code");
+
+                optimAIBot.logger.info(simpleInfo + " code get success");
+
+                JSONObject getTokenBody = new JSONObject();
+                getTokenBody.put("code", authorizationCode);
+                getTokenBody.put("code_verifier", codeVerifier);
+                getTokenBody.put("grant_type", "authorization_code");
+
+                Map<String, String> tokenHeader = buildTokenHeader(accountContext, userAgent);
+
+                String getTokenStr = optimAIBot.syncRequest(
+                    proxy,
+                    GET_TOKEN_API,
+                    HttpMethod.POST,
+                    tokenHeader,
+                    null,
+                    getTokenBody,
+                    () -> simpleInfo + " start get token"
+                ).get();
+                JSONObject tokenResult = JSONObject.parseObject(getTokenStr);
+
+                optimAIBot.logger.info(simpleInfo + " get token success, " + tokenResult);
+                accountContext.setParam(ACCESS_TOKEN_KEY, tokenResult.getString(ACCESS_TOKEN_KEY));
+                accountContext.setParam(REFRESH_TOKEN_KEY, tokenResult.getString(REFRESH_TOKEN_KEY));
+                return Result.ok();
+            } catch (Exception e) {
+                optimAIBot.logger.error(
+                    "login error, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+                return Result.fail("");
+            }
+        });
+
+        return future.get();
+    }
+
+    public Result refreshAccessToken(AccountContext accountContext) {
+        String refreshToken = accountContext.getParam(REFRESH_TOKEN_KEY);
+        if (StrUtil.isBlank(refreshToken)) {
+            try {
+                return login(accountContext);
+            } catch (Exception e) {
+                return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+            }
+        }
+
+        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
+        JSONObject body = new JSONObject();
+        body.put("refresh_token", refreshToken);
+
+        try {
+            String responseStr = optimAIBot.syncRequest(
+                accountContext.getProxy(),
+                REFRESH_TOKEN_API,
+                HttpMethod.POST,
+                headers,
+                null,
+                body,
+                () -> accountContext.getSimpleInfo() + " start refresh token..."
+            ).get();
+
+            JSONObject result = JSONObject.parseObject(responseStr);
+            accountContext.setParam(ACCESS_TOKEN_KEY, result.getJSONObject("data").getString(ACCESS_TOKEN_KEY));
+            return Result.ok();
+        } catch (InterruptedException | ExecutionException e) {
+            return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+        }
+    }
+
+    public Result queryUserId(AccountContext accountContext) {
+        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
+        String token = accountContext.getParam(ACCESS_TOKEN_KEY);
+        if (StrUtil.isBlank(token)) {
+            try {
+                refreshAccessToken(accountContext);
+                token = accountContext.getParam(ACCESS_TOKEN_KEY);
+            } catch (Exception e) {
+                return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+            }
+        }
+
+        headers.put("authorization", "Bearer " + token);
+
+        try {
+            String responseStr = optimAIBot.syncRequest(
+                accountContext.getProxy(),
+                BASE_API + "/auth/me?platforms=all",
+                HttpMethod.GET,
+                headers,
+                null,
+                null,
+                () -> accountContext.getSimpleInfo() + " start get user id"
+            ).get();
+            JSONObject result = JSONObject.parseObject(responseStr);
+            String userId = result.getJSONObject("user").getString("id");
+            accountContext.setParam(USER_ID_KEY, userId);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+        }
+    }
+
+    public Result queryDeviceId(AccountContext accountContext) {
+        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
+        String token = accountContext.getParam(ACCESS_TOKEN_KEY);
+        if (StrUtil.isBlank(token)) {
+            try {
+                refreshAccessToken(accountContext);
+                token = accountContext.getParam(ACCESS_TOKEN_KEY);
+            } catch (Exception e) {
+                return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+            }
+        }
+
+        headers.put("authorization", "Bearer " + token);
+
+        try {
+            String responseStr = optimAIBot.syncRequest(
+                accountContext.getProxy(),
+                BASE_API + "/devices?limit=10&sort_by=last_used_at",
+                HttpMethod.GET,
+                headers,
+                null,
+                null,
+                () -> accountContext.getSimpleInfo() + " start get device id"
+            ).get();
+
+            JSONObject result = JSONObject.parseObject(responseStr);
+            JSONArray items = result.getJSONArray("items");
+
+            String deviceId = null;
+            for (int i = 0; i < items.size(); i++) {
+                JSONObject jb = items.getJSONObject(i);
+                if (!"telegram".equals(jb.getString("device_type"))) {
+                    deviceId = jb.getString("id");
+                }
+            }
+
+            if (StrUtil.isBlank(deviceId)) {
+                Result.fail("please register node first");
+            }
+            accountContext.setParam(DEVICE_ID_KEY, deviceId);
+            return Result.ok();
+        } catch (Exception e) {
+            return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+        }
+    }
+
+    public Result keepAlive(AccountContext accountContext) {
+        Result result = generateOnlineBody(accountContext);
+        if (result.getSuccess()) {
+            String data = (String) result.getData();
+
+            String token = accountContext.getParam(ACCESS_TOKEN_KEY);
+
+            Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
+            headers.put("authorization", "Bearer " + token);
+
+            JSONObject body = new JSONObject();
+            body.put("data", data);
+
+            try {
+                String responseStr = optimAIBot.syncRequest(
+                    accountContext.getProxy(),
+                    BASE_API + "/uptime/online",
+                    HttpMethod.POST,
+                    headers,
+                    null,
+                    body,
+                    () -> accountContext.getSimpleInfo() + " send keepalive request"
+                ).get();
+
+                return Result.ok(responseStr);
+            } catch (InterruptedException | ExecutionException e) {
+                return Result.fail("keepalive request error, " + result.getErrorMsg());
+            }
+        } else {
+            return Result.fail("online body generate error, " + result.getErrorMsg());
+        }
+    }
+
+    public Result generateOnlineBody(AccountContext accountContext) {
+        String userId = accountContext.getParam(USER_ID_KEY);
+        if (StrUtil.isBlank(userId)) {
+            Result result = queryUserId(accountContext);
+            if (result.getSuccess()) {
+                userId = accountContext.getParam(USER_ID_KEY);
+            } else {
+                return Result.fail("userId request error, " + result.getErrorMsg());
+            }
+        }
+
+        String deviceId = accountContext.getParam(DEVICE_ID_KEY);
+        if (StrUtil.isBlank(deviceId)) {
+            Result result = queryDeviceId(accountContext);
+            if (result.getSuccess()) {
+                deviceId = accountContext.getParam(DEVICE_ID_KEY);
+            } else {
+                return Result.fail("deviceId request error, " + result.getErrorMsg());
+
+            }
+        }
+        JSONObject body = new JSONObject();
+        body.put("duration", 600000);
+        body.put("user_id", userId);
+        body.put("device_id", deviceId);
+        body.put("device_type", "telegram");
+        body.put("timestamp", System.currentTimeMillis());
+
+        return Result.ok(Ur(body.toJSONString()));
+    }
+
+    public AccountRewordSnapshot queryReword(AccountContext accountContext) {
+        String accessToken = accountContext.getParam(ACCESS_TOKEN_KEY);
+        if (accessToken == null) {
+            Result result = refreshAccessToken(accountContext);
+            if (!result.getSuccess()) {
+                throw new RuntimeException("get access token error, " + result.getErrorMsg());
+            } else {
+                accessToken = accountContext.getParam(ACCESS_TOKEN_KEY);
+            }
+        }
+
+        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
+        headers.put("Authorization", "Bearer " + accessToken);
+
+        try {
+            String responseStr = optimAIBot.syncRequest(
+                accountContext.getProxy(),
+                REWORD_QUERY_API,
+                HttpMethod.GET,
+                headers,
+                null,
+                null
+            ).get();
+            AccountRewordSnapshot rewordInfo = new AccountRewordSnapshot();
+
+            JSONObject result = JSONObject.parseObject(responseStr);
+            JSONObject state = result.getJSONObject("data").getJSONObject("stats");
+            Double totalRewards = state.getDouble("total_rewards");
+            Object totalUptime = state.get("total_uptime");
+
+            rewordInfo.setTotalPoints(totalRewards);
+            optimAIBot.logger.info(accountContext.getSimpleInfo()
+                + " reword query success, total[%s] uptime[%s]".formatted(totalRewards, totalUptime));
+            return rewordInfo;
+        } catch (InterruptedException | ExecutionException e) {
+            optimAIBot.logger.error(
+                "query reword error, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+            throw new RuntimeException(e.getMessage());
+        }
+    }
+
+    @NotNull
+    private static Map<String, String> buildSignInHeader(AccountContext accountContext, String userAgent) {
+        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
+        headers.put("userAgent", userAgent);
+        headers.put("server", "cloudflare");
+        headers.put("cf-cache-status", "DYNAMIC");
+        headers.put("cf-ray", "925e96ab3e43e2e3-HKG");
+        headers.put("content-type", "application/json; charset=utf-8");
+        return headers;
+    }
+
+    @NotNull
+    private static Map<String, String> buildTokenHeader(AccountContext accountContext, String userAgent) {
+        Map<String, String> headers = accountContext.getBrowserEnv().generateHeaders();
+        headers.put("userAgent", userAgent);
+        headers.put("server", "cloudflare");
+        headers.put("origin", "https://node.optimai.network");
+        headers.put("referer", "https://node.optimai.network/");
+        headers.put("content-type", "application/json;");
+        return headers;
+    }
+
+    // 生成随机的 code_verifier（32 字节，转换为十六进制字符串）
+    public static String generateCodeVerifier() {
+        SecureRandom secureRandom = new SecureRandom();
+        byte[] codeVerifier = new byte[32]; // 32 字节随机数据（与 JS 代码一致）
+        secureRandom.nextBytes(codeVerifier);
+
+        // 转换为十六进制字符串
+        StringBuilder hexString = new StringBuilder();
+        for (byte b : codeVerifier) {
+            hexString.append(String.format("%02x", b));
+        }
+        return hexString.toString();
+    }
+
+    // 计算 code_challenge（SHA-256 + Base64 URL 编码）
+    public static String generateCodeChallenge(String codeVerifier) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        byte[] hashed = digest.digest(codeVerifier.getBytes(StandardCharsets.UTF_8));
+
+        // Base64 URL 编码（去掉填充 =）
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(hashed)
+            .replace("+", "-")
+            .replace("/", "_");
+    }
+
+    // Fibonacci transformation function
+    private static int Ts(int e) {
+        double t = 0, i = 1;
+        for (int s = 0; s < e; s++) {
+            double temp = t;
+            t = i;
+            i = temp + i;
+        }
+        return (int) (t % 20);
+    }
+
+    // String transformation function Bs
+    private static String Bs(String e) {
+        StringBuilder result = new StringBuilder();
+
+        for (int i = 0; i < e.length(); i++) {
+            int t = e.codePointAt(i);
+            result.append(Character.toChars(t +  Ts(i)));
+        }
+        return result.toString();
+    }
+
+    // XOR transformation function Rs
+    private static String Rs(String e) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < e.length(); i++) {
+            char t = e.charAt(i);
+            char transformed = (char) ((t ^ (i % 256)) & 255);
+            sb.append(transformed);
+        }
+        return sb.toString();
+    }
+
+    // Swap transformation function Ss
+    private static String Ss(String e) {
+        char[] arr = e.toCharArray();
+        for (int i = 0; i < arr.length - 1; i += 2) {
+            char temp = arr[i];
+            arr[i] = arr[i + 1];
+            arr[i + 1] = temp;
+        }
+        return new String(arr);
+    }
+
+    // Final transformation function Ur
+    public static String Ur(String e) {
+        return encodeToBase64(Ss(Rs(Bs(e))));
+    }
+
+    // Helper method to encode a string to Base64
+    private static String encodeToBase64(String str) {
+        byte[] encode = Base64.getEncoder().encode(str.getBytes(StandardCharsets.ISO_8859_1));
+        return new String(encode);
+    }
+
+    private static final String template
+        = "{\"duration\":600000,\"user_id\":\"%s\",\"device_id\":\"%s\",\"device_type\":\"telegram\",\"timestamp\":%d}";
+
+    public static void main(String[] args) throws Exception {
+        CompletableFuture<String> future = CaptchaResolver.cloudFlareResolve(
+                null,
+                LOGIN_PAGE_URL,
+                LOGIN_WEBSITE_KEY,
+                "c03504065d26827ca9e5b47ec3"
+        );
+        System.out.println(future.get());
+    }
+}
+package cn.com.vortexa.script_bot.depin.optimai;
+
+import cn.com.vortexa.script_node.anno.BotApplication;
+import cn.com.vortexa.script_node.anno.BotMethod;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.script_node.dto.AccountRewordSnapshot;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.AccountContext;
 
 import java.util.List;
 
 /**
- * 智能合约调用器
- *
  * @author helei
- * @since 2025/4/23 10:11
+ * @since 2025/3/24 17:14
  */
-public interface SmartContractInvoker {
-    /**
-     * 执行智能合约交互
-     *
-     * @param walletInfo  钱包信息
-     * @param chainInfo  链信息
-     * @param scInvokeParams 调用参数
-     * @return  SCInvokeResult
-     * @throws IOException  IOException
-     */
-    SCInvokeResult invokeSCFunction(
-            WalletInfo walletInfo,
-            Web3ChainInfo chainInfo,
-            SCInvokeParams scInvokeParams
-    ) throws IOException;
+@BotApplication(name = "optim_ai", configParams = {OptimAIBot.TWO_CAPTCHA_API_KEY})
+public class OptimAIBot extends AutoLaunchBot<OptimAIBot> {
 
-    enum CHAIN implements SmartContractInvoker {
-        ETH {
-            @Override
-            public  SCInvokeResult invokeSCFunction(
-                    WalletInfo walletInfo,
-                    Web3ChainInfo chainInfo,
-                    SCInvokeParams scInvokeParams
-            ) throws IOException {
-                List<Web3jFunctionType> resultTypes = scInvokeParams.getResultTypes();
+    public static final String TWO_CAPTCHA_API_KEY = "two_captcha_api_key";
+    public static final String PASSWORD_KEY = "password";
 
-                // Step 1 构建合约调用方法
-                ABIFunctionBuilder functionBuilder = ABIFunctionBuilder
-                        .builder()
-                        .functionName(scInvokeParams.getFunctionName());
+    private OptimAIAPI optimAIAPI;
 
-                if (CollUtil.isNotEmpty(scInvokeParams.getParamsTypes())) {
-                    for (Pair<Web3jFunctionType, Object> paramsType : scInvokeParams.getParamsTypes()) {
-                        functionBuilder.addParameterType(paramsType.getKey(), paramsType.getValue());
-                    }
-                }
-                if (CollUtil.isNotEmpty(resultTypes)) {
-                    for (Web3jFunctionType resultType : resultTypes) {
-                        functionBuilder.addReturnType(resultType);
-                    }
-                }
+    @Override
+    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
+        this.optimAIAPI = new OptimAIAPI(this);
+    }
 
-                // Step 3 调用合约
-                SCInvokeResult result = new SCInvokeResult();
-                if (scInvokeParams.getReadFunction()) {
-                    List<Type> types = EthWalletUtil.smartContractCallInvoke(
-                            chainInfo.getRpcUrl(),
-                            scInvokeParams.getContractAddress(),
-                            walletInfo.getAddress(),
-                            functionBuilder
-                    );
-                    result.setResult(types.stream().map(Type::getValue).toList());
-                } else {
-                    String transactionHash = EthWalletUtil.smartContractTransactionInvoke(
-                            chainInfo.getRpcUrl(),
-                            scInvokeParams.getContractAddress(),
-                            walletInfo.getPrivateKey(),
-                            walletInfo.getAddress(),
-                            scInvokeParams.getGasLimit(),
-                            scInvokeParams.getValue(),
-                            functionBuilder
-                    );
-                    result.setTransactionHash(transactionHash);
-                }
+    @Override
+    protected OptimAIBot getInstance() {
+        return this;
+    }
 
-                return result;
-            }
+    @BotMethod(
+            jobType = BotJobType.ONCE_TASK
+    )
+    public Result registry(AccountContext uniAC, List<AccountContext> sameIdACList, String inviteCode) {
+        return optimAIAPI.registry(uniAC, inviteCode);
+    }
+
+    @BotMethod(
+            jobType = BotJobType.ONCE_TASK
+    )
+    public Result login(AccountContext accountContext) throws Exception {
+        return optimAIAPI.login(accountContext);
+    }
+
+    @BotMethod(jobType = BotJobType.QUERY_REWARD, intervalInSecond = 24 * 60 * 60, concurrentCount = 10, uniqueAccount = true)
+    public AccountRewordSnapshot queryReword(AccountContext accountContext, List<AccountContext> sameAC) {
+        return optimAIAPI.queryReword(accountContext);
+    }
+
+    @BotMethod(jobType = BotJobType.TIMED_TASK, intervalInSecond = 24 * 60 * 60 * 3, concurrentCount = 5)
+    public void tokenRefresh(AccountContext accountContext) {
+        Result result = null;
+        try {
+            result = optimAIAPI.login(accountContext);
+        } catch (Exception e) {
+            logger.error(accountContext.getSimpleInfo() + " refresh token error, " + e.getMessage());
+        }
+        if (result.getSuccess()) {
+            logger.info(accountContext.getSimpleInfo() + " refresh token success");
+        } else {
+            logger.error(accountContext.getSimpleInfo() + " refresh token error, " + result.getErrorMsg());
+        }
+    }
+
+    @BotMethod(
+            jobType = BotJobType.TIMED_TASK,
+            intervalInSecond = 8 * 60,
+            concurrentCount = 50
+    )
+    public void keepAlive(AccountContext accountContext) {
+        Result result = optimAIAPI.keepAlive(accountContext);
+        if (result.getSuccess()) {
+            logger.info(accountContext.getSimpleInfo() + " keepalive success");
+        } else {
+            logger.error(accountContext.getSimpleInfo() + " keepalive error, " + result.getErrorMsg());
         }
     }
 }
-package cn.com.vortexa.script_node.config;
+package cn.com.vortexa.script_bot.depin.stork_bot;
 
+import cn.com.vortexa.script_node.anno.BotApplication;
+import cn.com.vortexa.script_node.anno.BotMethod;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.dto.Result;
+import cn.com.vortexa.common.entity.AccountContext;
+
+import java.util.List;
+
+import static cn.com.vortexa.script_bot.depin.stork_bot.StorkBotAPI.PASSWORD_KEY;
+
+
+@BotApplication(name = "stork_bot", accountParams = PASSWORD_KEY)
+public class StorkBot extends AutoLaunchBot<StorkBot> {
+
+
+    private StorkBotAPI storkBotAPI;
+
+    @Override
+    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
+        storkBotAPI = new StorkBotAPI(this);
+    }
+
+    @Override
+    protected StorkBot getInstance() {
+        return this;
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK)
+    public Result signUp(AccountContext exampleAC, List<AccountContext> sameABIList, String inviteCode) {
+        return storkBotAPI.signup(exampleAC, sameABIList, inviteCode);
+    }
+
+    @BotMethod(jobType = BotJobType.TIMED_TASK, intervalInSecond = 60 * 10)
+    public void tokenRefresh(AccountContext accountContext) {
+        storkBotAPI.refreshToken(accountContext);
+    }
+
+    @BotMethod(jobType = BotJobType.TIMED_TASK, intervalInSecond = 60 * 5)
+    public void keepAlive(AccountContext accountContext) {
+        storkBotAPI.keepAlive(accountContext);
+    }
+
+
+}
+package cn.com.vortexa.script_node.bot;
+
+import static cn.com.vortexa.script_node.service.impl.BotAccountContextServiceImpl.BOT_ACCOUNT_CONTEXT_TABLE_PREFIX;
+import static cn.com.vortexa.common.entity.BotInfo.BASIC_JOB_LIST_KEY;
+
+import cn.com.vortexa.script_node.config.ScriptNodeConfiguration;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.com.vortexa.script_node.constants.BotStatus;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.constants.HttpMethod;
+import cn.com.vortexa.common.dto.job.AutoBotJobParam;
+import cn.com.vortexa.script_node.util.log.AppendLogger;
+import cn.com.vortexa.common.dto.AutoBotRuntimeInfo;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.common.entity.BotInfo;
+import cn.com.vortexa.common.entity.BotInstance;
+import cn.com.vortexa.common.entity.ProxyInfo;
+import cn.com.vortexa.common.exception.BotInitException;
+import cn.com.vortexa.common.exception.BotStatusException;
+import cn.com.vortexa.common.util.FileUtil;
+import cn.com.vortexa.common.util.NamedThreadFactory;
+import cn.com.vortexa.common.util.http.RestApiClientFactory;
+import cn.hutool.core.util.RandomUtil;
+import cn.hutool.core.util.StrUtil;
+
+import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
 
-import cn.com.vortexa.common.constants.HttpMethod;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.config.AutoBotAccountConfig;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.YamlConfigLoadUtil;
-import cn.com.vortexa.common.util.http.RestApiClientFactory;
-import cn.com.vortexa.common.dto.BotMetaInfo;
-import cn.com.vortexa.web3.constants.Web3ChainDict;
-import cn.hutool.core.collection.CollUtil;
-import cn.hutool.core.util.StrUtil;
-import lombok.Data;
-import lombok.extern.slf4j.Slf4j;
-
-import org.springframework.beans.factory.InitializingBean;
-import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.stereotype.Component;
+import lombok.Getter;
+import lombok.Setter;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.*;
-import java.util.concurrent.ExecutionException;
-import java.util.stream.Stream;
+import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.*;
+import java.util.function.Supplier;
 
-/**
- * @author helei
- * @since 2025-04-04
- */
-@Slf4j
-@Data
-@Component
-@ConfigurationProperties(prefix = "vortexa.script-node")
-public class ScriptNodeConfiguration implements InitializingBean {
-    public static final String CUSTOM_CHAIN_INFO_DICT = "custom-chain-info.yaml";
-    public static final String BOT_META_INF_FILE_NAME = "bot-meta-info.yaml";
-    public static final List<String> BOT_META_INFO_PREFIX = List.of("vortexa", "botMetaInfo");
-    public static final List<String> BOT_INSTANCE_CONFIG_PREFIX = List.of("vortexa", "botInstance");
+public abstract class AbstractAutoBot {
+
+    private static final ProxyInfo DEFAULT_PROXY = new ProxyInfo();
+
+    public AppendLogger logger;
 
     /**
-     * bot group（Script Node中运行的bot的group)
-     * ）
+     * 代理并发控制
      */
-    private String scriptNodeName;
+    private final Map<ProxyInfo, Semaphore> networkSyncControllerMap;
 
     /**
-     * 远程REST接口的url
+     * bot api
      */
-    private String remoteRestUrl;
+    @Getter
+    private BotApi botApi;
 
     /**
-     * 链信息字典
+     * bot运行时信息
      */
-    private Web3ChainDict chainDict;
+    @Getter
+    private final AutoBotRuntimeInfo autoBotRuntimeInfo;
 
     /**
-     * bot-instance jar包名字
+     * 请求并发数量
      */
-    private List<String> botInstanceJarNames;
+    @Getter
+    @Setter
+    private int requestConcurrentCount = 5;
 
     /**
-     * Script node 基础路径
+     * bot信息
      */
-    private String scriptNodeBasePath;
+    @Getter
+    private BotInfo botInfo;
+
+    @Getter
+    private BotInstance botInstance;
 
     /**
-     * 是否开启命令行菜单
+     * script node配置
      */
-    private boolean commandMenu = true;
+    @Getter
+    private ScriptNodeConfiguration scriptNodeConfiguration;
 
     /**
-     * botNameMetaInfoMap, （解析配置文件自动填入）
+     * 配置
      */
-    private Map<String, BotMetaInfo> botNameMetaInfoMap;
+    @Getter
+    private AutoBotConfig autoBotConfig;
 
     /**
-     * botKeyConfigMap, （解析配置文件自动填入）
+     * 执行异步任务的线程池
      */
-    private Map<String, AutoBotConfig> botKeyConfigMap;
+    @Getter
+    private ExecutorService executorService;
 
     /**
-     * 自动时自动启动的botKey
+     * 状态
      */
-    private Set<String> autoLaunchBotKeys;
+    @Getter
+    private BotStatus status = BotStatus.NEW;
+
+    public AbstractAutoBot() {
+        this.networkSyncControllerMap = new ConcurrentHashMap<>();
+        this.autoBotRuntimeInfo = new AutoBotRuntimeInfo();
+    }
 
     /**
-     * bot公共配置，会加载到每个bot的 customConfig下
+     * 初始化方法
      *
-     * @see AutoBotConfig
+     * @param autoBotConfig autoBotConfig
+     * @throws BotInitException BotInitException
      */
-    private Map<String, Object> botCommonConfig;
-
-    @Override
-    public void afterPropertiesSet() throws Exception {
-        // 解析地址，
-        scriptNodeBasePath = FileUtil.getAppResourceAppConfigDir() + File.separator + scriptNodeName;
-
-        initChainDict();
-
-        initBotMetaInfo();
-
-        initBotInstance();
-    }
-
-    /**
-     * 获取远程设置api
-     *
-     * @return  String
-     */
-    public String buildRemoteConfigRestApi() {
-        return remoteRestUrl + "/script-node/remote-config";
-    }
-
-    /**
-     * 链信息列表
-     */
-    private void initChainDict() {
-        Web3ChainDict defaultChainDict = Web3ChainDict.INSTANCE;
-        Web3ChainDict customChainDict = Web3ChainDict.loadCustomConfigDict(CUSTOM_CHAIN_INFO_DICT);
-        if (customChainDict != null) {
-            customChainDict.marge(defaultChainDict);
-        }
-        this.chainDict = customChainDict == null ? defaultChainDict : customChainDict;
-    }
-
-    /**
-     * 初始化BotInstance
-     */
-    private void initBotInstance() {
-        botKeyConfigMap = new HashMap<>();
-        String botInstanceConfigDir = FileUtil.getBotInstanceConfigDir();
-
-        try (Stream<Path> walk = Files.walk(Paths.get(botInstanceConfigDir), 5)) {
-            walk.filter(p -> Files.isRegularFile(p) && p.toString().endsWith(".yaml")).forEach(configFile -> {
-                try {
-                    AutoBotConfig botConfig = YamlConfigLoadUtil.load(configFile.toFile(), BOT_INSTANCE_CONFIG_PREFIX,
-                        AutoBotConfig.class);
-
-                    // 配置文件校验
-                    if (botConfig == null) {
-                        throw new IllegalArgumentException(
-                            "bot instance config file [" + configFile.getFileName() + "] illegal");
-                    }
-
-                    BotMetaInfo botMetaInfo = botNameMetaInfoMap.get(botConfig.getBotName());
-
-                    if (botMetaInfo == null) {
-                        log.warn("botName[{}] didn't loaded in script node", botConfig.getBotName());
-                        return;
-                    }
-
-                    botConfig.setMetaInfo(botMetaInfo);
-
-                    // 相对路径转绝对路径
-                    reactivePathConfigConvert(
-                        botConfig,
-                        botMetaInfo.getResourceDir()
-                    );
-
-                    // 合并bot公共配置
-                    if (botCommonConfig != null) {
-                        botConfig.setCustomConfig(botCommonConfig);
-                    }
-
-                    // 合并远程配置
-                    AutoBotConfig remoteBotConfig = fetchRemoteBotConfig(
-                        buildRemoteConfigRestApi(),
-                        scriptNodeName,
-                        botConfig.getBotKey()
-                    );
-                    if (remoteBotConfig != null) {
-                        mergeRemoteAutoBotConfig(botConfig, remoteBotConfig);
-                    }
-
-                    botKeyConfigMap.put(botConfig.getBotKey(), botConfig);
-                } catch (Exception e) {
-                    log.error("bot instance config[{}] load error, {}",
-                        configFile.getFileName(),
-                        e.getCause() == null ? e.getMessage() : e.getCause().getMessage()
-                    );
-                }
-            });
+    public final void init(
+            ScriptNodeConfiguration scriptNodeConfiguration, BotApi botApi, AutoBotConfig autoBotConfig
+    ) throws BotInitException {
+        try {
+            this.logger = new AppendLogger(
+                    scriptNodeConfiguration.getScriptNodeName(),
+                    autoBotConfig.getBotName(),
+                    autoBotConfig.getBotKey()
+            );
         } catch (IOException e) {
-            log.error("load bot instance config error", e);
+            throw new BotInitException("bot logger create error", e);
         }
-    }
 
-    /**
-     * 初始化bot原信息
-     *
-     * @throws IOException IOException
-     */
-    private void initBotMetaInfo() throws IOException {
-        botNameMetaInfoMap = new HashMap<>();
-        if (CollUtil.isNotEmpty(botInstanceJarNames)) {
-            for (String botInstanceJarName : botInstanceJarNames) {
-                String jarLibraryPath = FileUtil.getLibraryPath(botInstanceJarName);
-                String jarFilePath = FileUtil.getJarFilePath(botInstanceJarName);
-                FileUtil.extractJar(
-                    jarLibraryPath,
-                    jarFilePath
-                );
+        this.scriptNodeConfiguration = scriptNodeConfiguration;
+        this.botApi = botApi;
 
-                // 解析文件夹
-                log.info("start resolve bot meta info config from dir[{}]", jarFilePath);
-                try (Stream<Path> walk = Files.walk(Paths.get(jarFilePath), 5)) {
-                    walk.filter(Files::isDirectory).forEach(dir -> {
-                        Path configFilePath = dir.resolve(BOT_META_INF_FILE_NAME);
-                        if (Files.exists(configFilePath)) {
-                            BotMetaInfo metaInfo = YamlConfigLoadUtil.load(configFilePath.toFile(),
-                                BOT_META_INFO_PREFIX, BotMetaInfo.class);
+        // Step 1 参数校验
+        if (StrUtil.isBlank(autoBotConfig.getBotKey())) {
+            throw new IllegalArgumentException("bot key is empty!");
+        }
 
-                            // 配置文件校验
-                            if (metaInfo == null) {
-                                throw new IllegalArgumentException(
-                                    "bot meta info file [" + BOT_META_INF_FILE_NAME + "] illegal");
-                            }
+        // Step 2 进入INIT状态，获取参数
+        updateState(BotStatus.INIT);
+        this.autoBotConfig = autoBotConfig;
+        try {
+            // Step 2.1 获取BotInfo,解析Bot Job
+            botInfo = buildBotInfo();
+            resolveBotJobMethod();
+        } catch (Exception e) {
+            throw new BotInitException("resolve bot job error", e);
+        }
 
-                            // 设置bot资源目录
-                            metaInfo.setResourceDir(dir.toString());
-                            // 设置所在jar包路径
-                            metaInfo.setClassJarPath(jarLibraryPath);
-
-                            botNameMetaInfoMap.put(metaInfo.getBotName(), metaInfo);
-                            log.info("botName [{}] meta info loaded", metaInfo.getBotName());
-                        }
-                    });
-                }
+        // Step 2.2 保存bot info
+        try {
+            if (botApi.getBotInfoRPC().insertOrUpdateRPC(botInfo) == 1) {
+                Map<String, Object> query = new HashMap<>();
+                query.put("name", botInfo.getName());
+                // 保存成还需查询botId
+                Integer id = botApi.getBotInfoRPC().conditionQueryRPC(query).getFirst().getId();
+                botInfo.setId(id);
+                logger.info("save bot info success, id:" + botInfo.getId());
             }
+        } catch (SQLException e) {
+            throw new BotInitException("save bot info error", e);
         }
-    }
 
-    /**
-     * 获取远程配置
-     *
-     * @param configUrl configUrl
-     * @param scriptNodeName scriptNodeName
-     * @param botKey botKey
-     * @return String
-     */
-    private AutoBotConfig fetchRemoteBotConfig(String configUrl, String scriptNodeName, String botKey) {
-        if (StrUtil.isBlank(configUrl)) {
-            return null;
-        }
+        this.botInstance = BotInstance.builder()
+                .botId(botInfo.getId())
+                .botName(botInfo.getName())
+                .scriptNodeName(scriptNodeConfiguration.getScriptNodeName())
+                .botKey(autoBotConfig.getBotKey())
+                .build();
+
+        // Step 2.3 设置logger前缀与线程池
+        this.executorService = Executors.newThreadPerTaskExecutor(
+                new NamedThreadFactory(botInfo.getName() + "-executor"));
 
         try {
-            JSONObject params = new JSONObject();
-            params.put("scriptNodeName", scriptNodeName);
-            params.put("botKey", botKey);
-            String response = RestApiClientFactory.getClient().request(
-                configUrl,
-                HttpMethod.POST,
-                new HashMap<>(),
-                params,
-                new JSONObject()
-            ).get();
-            Result result = JSONObject.parseObject(response, Result.class);
-            if (result.getSuccess()) {
-                AutoBotConfig load = YamlConfigLoadUtil.load(String.valueOf(result.getData()),
-                    BOT_META_INFO_PREFIX, AutoBotConfig.class);
-                log.info("remote config fetch success, merge into [{}] bot config...", botKey);
-                return load;
+            // Step 2.4 初始化存储的Table
+            initDBTable(botApi);
+
+            // Step 2.5 初始化BotInstance实例
+            logger.info("start init bot instance");
+
+            BotInstance dbInstance = getBotApi().getBotInstanceRPC().selectOneRPC(botInstance);
+
+            // 数据库存在bot instance实例信息并且job信息没变化，用数据库的。 否则用BotInfo信息生成BotInstance信息写入库
+            if (dbInstance != null && !compareBotJobParamsChanged(botInfo, dbInstance)) {
+                this.botInstance = dbInstance;
+                logger.info("exist botInstance, use exist instance config");
             } else {
-                log.warn("script node[{}] botKey[{}] config not found in remote", scriptNodeName, botKey);
-                return null;
+                logger.info("no instance or instance job update, create it...");
+
+                String tableName = getBotApi().getTableShardStrategy().generateTableName(
+                        BOT_ACCOUNT_CONTEXT_TABLE_PREFIX,
+                        new Object[]{botInstance.getBotId(), botInstance.getBotKey()}
+                );
+                botInstance.setBotName(botInfo.getName());
+                botInstance.setAccountTableName(tableName);
+                botInstance.setJobParams(botInfo.getJobParams());
+                botInstance.setParams(botInfo.getParams());
+
+                if (botApi.getBotInstanceRPC().insertOrUpdateRPC(botInstance) > 0) {
+                    logger.info("new bot instance create success");
+                } else {
+                    throw new BotInitException("new bot instance create error");
+                }
             }
-        } catch (InterruptedException | ExecutionException e) {
-            log.error("script node[{}] botKey[{}] remote fetch error", scriptNodeName, botKey, e);
-            return null;
+
+            // Step 2.5 子类初始化
+            doInit();
+
+            // Step 2。6 更新状态
+            updateState(BotStatus.INIT_FINISH);
+        } catch (Exception e) {
+            logger.error("init error", e);
+            updateState(BotStatus.INIT_ERROR);
         }
     }
 
     /**
-     * 合并远程配置
-     *
-     * @param local local
-     * @param remote remote
+     * 初始化方法
      */
-    private void mergeRemoteAutoBotConfig(AutoBotConfig local, AutoBotConfig remote) {
-        if (remote.getAccountConfig() != null) {
-            local.setAccountConfig(remote.getAccountConfig());
-        }
-        if (remote.getCustomConfig() != null) {
-            local.setCustomConfig(remote.getCustomConfig());
+    protected abstract void doInit() throws BotInitException;
+
+    /**
+     * 停止Bot
+     */
+    public void stop() {
+        updateState(BotStatus.STOPPING);
+        try {
+            networkSyncControllerMap.clear();
+            doStop();
+            updateState(BotStatus.STOPPED);
+        } catch (Exception e) {
+            logger.error("stop bot error, " + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+            updateState(BotStatus.SHUTDOWN);
         }
     }
 
+    protected abstract void doStop();
+
     /**
-     * 相对路径转换
+     * 同步请求，使用syncController控制并发
      *
-     * @param config config
-     * @param botResourcePath botResourcePath
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<String> response str
      */
-    private void reactivePathConfigConvert(AutoBotConfig config, String botResourcePath) {
-        AutoBotAccountConfig accountConfig = config.getAccountConfig();
-        accountConfig.setConfigFilePath(
-            FileUtil.generateAbsPath(accountConfig.getConfigFilePath(), botResourcePath)
+    public CompletableFuture<String> syncRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body
+    ) {
+        return syncRequest(proxy, url, method, headers, params, body, 1);
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<String> response str
+     */
+    public CompletableFuture<String> syncRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            int retryTimes
+    ) {
+        return syncRequest(proxy, url, method, headers, params, body, null, retryTimes);
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<Response> String
+     */
+    public CompletableFuture<JSONObject> syncJSONRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            Supplier<String> requestStart
+    ) {
+        return syncRequest(
+                proxy,
+                url,
+                method,
+                headers,
+                params,
+                body,
+                requestStart,
+                1
+        ).thenApply(responseStr -> {
+            if (responseStr == null) return null;
+            return JSONObject.parseObject(responseStr);
+        });
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<Response> String
+     */
+    public CompletableFuture<String> syncRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            Supplier<String> requestStart
+    ) {
+        return syncRequest(
+                proxy,
+                url,
+                method,
+                headers,
+                params,
+                body,
+                requestStart,
+                1
         );
+    }
 
-        Map<String, Object> customConfig = config.getCustomConfig();
-        if (customConfig != null && !customConfig.isEmpty()) {
-            for (Map.Entry<String, Object> entry : customConfig.entrySet()) {
-                Object value = entry.getValue();
-                if (value instanceof String) {
-                    entry.setValue(FileUtil.generateAbsPath((String) value, botResourcePath));
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<Response> String
+     */
+    public CompletableFuture<String> syncRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            Supplier<String> requestStart,
+            int retryTimes
+    ) {
+        return syncCCHandler(proxy, requestStart, () -> {
+            try {
+                return RestApiClientFactory.getClient(proxy).request(
+                        url,
+                        method,
+                        headers,
+                        params,
+                        body,
+                        retryTimes
+                ).get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    /**
+     * 同步请求，使用syncController控制并发
+     *
+     * @param proxy   proxy
+     * @param url     url
+     * @param method  method
+     * @param headers headers
+     * @param params  params
+     * @param body    body
+     * @return CompletableFuture<Response> String
+     */
+    public CompletableFuture<List<String>> syncStreamRequest(
+            ProxyInfo proxy,
+            String url,
+            HttpMethod method,
+            Map<String, String> headers,
+            JSONObject params,
+            JSONObject body,
+            Supplier<String> requestStart
+    ) {
+        return syncCCHandler(proxy, requestStart, () -> {
+            try {
+                return RestApiClientFactory.getClient(proxy).streamRequest(
+                        url,
+                        method,
+                        headers,
+                        params,
+                        body
+                ).get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    public <R> CompletableFuture<R> syncCCHandler(
+            ProxyInfo proxy,
+            Supplier<String> requestStart,
+            Supplier<R> request
+    ) {
+
+        Semaphore networkController = networkSyncControllerMap
+                .compute(proxy == null ? DEFAULT_PROXY : proxy, (k, v) -> {
+                    if (v == null) {
+                        v = new Semaphore(requestConcurrentCount);
+                    }
+                    return v;
+                });
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                networkController.acquire();
+                // 随机延迟
+                TimeUnit.MILLISECONDS.sleep(RandomUtil.randomLong(1000, 3000));
+
+                String str = "start network request";
+                if (requestStart != null) {
+                    str = requestStart.get();
+                }
+                logger.debug("同步器允许发送请求 - " + str);
+
+                return request.get();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            } finally {
+                networkController.release();
+            }
+        }, executorService);
+    }
+
+    /**
+     * 打印BotRuntimeInfo
+     *
+     * @return string
+     */
+    public String printBotRuntimeInfo() {
+        StringBuilder sb = new StringBuilder();
+        getAutoBotRuntimeInfo().getKeyValueInfoMap().forEach((k, v) -> {
+            sb.append(k).append(": ").append(v).append("\n");
+        });
+        return sb.toString();
+    }
+
+    /**
+     * 获取app的配置目录
+     *
+     * @return String
+     */
+    public String getAppConfigDir() {
+        return FileUtil.getAppResourceAppConfigDir() + File.separator + getBotInstance().getBotKey();
+    }
+
+    /**
+     * 更新BotStatus
+     *
+     * @param newStatus 新状态
+     */
+    public synchronized void updateState(BotStatus newStatus) throws BotStatusException {
+
+        boolean b = switch (status) {
+            //当前为NEW，新状态才能为NEW,SHUTDOWN
+            case NOT_LOADED -> BotStatus.NEW.equals(newStatus);
+            case NEW -> BotStatus.INIT.equals(newStatus);
+            //当前为INIT，新状态只能为INIT_FINISH、INIT_ERROR,SHUTDOWN
+            case INIT -> newStatus.equals(BotStatus.INIT_FINISH)
+                    || newStatus.equals(BotStatus.INIT_ERROR);
+            //当前为INIT_ERROR,新状态只能为ACCOUNT_LOADING, SHUTDOWN
+            case INIT_ERROR -> newStatus.equals(BotStatus.INIT);
+            //当前状态为INIT_FINISH，新状态只能为ACCOUNT_LIST_CONNECT, SHUTDOWN
+            case INIT_FINISH -> newStatus.equals(BotStatus.STARTING);
+            //当前状态为STARING，新状态只能为RUNNING,SHUTDOWN
+            case STARTING -> newStatus.equals(BotStatus.RUNNING);
+            //RUNNING，新状态只能为 SHUTDOWN
+            case RUNNING -> newStatus.equals(BotStatus.STOPPING);
+            case STOPPING -> newStatus.equals(BotStatus.STOPPED) || newStatus.equals(BotStatus.SHUTDOWN);
+            case STOPPED -> newStatus.equals(BotStatus.INIT);
+            case SHUTDOWN -> throw new BotStatusException("bot already shutdown");
+        };
+
+        if (b) {
+            logger.debug("Status change [%s] => [%s]".formatted(status, newStatus));
+            this.status = newStatus;
+        } else {
+            throw new BotStatusException(
+                    String.format("%s status can't from[%s] -> to[%s]", runtimeBotName(), status, newStatus));
+        }
+    }
+
+    public String runtimeBotName() {
+        return "Bot[%s]-[%s]".formatted(botInstance.getBotName(), autoBotConfig.getBotKey());
+    }
+
+    public String getScriptNodeName() {
+        return scriptNodeConfiguration.getScriptNodeName();
+    }
+
+    protected synchronized Map<String, AutoBotJobParam> getJobParams() {
+        return this.botInstance == null ? new HashMap<>() : this.botInstance.getJobParams();
+    }
+
+    protected synchronized AutoBotJobParam getJobParam(String jobName) {
+        return this.botInfo.getJobParams() == null ? null : this.botInfo.getJobParams().get(jobName);
+    }
+
+    protected synchronized void setJobParam(String jobKey, AutoBotJobParam jobParam) {
+        this.botInfo.getJobParams().put(jobKey, jobParam);
+    }
+
+    protected synchronized void addBasicJob(BotJobType jobType) {
+        if (this.botInfo.getParams() == null) {
+            this.botInfo.setParams(new HashMap<>());
+        }
+
+        this.botInfo.getParams().compute(BASIC_JOB_LIST_KEY, (k, v) -> {
+            if (v == null) {
+                v = new HashSet<String>();
+            }
+            if (v instanceof JSONArray t) {
+                v = new HashSet<String>();
+                for (int i = 0; i < t.size(); i++) {
+                    ((HashSet<String>) v).add(t.getString(i));
+                }
+            }
+            Set<String> set = (HashSet<String>) v;
+            set.add(jobType.name());
+            return v;
+        });
+    }
+
+    protected abstract BotInfo buildBotInfo() throws BotInitException;
+
+    protected abstract void resolveBotJobMethod();
+
+    /**
+     * 比较botInfo 和 BotInstance是否发生变化
+     *
+     * @param botInfo    botInfo
+     * @param dbInstance dbInstance
+     * @return boolean
+     */
+    private boolean compareBotJobParamsChanged(BotInfo botInfo, BotInstance dbInstance) {
+        Map<String, AutoBotJobParam> botJobParam = botInfo.getJobParams();
+        Map<String, AutoBotJobParam> botInstanceParam = dbInstance.getJobParams();
+
+        // rpc map序列化范型丢失处理
+        Map<String, AutoBotJobParam> jobParams = dbInstance.getJobParams();
+        if (jobParams != null) {
+            for (String key : jobParams.keySet()) {
+                Object param = jobParams.get(key);
+                if (param instanceof JSONObject jb) {
+                    jobParams.put(key, JSONObject.parseObject(JSONObject.toJSONString(jb), AutoBotJobParam.class));
                 }
             }
         }
-    }
-}
-package cn.com.vortexa.script_node.service.impl;
 
-import cn.com.vortexa.script_node.service.BotApi;
-import cn.com.vortexa.script_node.service.IBotAccountContextService;
-import cn.com.vortexa.script_node.service.IRewordInfoService;
-import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
-import cn.com.vortexa.rpc.api.bot.IScriptAgentRPC;
-import cn.com.vortexa.rpc.api.platform.IAccountBaseInfoRPC;
-import cn.com.vortexa.rpc.api.platform.IBotInfoRPC;
-import cn.com.vortexa.job.service.BotJobService;
-import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
-import cn.com.vortexa.rpc.api.platform.IBrowserEnvRPC;
-import cn.com.vortexa.rpc.api.platform.IDiscordAccountRPC;
-import cn.com.vortexa.rpc.api.platform.IProxyInfoRPC;
-import cn.com.vortexa.rpc.api.platform.ITelegramAccountRPC;
-import cn.com.vortexa.rpc.api.platform.ITwitterAccountRPC;
-import cn.com.vortexa.control.anno.RPCReference;
-import cn.com.vortexa.script_node.service.IWeb3WalletService;
-import cn.com.vortexa.web3.service.IWeb3WalletOPTRPC;
-import lombok.Getter;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
+        if (botJobParam.size() != botInstanceParam.size()) return true;
 
-
-@Getter
-@Component
-public class DBBotApi implements BotApi {
-
-    @Autowired
-    private BotJobService botJobService;
-
-    @Autowired
-    private IBotAccountContextService botAccountService;
-
-    @Autowired
-    private IRewordInfoService rewordInfoService;
-
-
-    @RPCReference
-    private IBotInfoRPC botInfoRPC;
-
-    @RPCReference
-    private IBotInstanceRPC botInstanceRPC;
-
-    @RPCReference
-    private IAccountBaseInfoRPC accountBaseInfoRPC;
-
-    @RPCReference
-    private ITwitterAccountRPC twitterAccountRPC;
-
-    @RPCReference
-    private ITelegramAccountRPC telegramAccountRPC;
-
-    @RPCReference
-    private IProxyInfoRPC proxyInfoRPC;
-
-    @RPCReference
-    private IBrowserEnvRPC browserEnvRPC;
-
-    @RPCReference
-    private IDiscordAccountRPC discordAccountRPC;
-
-    @RPCReference
-    private IWeb3WalletOPTRPC web3WalletRPC;
-
-    @Autowired
-    private IScriptAgentRPC scriptAgentRPC;
-
-    @Autowired
-    private ITableShardStrategy tableShardStrategy;
-
-    @Autowired
-    private IWeb3WalletService web3WalletService;
-}
-package cn.com.vortexa.script_node.service.impl;
-
-import cn.com.vortexa.script_node.service.IWeb3WalletService;
-import cn.com.vortexa.web3.EthWalletUtil;
-import cn.com.vortexa.web3.constants.Web3jFunctionType;
-import cn.com.vortexa.web3.util.ABIFunctionBuilder;
-import cn.hutool.core.collection.CollUtil;
-
-import org.springframework.stereotype.Service;
-import org.web3j.abi.datatypes.Type;
-
-import java.io.IOException;
-import java.math.BigDecimal;
-import java.util.List;
-
-/**
- * @author h30069248
- * @since 2025/4/24 10:21
- */
-@Service
-public class Web3WalletServiceImpl implements IWeb3WalletService {
-    @Override
-    public BigDecimal erc20BalanceCheck(String rpcUrl, String tokenContractAddress, String address) throws IOException {
-        List<Type> result = EthWalletUtil.smartContractCallInvoke(
-            rpcUrl,
-            tokenContractAddress,
-            address,
-            ABIFunctionBuilder
-                .builder()
-                .functionName("balanceOf")
-                .addParameterType(Web3jFunctionType.Address, address)
-                .addReturnType(Web3jFunctionType.Uint256)
-        );
-
-        if (CollUtil.isEmpty(result)) {
-            throw new RuntimeException("erc20 balance check error");
-        } else {
-            return (BigDecimal) result.getFirst().getValue();
+        if (!botJobParam.keySet().containsAll(botInstanceParam.keySet())) {
+            return true;
         }
+
+        for (Map.Entry<String, AutoBotJobParam> entry : botJobParam.entrySet()) {
+            String jobName = entry.getKey();
+            AutoBotJobParam param = entry.getValue();
+            AutoBotJobParam instanceParam = botInstanceParam.get(jobName);
+
+            if (param.getParams() == null) {
+                param.setParams(new HashMap<>());
+            }
+            if (!param.equals(instanceParam)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 初始化数据库表
+     *
+     * @param botApi    botApi
+     * @throws SQLException SQLException
+     */
+    private void initDBTable(BotApi botApi) throws SQLException {
+        logger.info("start init database table");
+        // 检查对应分表是否存在
+        if (!botApi.getBotAccountService()
+            .checkAndCreateShardedTable(botInfo.getId(), getAutoBotConfig().getBotKey(), true)) {
+            throw new RuntimeException("bot account table create error");
+        }
+        if (!botApi.getRewordInfoService().checkAndCreateShardedTable(botInfo.getId(), getAutoBotConfig().getBotKey())) {
+            throw new RuntimeException("account reword table create error");
+        }
+        logger.info("database table init finish");
     }
 }
-package cn.com.vortexa.script_node.service;
-
-
-import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
-import cn.com.vortexa.job.service.BotJobService;
-import cn.com.vortexa.rpc.api.bot.IScriptAgentRPC;
-import cn.com.vortexa.rpc.api.platform.IAccountBaseInfoRPC;
-import cn.com.vortexa.rpc.api.platform.IBotInfoRPC;
-import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
-import cn.com.vortexa.rpc.api.platform.IBrowserEnvRPC;
-import cn.com.vortexa.rpc.api.platform.IDiscordAccountRPC;
-import cn.com.vortexa.rpc.api.platform.IProxyInfoRPC;
-import cn.com.vortexa.rpc.api.platform.ITelegramAccountRPC;
-import cn.com.vortexa.rpc.api.platform.ITwitterAccountRPC;
-import cn.com.vortexa.web3.service.IWeb3WalletOPTRPC;
-
-public interface BotApi {
-
-    IBotInfoRPC getBotInfoRPC();
-
-    IBotInstanceRPC getBotInstanceRPC();
-
-    IAccountBaseInfoRPC getAccountBaseInfoRPC();
-
-    IBrowserEnvRPC getBrowserEnvRPC();
-
-    IDiscordAccountRPC getDiscordAccountRPC();
-
-    IProxyInfoRPC getProxyInfoRPC();
-
-    ITwitterAccountRPC getTwitterAccountRPC();
-
-    ITelegramAccountRPC getTelegramAccountRPC();
-
-    ITableShardStrategy getTableShardStrategy();
-
-    IRewordInfoService getRewordInfoService();
-
-    IBotAccountContextService getBotAccountService();
-
-    BotJobService getBotJobService();
-
-    IScriptAgentRPC getScriptAgentRPC();
-
-    IWeb3WalletOPTRPC getWeb3WalletRPC();
-
-    IWeb3WalletService getWeb3WalletService();
-}
-package cn.com.vortexa.script_node.service;
-
-import java.io.IOException;
-import java.math.BigDecimal;
-
-/**
- * @author h30069248
- * @since 2025/4/24 10:20
- */
-public interface IWeb3WalletService {
-
-    BigDecimal erc20BalanceCheck(String rpcUrl, String tokenContractAddress, String address) throws IOException;
-}
-vortexa:
-  web3:
-    chain-info:
-      - name: Monad_Testnet
-        rpcUrls:
-          - https://testnet-rpc.monad.xyz/
-        chainId: 10143
-        originTokenSymbol: MON
-        blockExploreUrl: https://testnet.monadexplorer.com
-      - name: Plume_Testnet
-        rpcUrls:
-          - https://testnet-rpc.plumenetwork.xyz
-          - https://testnet-explorer.plumenetwork.xyz/
-        chainId: 98867
-        originTokenSymbol:
-        blockExploreUrl: https://testnet-explorer.plumenetwork.xyz
