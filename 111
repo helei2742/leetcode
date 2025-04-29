@@ -1,676 +1,923 @@
-package cn.com.vortexa.script_node.bot;
+package cn.com.vortexa.script_node.bot.api;
 
-import cn.com.vortexa.common.dto.ACListOptResult;
-import cn.com.vortexa.common.dto.BotACJobResult;
-import cn.com.vortexa.common.entity.BotInstance;
-import cn.com.vortexa.common.entity.RewordInfo;
-import cn.com.vortexa.script_node.anno.BotApplication;
-import cn.com.vortexa.script_node.anno.BotMethod;
-import cn.com.vortexa.script_node.dto.AccountRewordSnapshot;
-import cn.com.vortexa.script_node.websocket.AccountWSClientBuilder;
-import cn.com.vortexa.script_node.websocket.BaseBotWSClient;
-import cn.com.vortexa.script_node.websocket.WebSocketClientLauncher;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
+
 import cn.com.vortexa.common.entity.AccountContext;
-import cn.com.vortexa.common.entity.BotInfo;
-import cn.com.vortexa.common.exception.BotMethodFormatException;
-import cn.com.vortexa.common.exception.BotMethodInvokeException;
-import cn.com.vortexa.common.exception.BotInitException;
-import cn.com.vortexa.script_node.dto.job.AutoBotJobRuntimeParam;
+import cn.com.vortexa.common.entity.Web3Wallet;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.web3.EthWalletUtil;
+import cn.com.vortexa.web3.constants.Web3jFunctionType;
+import cn.com.vortexa.web3.dto.SCInvokeParams;
+import cn.com.vortexa.web3.dto.SCInvokeResult;
+import cn.com.vortexa.web3.dto.Web3ChainInfo;
+import cn.com.vortexa.web3.exception.ABIInvokeException;
+import cn.hutool.core.lang.Pair;
 import cn.hutool.core.util.StrUtil;
-import com.alibaba.fastjson.JSONArray;
 import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
 import org.jetbrains.annotations.NotNull;
+import org.web3j.protocol.core.methods.response.TransactionReceipt;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
-import java.util.*;
-import java.util.concurrent.*;
-
-import static cn.com.vortexa.common.entity.BotInfo.ACCOUNT_PARAMS_KEY;
-import static cn.com.vortexa.common.entity.BotInfo.CONFIG_PARAMS_KEY;
-
-@Slf4j
-public abstract class AnnoDriveAutoBot<T extends JobInvokeAutoBot> extends JobInvokeAutoBot {
-
-    /**
-     * ws client 启动器
-     */
-    private final WebSocketClientLauncher webSocketClientLauncher = new WebSocketClientLauncher(this);
-
-    /**
-     * 奖励更新方法
-     */
-    @Getter
-    private Method updateRewordMethod;
-
-    /**
-     * 奖励更新的代理方法
-     */
-    private final Method updateRewordProxyMethod;
-
-    public AnnoDriveAutoBot() {
-        try {
-            updateRewordProxyMethod = AnnoDriveAutoBot.class
-                    .getDeclaredMethod("rewardQueryProxyMethod", AccountContext.class, List.class);
-            updateRewordProxyMethod.setAccessible(true);
-        } catch (NoSuchMethodException e) {
-            throw new RuntimeException("reward query proxy method id empty", e);
-        }
-    }
-
-    /**
-     * 构建bot info， 会解析注解查询db，给上层父类调用
-     *
-     * @return BotInfo
-     */
-    @Override
-    protected BotInfo buildBotInfo() throws BotInitException {
-        // 解析bot 基本信息
-        try {
-            BotApplication annotation = getInstance().getClass().getAnnotation(BotApplication.class);
-
-            if (annotation != null) {
-                String botName = annotation.name();
-                if (StrUtil.isBlank(botName)) {
-                    throw new IllegalArgumentException("bot name 不能为空");
-                }
-
-                //  解析bot 自定义配置, 看是否有满足的
-                AutoBotConfig botConfig = getAutoBotConfig();
-                Map<String, Object> customConfig = botConfig.getCustomConfig();
-                for (String key : annotation.configParams()) {
-                    if (!customConfig.containsKey(key)) {
-                        throw new IllegalArgumentException("缺乏Bot必要参数[%s]".formatted(key));
-                    }
-                }
-
-                BotInfo botInfo = null;
-
-                // 查询是否存在botKey的bot
-                Map<String, Object> query = new HashMap<>();
-                query.put("name", botName);
-                List<BotInfo> dbBotInfoList = getBotApi().getBotInfoRPC().conditionQueryRPC(query);
-
-                // 查询bot是否存在，不存在则创建
-                if (dbBotInfoList == null || dbBotInfoList.isEmpty()) {
-                    logger.warn("不存在bot info, 自动创建...");
-                    botInfo = generateFromAnno(annotation);
-                } else {
-                    botInfo = dbBotInfoList.getFirst();
-                    botInfo.fixMapValueType();
-                }
-                return botInfo;
-            } else {
-                throw new IllegalArgumentException("bot 应该带有 @BotApplication注解");
-            }
-        } catch (Exception e) {
-            throw new BotInitException(e);
-        }
-    }
-
-    @Override
-    protected void resolveBotJobMethod() {
-        // 解析bot job 参数
-        logger.debug("resole job method...");
-        // Step 1 遍历方法
-        for (Method method : allMethods()) {
-            method.setAccessible(true);
-
-            // Step 2 找到方法中带有BotMethod注解的
-            if (method.isAnnotationPresent(BotMethod.class)) {
-                BotMethod botJobMethod = method.getAnnotation(BotMethod.class);
-
-                // Step 3 根据BotMethod注解 的jobType，方法分类
-                switch (botJobMethod.jobType()) {
-                    case QUERY_REWARD -> queryRewardMethodHandler(method, botJobMethod);
-                    case ONCE_TASK, TIMED_TASK -> timedTaskMethodHandler(method, botJobMethod);
-                    case WEB_SOCKET_CONNECT -> webSocketConnectMethodHandler(method, botJobMethod);
-                }
-            }
-        }
-    }
-
-    @Override
-    protected void doStop() {
-        updateRewordMethod = null;
-        webSocketClientLauncher.clear();
-        super.doStop();
-    }
-
-    @Override
-    public Set<String> botJobNameList() {
-        return getJobParams().keySet();
-    }
-
-    protected abstract T getInstance();
-
-    /**
-     * 保存并上传奖励信息
-     *
-     * @param aCListOptResult aCListOptResult
-     */
-    private void saveAndUploadRewordQueryResult(ACListOptResult aCListOptResult) {
-        List<BotACJobResult> results = aCListOptResult.getResults();
-
-        List<RewordInfo> rewordInfos = new ArrayList<>();
-        for (BotACJobResult result : results) {
-            if (result.getData() instanceof RewordInfo rewordInfo) {
-                rewordInfos.add(rewordInfo);
-            }
-        }
-
-        BotInstance botInstance = getBotInstance();
-        getBotApi().getRewordInfoService().saveBatch(rewordInfos);
-        getBotApi().getRewordInfoRPC().saveBatchRPC(
-                botInstance.getBotId(),
-                botInstance.getBotKey(),
-                rewordInfos
-        );
-    }
-
-    /**
-     * 奖励查询方法处理器
-     *
-     * @param method       method
-     * @param botJobMethod botJobMethod
-     */
-    private void queryRewardMethodHandler(Method method, BotMethod botJobMethod) {
-        logger.debug("add reword query method");
-        if (method.getReturnType() == AccountRewordSnapshot.class
-                && method.getParameterCount() == 2
-                && method.getParameters()[0].getType() == AccountContext.class
-                && method.getParameters()[1].getType() == List.class
-        ) {
-
-            if (this.updateRewordMethod == null) {
-                this.updateRewordMethod = method;
-            } else {
-                throw new BotMethodFormatException("收益查询方法只能有一个");
-            }
-
-            String updateRewordJobName = registryJobInBot(
-                    getInstance(),
-                    updateRewordMethod,
-                    null,
-                    botJobMethod
-            );
-            // 替换奖励查询方法为代理方法
-            getJobRuntimeParamMap().get(updateRewordJobName).setMethod(updateRewordProxyMethod);
-            addJobExecuteResultHandler(updateRewordJobName, this::saveAndUploadRewordQueryResult);
-        } else {
-            throw new BotMethodFormatException("收益查询方法错误, " +
-                    "应为 AccountRewordSnapshot methodName(AccountContext ac, List<AccountContext> sameAccountBaseInfoIdLists)");
-        }
-    }
-
-    /**
-     * 奖励查询方法的代理方法，得到收益快照后存人数据库
-     *
-     * @param accountContext  accountContext
-     * @param accountContexts accountContexts
-     * @return AccountRewordSnapshot
-     */
-    private RewordInfo rewardQueryProxyMethod(AccountContext accountContext, List<AccountContext> accountContexts) {
-        if (this.updateRewordMethod == null) {
-            throw new BotMethodInvokeException("update reword into,,");
-        } else {
-            try {
-                AccountRewordSnapshot rewordSnapshot = (AccountRewordSnapshot) this.updateRewordMethod.invoke(
-                        this, accountContext, accountContexts
-                );
-
-                // 解析后存db
-                return RewordInfo.builder()
-                        .botId(getBotInfo().getId())
-                        .botKey(getBotInstance().getBotKey())
-                        .botAccountId(accountContext.getId())
-                        .totalPoints(rewordSnapshot.getTotalPoints())
-                        .dailyPoints(rewordSnapshot.getDailyPoints())
-                        .build();
-            } catch (Exception e) {
-                throw new BotMethodInvokeException("reword query method invoke error", e);
-            }
-        }
-    }
-
-    /**
-     * 定时任务方法处理器
-     *
-     * @param method       method
-     * @param botJobMethod botJobMethod
-     */
-    private void timedTaskMethodHandler(Method method, BotMethod botJobMethod) {
-        logger.debug("add [%s] method".formatted(botJobMethod));
-
-        if (method.getParameterCount() > 2
-                || method.getParameterCount() < 1
-                || method.getParameters()[0].getType() != AccountContext.class
-                || (method.getParameterCount() == 2 && method.getParameters()[1].getType() != List.class)
-        ) {
-            throw new BotMethodFormatException("定时任务方法错误, " +
-                    "应为 void methodName(AccountContext ac) 或 " +
-                    "void methodName(AccountContext exampleAC, List<AccountContext> sameABIIdList) ");
-        }
-
-        registryJobInBot(
-                getInstance(),
-                method,
-                null,
-                botJobMethod
-        );
-    }
-
-    /**
-     * Web socket 方法处理器
-     *
-     * @param method           method
-     * @param botJobMethodAnno botJobMethodAnno
-     */
-    private void webSocketConnectMethodHandler(Method method, BotMethod botJobMethodAnno) {
-        logger.debug("add ws [%s] method".formatted(botJobMethodAnno));
-        Class<?> returnType = method.getReturnType();
-
-        // 检查方法是否符合要求
-        if (cn.com.vortexa.script_node.websocket.BaseBotWSClient.class.isAssignableFrom(returnType)
-                && method.getParameterCount() == 1
-                && method.getParameters()[0].getType() == AccountContext.class
-        ) {
-            try {
-                // 符合要求，添加到jobMap
-                String jobName = registryJobInBot(
-                        webSocketClientLauncher,
-                        WebSocketClientLauncher.lanuchMethod,
-                        null,
-                        botJobMethodAnno
-                );
-
-                AutoBotJobRuntimeParam runtimeParam = getJobRuntimeParamMap().get(jobName);
-
-                if (runtimeParam != null) {
-                    // 添加额外参数
-                    runtimeParam.setExtraParams(new Object[]{getJobParam(jobName), (AccountWSClientBuilder) accountContext -> {
-                        Object invoke = method.invoke(getInstance(), accountContext);
-                        return (BaseBotWSClient<?>) invoke;
-                    }});
-                }
-
-            } catch (Exception e) {
-                throw new BotMethodFormatException(e);
-            }
-        } else {
-            throw new BotMethodFormatException(
-                    "websocket 方法错误, 应为 BotWebSocketContext<?,?> methodName(AccountContext)");
-        }
-    }
-
-    /**
-     * 运行bot method
-     *
-     * @param method method
-     * @param args   args
-     * @return CompletableFuture<R>
-     */
-    private @NotNull CompletableFuture<Result> invokeBotMethod(Method method, Object... args) {
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                return (Result) method.invoke(this, args);
-            } catch (IllegalAccessException | InvocationTargetException e) {
-                throw new BotMethodInvokeException(String.format(
-                        "执行[%s]-[%s]方法发生异常",
-                        getBotInstance().getBotKey(),
-                        method.getName()
-                ), e);
-            }
-        }, getExecutorService());
-    }
-
-    protected BotInfo generateFromAnno(BotApplication annotation) {
-        BotInfo botInfo = new BotInfo();
-        botInfo.setName(annotation.name());
-        botInfo.setDescription(annotation.describe());
-        botInfo.setImage(annotation.image());
-        botInfo.setLimitProjectIds(Arrays.toString(annotation.limitProjectIds()));
-        botInfo.getParams()
-                .put(CONFIG_PARAMS_KEY, JSONArray.parseArray(JSONArray.toJSONString(annotation.configParams())));
-        botInfo.getParams()
-                .put(ACCOUNT_PARAMS_KEY, JSONArray.parseArray(JSONArray.toJSONString(annotation.accountParams())));
-
-        return botInfo;
-    }
-
-    public List<Method> allMethods() {
-        List<Method> list = new ArrayList<>();
-        Class<?> clazz = getClass();
-
-        while (clazz != null) {
-            // 获取当前类的所有声明的方法，包括私有方法、保护方法和公共方法
-            Method[] methods = clazz.getDeclaredMethods();
-            list.addAll(Arrays.asList(methods));
-            // 获取父类继续遍历
-            clazz = clazz.getSuperclass();
-        }
-        return list;
-    }
-}
-package cn.com.vortexa.script_node.service;
-
-
-import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
-import cn.com.vortexa.job.service.BotJobService;
-import cn.com.vortexa.rpc.api.bot.IScriptAgentRPC;
-import cn.com.vortexa.rpc.api.platform.IAccountBaseInfoRPC;
-import cn.com.vortexa.rpc.api.platform.IBotInfoRPC;
-import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
-import cn.com.vortexa.rpc.api.platform.IBrowserEnvRPC;
-import cn.com.vortexa.rpc.api.platform.IDiscordAccountRPC;
-import cn.com.vortexa.rpc.api.platform.IProxyInfoRPC;
-import cn.com.vortexa.rpc.api.platform.IRewordInfoRPC;
-import cn.com.vortexa.rpc.api.platform.ITelegramAccountRPC;
-import cn.com.vortexa.rpc.api.platform.ITwitterAccountRPC;
-import cn.com.vortexa.web3.service.IWeb3WalletOPTRPC;
-
-public interface BotApi {
-
-    IBotInfoRPC getBotInfoRPC();
-
-    IBotInstanceRPC getBotInstanceRPC();
-
-    IAccountBaseInfoRPC getAccountBaseInfoRPC();
-
-    IBrowserEnvRPC getBrowserEnvRPC();
-
-    IDiscordAccountRPC getDiscordAccountRPC();
-
-    IProxyInfoRPC getProxyInfoRPC();
-
-    ITwitterAccountRPC getTwitterAccountRPC();
-
-    ITelegramAccountRPC getTelegramAccountRPC();
-
-    ITableShardStrategy getTableShardStrategy();
-
-    IRewordInfoService getRewordInfoService();
-
-    IRewordInfoRPC getRewordInfoRPC();
-
-    IBotAccountContextService getBotAccountService();
-
-    BotJobService getBotJobService();
-
-    IScriptAgentRPC getScriptAgentRPC();
-
-    IWeb3WalletOPTRPC getWeb3WalletRPC();
-
-    IWeb3WalletService getWeb3WalletService();
-}
-package cn.com.vortexa.script_node.service.impl;
-
-import cn.com.vortexa.rpc.api.platform.IRewordInfoRPC;
-import cn.com.vortexa.script_node.service.BotApi;
-import cn.com.vortexa.script_node.service.IBotAccountContextService;
-import cn.com.vortexa.script_node.service.IRewordInfoService;
-import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
-import cn.com.vortexa.rpc.api.bot.IScriptAgentRPC;
-import cn.com.vortexa.rpc.api.platform.IAccountBaseInfoRPC;
-import cn.com.vortexa.rpc.api.platform.IBotInfoRPC;
-import cn.com.vortexa.job.service.BotJobService;
-import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
-import cn.com.vortexa.rpc.api.platform.IBrowserEnvRPC;
-import cn.com.vortexa.rpc.api.platform.IDiscordAccountRPC;
-import cn.com.vortexa.rpc.api.platform.IProxyInfoRPC;
-import cn.com.vortexa.rpc.api.platform.ITelegramAccountRPC;
-import cn.com.vortexa.rpc.api.platform.ITwitterAccountRPC;
-import cn.com.vortexa.control.anno.RPCReference;
-import cn.com.vortexa.script_node.service.IWeb3WalletService;
-import cn.com.vortexa.web3.service.IWeb3WalletOPTRPC;
-import lombok.Getter;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
-
-
-@Getter
-@Component
-public class DBBotApi implements BotApi {
-
-    @Autowired
-    private BotJobService botJobService;
-
-    @Autowired
-    private IBotAccountContextService botAccountService;
-
-    @Autowired
-    private IRewordInfoService rewordInfoService;
-
-
-    @RPCReference
-    private IBotInfoRPC botInfoRPC;
-
-    @RPCReference
-    private IBotInstanceRPC botInstanceRPC;
-
-    @RPCReference
-    private IAccountBaseInfoRPC accountBaseInfoRPC;
-
-    @RPCReference
-    private ITwitterAccountRPC twitterAccountRPC;
-
-    @RPCReference
-    private ITelegramAccountRPC telegramAccountRPC;
-
-    @RPCReference
-    private IProxyInfoRPC proxyInfoRPC;
-
-    @RPCReference
-    private IBrowserEnvRPC browserEnvRPC;
-
-    @RPCReference
-    private IDiscordAccountRPC discordAccountRPC;
-
-    @RPCReference
-    private IWeb3WalletOPTRPC web3WalletRPC;
-
-    @RPCReference
-    private IRewordInfoRPC rewordInfoRPC;
-
-    @Autowired
-    private IScriptAgentRPC scriptAgentRPC;
-
-    @Autowired
-    private ITableShardStrategy tableShardStrategy;
-
-    @Autowired
-    private IWeb3WalletService web3WalletService;
-}
-package cn.com.vortexa.script_node.service;
-
-import com.baomidou.mybatisplus.extension.service.IService;
-
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.common.entity.RewordInfo;
-
-import java.sql.SQLException;
-import java.util.HashMap;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.List;
-
-public interface IRewordInfoService extends IService<RewordInfo> {
-
-    /**
-     * 查找并传几个分表
-     *
-     * @param id id
-     * @param botKey botKey
-     * @return boolean
-     */
-    boolean checkAndCreateShardedTable(Integer id, String botKey) throws SQLException;
-
-    /**
-     * 查询账户收益
-     *
-     * @param pageNum pageNum
-     * @param pageSize pageSize
-     * @param params params
-     * @return String
-     */
-    PageResult<RewordInfo> queryAccountReword(Integer pageNum, Integer pageSize, HashMap<String, Object> params);
-}
-package cn.com.vortexa.script_node.service.impl;
-
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.github.pagehelper.PageInfo;
-
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.db_layer.util.ConditionQueryUtil;
-import cn.com.vortexa.script_node.mapper.RewordInfoMapper;
-import cn.com.vortexa.script_node.service.IRewordInfoService;
-import cn.com.vortexa.common.entity.RewordInfo;
-import cn.hutool.core.util.StrUtil;
-import lombok.extern.slf4j.Slf4j;
-
-import org.springframework.stereotype.Service;
-
-import java.lang.reflect.InvocationTargetException;
-import java.sql.SQLException;
-import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * <p>
- *  服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-05
+ * @author helei
+ * @since 2025-04-26
  */
-@Slf4j
-@Service
-public class RewordInfoServiceImpl extends ServiceImpl<RewordInfoMapper, RewordInfo> implements IRewordInfoService {
+@Getter
+public class ERC20Api {
+    private static final Map<String, Integer> rpcUrlDecimalsMap = new ConcurrentHashMap<>();
 
-    @Override
-    public boolean checkAndCreateShardedTable(Integer botId, String botKey) throws SQLException {
-        if (botId == null || StrUtil.isBlank(botKey)) {
-            log.error("botId/botKey is empty");
-            return false;
+    private final AutoLaunchBot<?> autoLaunchBot;
+
+    public ERC20Api(AutoLaunchBot<?> autoLaunchBot) {
+        this.autoLaunchBot = autoLaunchBot;
+    }
+
+    /**
+     * 计算erc20 rpcUrl中代币的decimal
+     *
+     * @param rpcUrl       rpcUrl
+     * @param tokenAddress 代币地址
+     * @return BigInteger
+     * @throws ABIInvokeException ABIInvokeException
+     */
+    public Integer erc20Decimal(
+            String rpcUrl, String tokenAddress
+    ) throws ABIInvokeException {
+        String key = rpcUrl + "-" + tokenAddress;
+        Integer bigInteger = rpcUrlDecimalsMap.get(key);
+        if (bigInteger != null) {
+            return bigInteger;
         }
-        try {
-            getBaseMapper().createIfTableNotExist(botId, botKey);
-            return true;
-        } catch (Exception e) {
-            throw new SQLException("check and create sharded table[%s]-[%s] error".formatted(botId, botKey), e);
+
+        Integer value = autoLaunchBot.getBotApi().getWeb3WalletService().erc20Decimal(
+                rpcUrl, tokenAddress
+        );
+        rpcUrlDecimalsMap.put(key, value);
+
+        if (value != null) {
+            return value;
+        } else {
+            throw new ABIInvokeException("check erc20 allowance fail, result is empty");
         }
     }
 
-    @Override
-    public PageResult<RewordInfo> queryAccountReword(
-            Integer pageNum, Integer pageSize, HashMap<String, Object> params
-    ) {
-        try {
-            PageInfo<RewordInfo> pageInfo = ConditionQueryUtil.conditionQuery(pageNum, pageSize, params, null,
-                    t -> list(new QueryWrapper<>(t)),
-                    RewordInfo.class
-            );
+    /**
+     * 检查账户授权
+     *
+     * @param accountContext 账户
+     * @param rpcUrl         链的rpc url
+     * @param tokenAddress   代币地址
+     * @param spenderAddress 授权地址
+     */
+    public BigDecimal erc20Allowance(
+            AccountContext accountContext, String rpcUrl, String tokenAddress, String spenderAddress
+    ) throws ABIInvokeException {
+        Integer decimal = erc20Decimal(rpcUrl, tokenAddress);
+        String walletAddress = getACEthAddress(accountContext);
 
-            return PageResult.<RewordInfo>builder()
-                    .pageNum(pageInfo.getPageNum())
-                    .pageSize(pageSize)
-                    .pages(pageInfo.getPages())
-                    .total(pageInfo.getTotal())
-                    .list(pageInfo.getList())
-                    .build();
-        } catch (InvocationTargetException | NoSuchMethodException | InstantiationException | IllegalAccessException e) {
-            throw new RuntimeException(e);
+        BigInteger value = autoLaunchBot.getBotApi().getWeb3WalletService().erc20AllowanceCheck(
+                rpcUrl, tokenAddress, walletAddress, spenderAddress
+        );
+
+        if (value != null) {
+            return EthWalletUtil.formatUnits(value, decimal);
+        } else {
+            throw new ABIInvokeException("check erc20 allowance fail, result is empty");
         }
+    }
+
+
+    /**
+     * 授权token
+     *
+     * @param chainInfo      链信息
+     * @param accountContext accountContext
+     * @param tokenAddress   代币地址
+     * @param spenderAddress 授权地址
+     * @param amount         授权数量
+     * @return 是否成功
+     * @throws ABIInvokeException ABIInvokeException
+     */
+    public Boolean erc20ApproveToken(
+            Web3ChainInfo chainInfo,
+            AccountContext accountContext,
+            String tokenAddress,
+            String spenderAddress,
+            BigDecimal amount
+    ) throws ABIInvokeException {
+        Integer decimal = erc20Decimal(chainInfo.getRpcUrl(), tokenAddress);
+
+        if (accountContext == null || accountContext.getWalletId() == null) {
+            throw new IllegalArgumentException("accountContext wallet is null");
+        }
+
+        return autoLaunchBot.getBotApi().getWeb3WalletRPC().erc20ApproveRPC(
+                chainInfo,
+                accountContext.getWalletId(),
+                tokenAddress,
+                spenderAddress,
+                EthWalletUtil.parseUnits(amount, decimal)
+        );
+    }
+
+    /**
+     * 检查合约允许的代币数量，如果小于amount，则更新
+     *
+     * @param chainInfo      链信息
+     * @param accountContext accountContext
+     * @param tokenAddress   代币地址
+     * @param spenderAddress 授权地址
+     * @param amount         授权数量
+     * @return 是否成功
+     * @throws ABIInvokeException ABIInvokeException
+     */
+    public Boolean checkAndApproveToken(
+            Web3ChainInfo chainInfo,
+            AccountContext accountContext,
+            String tokenAddress,
+            String spenderAddress,
+            BigDecimal amount
+    ) throws ABIInvokeException {
+        BigDecimal allowance = erc20Allowance(accountContext, chainInfo.getRpcUrl(), tokenAddress, spenderAddress);
+        if (allowance == null) {
+            throw new ABIInvokeException("check erc20 allowance fail, result is empty");
+        }
+
+        if (allowance.compareTo(amount) < 0) {
+            return erc20ApproveToken(chainInfo, accountContext, tokenAddress, spenderAddress, allowance);
+        } else {
+            return true;
+        }
+    }
+
+    /**
+     * 代币余额检查
+     *
+     * @param rpcUrl         rpc地址
+     * @param accountContext 账户
+     * @param tokenAddress   代币地址
+     * @return 余额（已处理完成的）
+     * @throws ABIInvokeException ABIInvokeException
+     */
+    public BigDecimal erc20TokenBalance(
+            String rpcUrl, AccountContext accountContext, String tokenAddress
+    ) throws ABIInvokeException {
+        Integer decimal = erc20Decimal(rpcUrl, tokenAddress);
+
+        String address = getACEthAddress(accountContext);
+
+        BigInteger bigInteger = autoLaunchBot.getBotApi().getWeb3WalletService().erc20BalanceCheck(
+                rpcUrl, tokenAddress, address
+        );
+
+        return EthWalletUtil.formatUnits(bigInteger, decimal);
+    }
+
+    /**
+     * 上链的abi调用
+     *
+     * @param chainInfo       chainInfo
+     * @param accountContext  accountContext
+     * @param contractAddress contractAddress
+     * @param functionName    functionName
+     * @param paramsTypes     paramsTypes
+     * @param resultTypes     resultTypes
+     * @return TransactionReceipt
+     * @throws ABIInvokeException ABIInvokeException
+     */
+    public TransactionReceipt onChainABIInvoke(
+            Web3ChainInfo chainInfo,
+            AccountContext accountContext,
+            String contractAddress,
+            String functionName,
+            List<Pair<Web3jFunctionType, Object>> paramsTypes,
+            List<Web3jFunctionType> resultTypes
+    ) throws ABIInvokeException {
+        return this.onChainABIInvoke(chainInfo, accountContext, contractAddress, null, functionName, paramsTypes, resultTypes, 3);
+    }
+
+    /**
+     * 签名abi调用
+     *
+     * @param chainInfo       chainInfo
+     * @param accountContext  accountContext
+     * @param contractAddress contractAddress
+     * @param value           value
+     * @param functionName    functionName
+     * @param paramsTypes     paramsTypes
+     * @param resultTypes     resultTypes
+     * @return TransactionReceipt
+     * @throws ABIInvokeException ABIInvokeException
+     */
+    public TransactionReceipt onChainABIInvoke(
+            Web3ChainInfo chainInfo,
+            AccountContext accountContext,
+            String contractAddress,
+            BigDecimal value,
+            String functionName,
+            List<Pair<Web3jFunctionType, Object>> paramsTypes,
+            List<Web3jFunctionType> resultTypes
+    ) throws ABIInvokeException {
+        return this.onChainABIInvoke(chainInfo, accountContext, contractAddress, value, functionName, paramsTypes, resultTypes, 3);
+    }
+
+    /**
+     * 签名abi调用
+     *
+     * @param chainInfo       chainInfo
+     * @param accountContext  accountContext
+     * @param contractAddress contractAddress
+     * @param value           value
+     * @param functionName    functionName
+     * @param paramsTypes     paramsTypes
+     * @param resultTypes     resultTypes
+     * @param retryTimes      retryTimes
+     * @return TransactionReceipt
+     * @throws ABIInvokeException ABIInvokeException
+     */
+    public TransactionReceipt onChainABIInvoke(
+            Web3ChainInfo chainInfo,
+            AccountContext accountContext,
+            String contractAddress,
+            BigDecimal value,
+            String functionName,
+            List<Pair<Web3jFunctionType, Object>> paramsTypes,
+            List<Web3jFunctionType> resultTypes,
+            int retryTimes
+    ) throws ABIInvokeException {
+        Integer walletId = accountContext.getWalletId();
+        if (walletId == null) {
+            throw new IllegalArgumentException("walletId is null");
+        }
+
+        SCInvokeParams.SCInvokeParamsBuilder paramsBuilder = SCInvokeParams
+                .builder()
+                .chainInfo(chainInfo)
+                .walletId(walletId)
+                .contractAddress(contractAddress)
+                .functionName(functionName)
+                .paramsTypes(paramsTypes)
+                .resultTypes(resultTypes)
+                .retryTimes(retryTimes)
+                .readFunction(false);
+
+        return sendAndGetTransactionReceipt(chainInfo, contractAddress, value, paramsBuilder);
+    }
+
+    /**
+     * 上链的abi调用
+     *
+     * @param chainInfo       chainInfo
+     * @param accountContext  accountContext
+     * @param contractAddress contractAddress
+     * @param data            data
+     * @return TransactionReceipt
+     * @throws ABIInvokeException ABIInvokeException
+     */
+    public TransactionReceipt onChainABIInvoke(
+            Web3ChainInfo chainInfo,
+            AccountContext accountContext,
+            String contractAddress,
+            BigDecimal value,
+            String data,
+            int retryTimes
+    ) throws ABIInvokeException {
+        Integer walletId = accountContext.getWalletId();
+        if (walletId == null) {
+            throw new IllegalArgumentException("walletId is null");
+        }
+
+        SCInvokeParams.SCInvokeParamsBuilder paramsBuilder = SCInvokeParams
+                .builder()
+                .chainInfo(chainInfo)
+                .walletId(walletId)
+                .contractAddress(contractAddress)
+                .data(data)
+                .retryTimes(retryTimes)
+                .readFunction(false);
+
+        return sendAndGetTransactionReceipt(chainInfo, contractAddress, value, paramsBuilder);
+    }
+
+    /**
+     * 查询token数量，并根据传入百分比获取数量
+     *
+     * @param accountContext    账户
+     * @param tokenAddress  地址
+     * @param percent   百分比
+     * @return  数量
+     * @throws ABIInvokeException   ABIInvokeException
+     */
+    public @NotNull BigDecimal tokenPercentToAmount(String rpcUrl, AccountContext accountContext, String tokenAddress, double percent)
+        throws ABIInvokeException {
+        BigDecimal balance = erc20TokenBalance(rpcUrl, accountContext, tokenAddress);
+        if (balance == null) {
+            throw new ABIInvokeException("balance not enough");
+        }
+        if (percent <= 0 || percent > 1) {
+            throw new ABIInvokeException("percent not allowed");
+        }
+
+        return balance.multiply(BigDecimal.valueOf(percent));
+    }
+
+    @NotNull
+    private TransactionReceipt sendAndGetTransactionReceipt(Web3ChainInfo chainInfo, String contractAddress, BigDecimal value, SCInvokeParams.SCInvokeParamsBuilder paramsBuilder) throws ABIInvokeException {
+        if (value != null) {
+            Integer decimal = erc20Decimal(chainInfo.getRpcUrl(), contractAddress);
+            paramsBuilder.value(EthWalletUtil.parseUnits(value, decimal));
+        }
+
+        SCInvokeResult scInvokeResult = autoLaunchBot.getBotApi().getWeb3WalletRPC().erc20ABIInvokeRPC(
+                paramsBuilder.build()
+        );
+        String transactionHash = scInvokeResult.getTransactionHash();
+
+        return EthWalletUtil.waitForTransactionReceipt(chainInfo.getRpcUrl(), transactionHash);
+    }
+
+    private static @NotNull String getACEthAddress(AccountContext accountContext) {
+        Web3Wallet wallet = accountContext.getWallet();
+        String walletAddress;
+        if (wallet == null || StrUtil.isBlank(walletAddress = wallet.getEthAddress())) {
+            throw new IllegalArgumentException("Eth wallet is empty");
+        }
+        return walletAddress;
+    }
+
+}
+package cn.com.vortexa.script_bot.wallet.r2money;
+
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.math.BigInteger;
+
+/**
+ * @author helei
+ * @since 2025-04-26
+ */
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+public class R2Balance {
+    private String account;
+    private String walletAddress;
+    private BigDecimal USDC;
+    private BigDecimal R2USD;
+    private BigDecimal SR2USD;
+    private BigInteger gasFee;
+}
+package cn.com.vortexa.script_bot.wallet.r2money;
+
+
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.web3.constants.Web3ChainDict;
+import cn.com.vortexa.web3.exception.ABIInvokeException;
+import com.alibaba.fastjson.JSONObject;
+import lombok.Getter;
+
+import java.io.File;
+
+/**
+ * @author helei
+ * @since 2025-04-24
+ */
+public class R2MoneyApi {
+    private static final String R2MONEY_CHAIN_FILE_NAME = "r2-chain-info.yaml";
+    private static final String SEPOLIA_CHAIN_NAME = "Sepolia";
+    public static final String R2MONEY_CHAIN_NAME = "Plume_Testnet";
+
+    private final R2MoneyBot r2MoneyBot;
+    @Getter
+    private final Web3ChainDict web3ChainDict;
+    @Getter
+    private final R2PlumeAndSepoliaTestnetApi r2PlumeTestnetApi;
+    @Getter
+    private final R2PlumeAndSepoliaTestnetApi r2SepoliaTestnetApi;
+
+    public R2MoneyApi(R2MoneyBot r2MoneyBot) {
+        this.r2MoneyBot = r2MoneyBot;
+        Web3ChainDict defaultChainDict = Web3ChainDict.INSTANCE;
+        Web3ChainDict customChainDict = Web3ChainDict.loadCustomConfigDict(
+                r2MoneyBot.getAutoBotConfig().getMetaInfo().getResourceDir() + File.separator + R2MONEY_CHAIN_FILE_NAME
+        );
+        customChainDict.marge(defaultChainDict);
+        web3ChainDict = customChainDict;
+
+        r2PlumeTestnetApi = new R2PlumeAndSepoliaTestnetApi(r2MoneyBot, web3ChainDict.getChainInfo(R2MONEY_CHAIN_NAME));
+        r2SepoliaTestnetApi = new R2PlumeAndSepoliaTestnetApi(r2MoneyBot, web3ChainDict.getChainInfo(SEPOLIA_CHAIN_NAME));
+    }
+
+    /**
+     * 检查钱包资金
+     *
+     * @param accountContext    accountContext
+     * @return  Result
+     * @throws ABIInvokeException  ABIInvokeException
+     */
+    public JSONObject checkWalletBalance(AccountContext accountContext) throws ABIInvokeException {
+        R2Balance r2PlumeBalance = r2PlumeTestnetApi.checkWalletBalance(accountContext);
+        R2Balance r2SepoliaBalance = r2PlumeTestnetApi.checkWalletBalance(accountContext);
+
+        JSONObject jb = new JSONObject();
+        jb.put("r2PlumeBalance", r2PlumeBalance);
+        jb.put("r2SepoliaBalance", r2SepoliaBalance);
+
+        return jb;
     }
 }
-package cn.com.vortexa.script_node.scriptagent.rpc;
+package cn.com.vortexa.script_bot.wallet.r2money;
 
-import cn.com.vortexa.script_agent.ScriptAgent;
-import cn.com.vortexa.control.constant.RemotingCommandCodeConstants;
-import cn.com.vortexa.control.dto.RemotingCommand;
-import cn.com.vortexa.control.dto.RPCResultWrapper;
-import cn.com.vortexa.common.util.protocol.Serializer;
-import cn.com.vortexa.control.exception.RPCException;
-import cn.com.vortexa.control.util.RPCMethodUtil;
-import lombok.extern.slf4j.Slf4j;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.dto.ACListOptResult;
+import cn.com.vortexa.common.dto.BotACJobResult;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.common.util.AnsiColor;
+import cn.com.vortexa.common.util.tableprinter.CommandLineTablePrintHelper;
+import cn.com.vortexa.script_node.anno.BotApplication;
+import cn.com.vortexa.script_node.anno.BotMethod;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.script_node.constants.MapConfigKey;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.hutool.core.util.RandomUtil;
 
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import com.alibaba.fastjson.JSONObject;
+import org.web3j.protocol.core.methods.response.TransactionReceipt;
 
-@Slf4j
-public class ScriptAgentRPCProxyFactory {
+import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
-    private static final ConcurrentMap<Class<?>, Object> referenceMap = new ConcurrentHashMap<>();
+/**
+ * @author helei
+ * @since 2025-04-24
+ */
+@BotApplication(
+        name = "R2_Money_Bot",
+        configParams = {
+                MapConfigKey.MAX_USE_PERCENT_KEY, MapConfigKey.MIN_USE_PERCENT_KEY
+        }
+)
+public class R2MoneyBot extends AutoLaunchBot<R2MoneyBot> {
+    private static final String PLUME_GAS_FEE_KEY = "plume_gas_fee";
+    private static final String SEPOLIA_GAS_FEE_KEY = "sepolia_gas_fee";
 
-    @SuppressWarnings("unchecked")
-    public static <T> T createProxy(Class<T> interfaceClass, ScriptAgent scriptAgent) {
-        return (T) referenceMap.compute(interfaceClass, (k, v) -> {
-            if (v == null) {
-                v = Proxy.newProxyInstance(
-                        interfaceClass.getClassLoader(),
-                        new Class<?>[]{interfaceClass},
-                        new RPCInvocationHandler(interfaceClass, scriptAgent)
-                );
-            }
-            return v;
-        });
+    private static final String RANDOM_DAILY_TASK = "随机执行";
+    private static final String CHECK_WALLET_BALANCE = "检查钱包余额";
+    private static final String PLUME_TESTNET_USDC_TO_R2USD = "plume测试网 - USDC->R2USD";
+    private static final String PLUME_TESTNET_R2USD_TO_USDC = "plume测试网 - R2USD->USDC";
+    private static final String PLUME_TESTNET_STAKE_R2USD = "plume测试网 - 质押R2USD";
+
+    private static final String SEPOLIA_TESTNET_USDC_TO_R2USD = "sepolia测试网 - USDC->R2USD";
+    private static final String SEPOLIA_TESTNET_R2USD_TO_USDC = "sepolia测试网 - R2USD->USDC";
+    private static final String SEPOLIA_TESTNET_STAKE_R2USD = "sepolia测试网 - 质押R2USD";
+
+    private R2MoneyApi r2MoneyApi;
+
+    private Double maxUsePercent;
+    private Double minUsePercent;
+
+    @Override
+    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
+        this.r2MoneyApi = new R2MoneyApi(this);
+        addJobExecuteResultHandler(CHECK_WALLET_BALANCE, this::walletBalancePrinter);
+        addJobExecuteResultHandler(RANDOM_DAILY_TASK, this::walletBalancePrinter);
+        addJobExecuteResultHandler(PLUME_TESTNET_USDC_TO_R2USD, this::transactResultPrinter);
+        addJobExecuteResultHandler(PLUME_TESTNET_R2USD_TO_USDC, this::transactResultPrinter);
+
+        this.maxUsePercent = Double.valueOf(botConfig.getConfig(MapConfigKey.MAX_USE_PERCENT_KEY));
+        this.minUsePercent = Double.valueOf(botConfig.getConfig(MapConfigKey.MIN_USE_PERCENT_KEY));
     }
 
-    private static class RPCInvocationHandler implements InvocationHandler {
-        private final Class<?> interfaceClass;
-        private final ScriptAgent scriptAgent;
-        private final Set<Method> rpcMethods;
+    @Override
+    protected R2MoneyBot getInstance() {
+        return this;
+    }
 
-        public RPCInvocationHandler(Class<?> interfaceClass, ScriptAgent scriptAgent) {
-            this.interfaceClass = interfaceClass;
-            this.scriptAgent = scriptAgent;
-            this.rpcMethods = Set.of(interfaceClass.getDeclaredMethods());
+    @BotMethod(
+        jobType = BotJobType.TIMED_TASK,
+        jobName = RANDOM_DAILY_TASK,
+        intervalInSecond = 60 * 60 * 12,
+        uniqueAccount = true
+    )
+    public JSONObject dailyRandoTask(AccountContext accountContext, List<AccountContext> sameACList) {
+        int runTimes = 0;
+        BigInteger plumeGasUsed = BigInteger.ZERO;
+        BigInteger sepoliaGasUsed = BigInteger.ZERO;
+        if (RandomUtil.randomBoolean()) {
+            runTimes++;
+            TransactionReceipt receipt = plumeTestNetUSDCSwap(accountContext, sameACList);
+            plumeGasUsed = plumeGasUsed.add(receipt.getGasUsed());
+        }
+        if (RandomUtil.randomBoolean()) {
+            runTimes++;
+            plumeGasUsed = plumeGasUsed.add(plumeTestNetR2USDCSwap(accountContext, sameACList).getGasUsed());
+        }
+        if (RandomUtil.randomBoolean()) {
+            runTimes++;
+            plumeGasUsed = plumeGasUsed.add(plumeTestNetStake(accountContext, sameACList).getGasUsed());
+        }
+        if (RandomUtil.randomBoolean()) {
+            runTimes++;
+            sepoliaGasUsed = sepoliaGasUsed.add(sepoliaTestNetUSDCSwap(accountContext, sameACList).getGasUsed());
+        }
+        if (RandomUtil.randomBoolean()) {
+            runTimes++;
+            sepoliaGasUsed = sepoliaGasUsed.add(sepoliaTestNetR2USDCSwap(accountContext, sameACList).getGasUsed());
+        }
+        if (RandomUtil.randomBoolean()) {
+            runTimes++;
+            sepoliaGasUsed = sepoliaGasUsed.add(sepoliaTestNetStake(accountContext, sameACList).getGasUsed());
+        }
+        if (runTimes == 0) {
+            runTimes++;
+            plumeGasUsed = plumeGasUsed.add(plumeTestNetUSDCSwap(accountContext, sameACList).getGasUsed());
         }
 
-        @Override
-        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-            if (rpcMethods.contains(method)) {
-                try {
+        JSONObject jsonObject = checkWalletBalance(accountContext, sameACList);
+        jsonObject.put(PLUME_GAS_FEE_KEY, plumeGasUsed);
+        jsonObject.put(SEPOLIA_GAS_FEE_KEY, sepoliaGasUsed);
+        return jsonObject;
+    }
 
-                    RemotingCommand request = RPCMethodUtil.buildRPCRequest(
-                            scriptAgent.nextTxId(),
-                            interfaceClass.getName(),
-                            method,
-                            args
+    @BotMethod(jobType = BotJobType.ONCE_TASK, jobName = CHECK_WALLET_BALANCE, uniqueAccount = true)
+    public JSONObject checkWalletBalance(AccountContext accountContext, List<AccountContext> sameACList) {
+        try {
+            return r2MoneyApi.checkWalletBalance(accountContext);
+        } catch (Exception e) {
+            logger.error(accountContext.getSimpleInfo() + " balance check error, "
+                    + (e.getCause() == null ? e.getMessage() : e.getCause().getMessage()));
+            return new JSONObject();
+        }
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK, jobName = PLUME_TESTNET_USDC_TO_R2USD, uniqueAccount = true)
+    public TransactionReceipt plumeTestNetUSDCSwap(AccountContext accountContext, List<AccountContext> sameACList) {
+        try {
+            return r2MoneyApi
+                    .getR2PlumeTestnetApi()
+                    .swap(
+                            accountContext,
+                            R2PlumeAndSepoliaTestnetApi.USDC_TO_R2USD_CONTRACT,
+                            R2PlumeAndSepoliaTestnetApi.USDC_ADDRESS,
+                            getUsePercent()
                     );
-                    log.debug("send RPC request[{}][{}]", request.getTransactionId(), method.getName());
+        } catch (Exception e) {
+            String errorMsg = "plume testnet swap error, " + (
+                    e.getCause() == null ? e.getMessage() : e.getCause().getMessage()
+            );
+            logger.error(errorMsg);
+            throw new RuntimeException(errorMsg);
+        }
+    }
 
-                    RemotingCommand response = scriptAgent.sendRequest(request).get();
-                    byte[] body = response.getBody();
+    @BotMethod(jobType = BotJobType.ONCE_TASK, jobName = PLUME_TESTNET_R2USD_TO_USDC, uniqueAccount = true)
+    public TransactionReceipt plumeTestNetR2USDCSwap(AccountContext accountContext, List<AccountContext> sameACList) {
+        try {
+            return r2MoneyApi
+                    .getR2PlumeTestnetApi()
+                    .swap(
+                            accountContext,
+                            R2PlumeAndSepoliaTestnetApi.R2USD_TO_USDC_CONTRACT,
+                            R2PlumeAndSepoliaTestnetApi.R2USD_ADDRESS,
+                            getUsePercent()
+                    );
+        } catch (Exception e) {
+            String errorMsg = "plume testnet swap error, " + (
+                    e.getCause() == null ? e.getMessage() : e.getCause().getMessage()
+            );
+            logger.error(errorMsg);
+            throw new RuntimeException(errorMsg);
+        }
+    }
 
-                    if (response.getCode() == RemotingCommandCodeConstants.SUCCESS) {
-                        if (method.getReturnType() != void.class) {
-                            RPCResultWrapper<?> RPCResultWrapper = Serializer.Algorithm.JDK.deserialize(body, RPCResultWrapper.class);
-                            log.debug("rpc [{}-{}] got result [{}]",
-                                    interfaceClass.getName(), method.getName(), RPCResultWrapper.getResult());
-                            return RPCResultWrapper.getResult();
-                        } else {
-                            return null;
-                        }
-                    } else if (response.getCode() == RemotingCommandCodeConstants.FAIL) {
-                        String errorMsg = "rpc [%s-%s] error".formatted(interfaceClass.getName(), method.getName());
-                        RPCResultWrapper<?> RPCResultWrapper = Serializer.Algorithm.JDK.deserialize(body, RPCResultWrapper.class);
-                        throw new RPCException(errorMsg, RPCResultWrapper.getException());
-                    } else {
-                        return null;
-                    }
-                } catch (Exception e) {
-                    String errorMsg = "rpc [%s-%s] error".formatted(interfaceClass.getName(), method.getName());
-                    throw new RPCException(errorMsg, e);
-                }
-            } else {
-                return method.invoke(proxy, args);
+    @BotMethod(jobType = BotJobType.ONCE_TASK, jobName = PLUME_TESTNET_STAKE_R2USD, uniqueAccount = true)
+    public TransactionReceipt plumeTestNetStake(AccountContext accountContext, List<AccountContext> sameACList) {
+        try {
+            return r2MoneyApi
+                .getR2PlumeTestnetApi()
+                .stake(
+                    accountContext,
+                    getUsePercent()
+                );
+        } catch (Exception e) {
+            String errorMsg = "plume testnet swap error, " + (
+                e.getCause() == null ? e.getMessage() : e.getCause().getMessage()
+            );
+            logger.error(errorMsg);
+            throw new RuntimeException(errorMsg);
+        }
+    }
+
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK, jobName = SEPOLIA_TESTNET_USDC_TO_R2USD, uniqueAccount = true)
+    public TransactionReceipt sepoliaTestNetUSDCSwap(AccountContext accountContext, List<AccountContext> sameACList) {
+        try {
+            return r2MoneyApi
+                .getR2SepoliaTestnetApi()
+                .swap(
+                    accountContext,
+                    R2PlumeAndSepoliaTestnetApi.USDC_TO_R2USD_CONTRACT,
+                    R2PlumeAndSepoliaTestnetApi.USDC_ADDRESS,
+                    getUsePercent()
+                );
+        } catch (Exception e) {
+            String errorMsg = "sepolia testnet stake error, " + (
+                e.getCause() == null ? e.getMessage() : e.getCause().getMessage()
+            );
+            logger.error(errorMsg);
+            throw new RuntimeException(errorMsg);
+        }
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK, jobName = SEPOLIA_TESTNET_R2USD_TO_USDC, uniqueAccount = true)
+    public TransactionReceipt sepoliaTestNetR2USDCSwap(AccountContext accountContext, List<AccountContext> sameACList) {
+        try {
+            return r2MoneyApi
+                .getR2SepoliaTestnetApi()
+                .swap(
+                    accountContext,
+                    R2PlumeAndSepoliaTestnetApi.R2USD_TO_USDC_CONTRACT,
+                    R2PlumeAndSepoliaTestnetApi.R2USD_ADDRESS,
+                    getUsePercent()
+                );
+        } catch (Exception e) {
+            String errorMsg = "sepolia testnet swap error, " + (
+                e.getCause() == null ? e.getMessage() : e.getCause().getMessage()
+            );
+            logger.error(errorMsg);
+            throw new RuntimeException(errorMsg);
+        }
+    }
+
+    @BotMethod(jobType = BotJobType.ONCE_TASK, jobName = SEPOLIA_TESTNET_STAKE_R2USD, uniqueAccount = true)
+    public TransactionReceipt sepoliaTestNetStake(AccountContext accountContext, List<AccountContext> sameACList) {
+        try {
+            return r2MoneyApi
+                .getR2SepoliaTestnetApi()
+                .stake(
+                    accountContext,
+                    getUsePercent()
+                );
+        } catch (Exception e) {
+            String errorMsg = "sepolia testnet stake error, " + (
+                e.getCause() == null ? e.getMessage() : e.getCause().getMessage()
+            );
+            logger.error(errorMsg);
+            throw new RuntimeException(errorMsg);
+        }
+    }
+
+    /**
+     * 打印钱包余额
+     *
+     * @param acListOptResult acListOptResult
+     */
+    public void walletBalancePrinter(ACListOptResult acListOptResult) {
+        if (acListOptResult == null || !acListOptResult.getSuccess()) {
+            logger.error("[%s] execute fail".formatted(CHECK_WALLET_BALANCE));
+        } else {
+            List<BotACJobResult> results = acListOptResult.getResults();
+            List<R2Balance> r2ChainBalances = new ArrayList<>();
+            List<R2Balance> spoliaChainBalances = new ArrayList<>();
+            for (BotACJobResult result : results) {
+                JSONObject jb = (JSONObject) result.getData();
+                R2Balance balance = jb.getObject("r2PlumeBalance", R2Balance.class);
+                balance.setGasFee(jb.getBigInteger(PLUME_GAS_FEE_KEY));
+                R2Balance balanceSepolia = jb.getObject("r2SepoliaBalance", R2Balance.class);
+                balanceSepolia.setGasFee(jb.getBigInteger(SEPOLIA_GAS_FEE_KEY));
+                r2ChainBalances.add(balance);
+                spoliaChainBalances.add(balanceSepolia);
+            }
+
+            System.out.println("\n<============"
+                    + AnsiColor.colorize("Plume Testnet Balance", AnsiColor.GREEN)
+                    + "===================>\n"
+            );
+            System.out.println(CommandLineTablePrintHelper.generateTableString(r2ChainBalances, R2Balance.class));
+
+            System.out.println("\n<============"
+                + AnsiColor.colorize("Sepolia Testnet Balance", AnsiColor.GREEN)
+                + "===================>\n"
+            );
+            System.out.println(CommandLineTablePrintHelper.generateTableString(spoliaChainBalances, R2Balance.class));
+        }
+    }
+
+    public void transactResultPrinter(ACListOptResult acListOptResult) {
+        if (acListOptResult == null || !acListOptResult.getSuccess()) {
+            logger.error("[%s] execute fail".formatted("transaction"));
+        } else {
+            List<BotACJobResult> results = acListOptResult.getResults();
+            for (BotACJobResult result : results) {
+                System.out.println(result);
             }
         }
+    }
+
+    public Double getUsePercent() {
+        return ThreadLocalRandom.current().nextDouble(minUsePercent, maxUsePercent);
+    }
+}
+package cn.com.vortexa.script_bot.wallet.r2money;
+
+
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.script_node.bot.api.ERC20Api;
+import cn.com.vortexa.web3.EthWalletUtil;
+import cn.com.vortexa.web3.dto.Web3ChainInfo;
+import cn.com.vortexa.web3.exception.ABIInvokeException;
+import lombok.Getter;
+
+import org.jetbrains.annotations.NotNull;
+import org.web3j.abi.FunctionEncoder;
+import org.web3j.abi.datatypes.Address;
+import org.web3j.abi.datatypes.Function;
+import org.web3j.abi.datatypes.generated.Uint256;
+import org.web3j.protocol.core.methods.response.TransactionReceipt;
+
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * @author helei
+ * @since 2025-04-26
+ */
+@Getter
+public class R2PlumeAndSepoliaTestnetApi extends ERC20Api {
+
+    public static final String USDC_ADDRESS = "0xef84994ef411c4981328ffce5fda41cd3803fae4";
+    public static final String R2USD_ADDRESS = "0x20c54c5f742f123abb49a982bfe0af47edb38756";
+    public static final String SR2USD_ADDRESS = "0xbd6b25c4132f09369c354bee0f7be777d7d434fa";
+
+    public static final String USDC_TO_R2USD_CONTRACT = "0x20c54c5f742f123abb49a982bfe0af47edb38756";
+    public static final String R2USD_TO_USDC_CONTRACT = "0x07abd582df3d3472aa687a0489729f9f0424b1e3";
+    public static final String STAKE_R2USD_CONTRACT = "0xbd6b25c4132f09369c354bee0f7be777d7d434fa";
+
+    public static final String USDC_TO_R2USD_METHOD_ID = "0x095e7a95";
+    public static final String R2USD_TO_USDC_METHOD_ID = "0x3df02124";
+    public static final String STAKE_R2USD_METHOD_ID = "0x1a5f0f00";
+
+    private final Web3ChainInfo r2MoneyChainInfo;
+
+    public R2PlumeAndSepoliaTestnetApi(R2MoneyBot r2MoneyBot, Web3ChainInfo chainInfo) {
+        super(r2MoneyBot);
+        this.r2MoneyChainInfo = chainInfo;
+    }
+
+    /**
+     * 检查钱包余额
+     *
+     * @param accountContext accountContext
+     * @return Result
+     */
+    public R2Balance checkWalletBalance(AccountContext accountContext) throws ABIInvokeException {
+        BigDecimal usdc = erc20TokenBalance(
+                r2MoneyChainInfo.getRpcUrl(), accountContext, USDC_ADDRESS
+        );
+        BigDecimal r2USD = erc20TokenBalance(
+                r2MoneyChainInfo.getRpcUrl(), accountContext, R2USD_ADDRESS
+        );
+        BigDecimal sr2USD = erc20TokenBalance(
+                r2MoneyChainInfo.getRpcUrl(), accountContext, SR2USD_ADDRESS
+        );
+        return new R2Balance(
+                "ac-" + accountContext.getId(),
+                accountContext.getWallet().getEthAddress(),
+                usdc, r2USD, sr2USD, null
+        );
+    }
+
+    /**
+     * 质押
+     * @param accountContext    accountContext
+     * @return  TransactionReceipt
+     * @throws ABIInvokeException   ABIInvokeException
+     */
+    public TransactionReceipt stake(AccountContext accountContext, double percent)
+        throws ABIInvokeException {
+        if (!checkAndApproveToken(r2MoneyChainInfo, accountContext, R2USD_ADDRESS, STAKE_R2USD_CONTRACT, BigDecimal.valueOf(50000000000000000000000000000D))) {
+            throw new ABIInvokeException("check and approve fail");
+        }
+
+        BigDecimal amount = tokenPercentToAmount(r2MoneyChainInfo.getRpcUrl(), accountContext, R2USD_ADDRESS, percent);
+        Integer decimal = erc20Decimal(r2MoneyChainInfo.getRpcUrl(), R2USD_ADDRESS);
+        String data = STAKE_R2USD_METHOD_ID + EthWalletUtil.parseUnits(amount, decimal) + "0".repeat(576);
+
+        return onChainABIInvoke(r2MoneyChainInfo, accountContext, STAKE_R2USD_CONTRACT, null, data, 3);
+    }
+
+    /**
+     * 合约swap
+     *
+     * @param accountContext  accountContext
+     * @param contractAddress contractAddress
+     * @param percent         percent
+     * @return TransactionReceipt
+     * @throws ABIInvokeException ABIInvokeException
+     */
+    public TransactionReceipt swap(
+            AccountContext accountContext,
+            String contractAddress,
+            String tokenAddress,
+            double percent
+    ) throws ABIInvokeException {
+        BigDecimal amount = tokenPercentToAmount(r2MoneyChainInfo.getRpcUrl(), accountContext, tokenAddress, percent);
+        return swap(accountContext, contractAddress, tokenAddress, amount);
+    }
+
+    /**
+     * 合约swap
+     *
+     * @param accountContext  accountContext
+     * @param contractAddress contractAddress
+     * @param amount          amount
+     * @return TransactionReceipt
+     * @throws ABIInvokeException ABIInvokeException
+     */
+    public TransactionReceipt swap(
+            AccountContext accountContext,
+            String contractAddress,
+            String tokenAddress,
+            BigDecimal amount
+    ) throws ABIInvokeException {
+        Integer decimal = erc20Decimal(r2MoneyChainInfo.getRpcUrl(), tokenAddress);
+        String ethAddress = accountContext.getWallet().getEthAddress();
+
+        checkAndApproveToken(r2MoneyChainInfo, accountContext,
+                tokenAddress, contractAddress, BigDecimal.valueOf(50000000000000000000000000000D));
+
+        String data = null;
+        if (USDC_TO_R2USD_CONTRACT.equals(contractAddress)) {
+            data = usd2R2Usd(amount, ethAddress, decimal);
+        } else if (R2USD_TO_USDC_CONTRACT.equals(contractAddress)) {
+            data = r2Usd2Usd(amount, decimal);
+        } else {
+            throw new ABIInvokeException("contractAddress not supported");
+        }
+
+        return onChainABIInvoke(
+                r2MoneyChainInfo,
+                accountContext,
+                contractAddress,
+                null,
+                data,
+                3
+        );
+    }
+
+    private static @NotNull String usd2R2Usd(BigDecimal amount, String ethAddress, Integer decimal) {
+        Function function = new Function(
+                "", // 方法名留空
+                Arrays.asList(
+                        new Address(ethAddress),
+                        new Uint256(EthWalletUtil.parseUnits(amount, decimal)),
+                        new Uint256(BigInteger.ZERO),
+                        new Uint256(BigInteger.ZERO),
+                        new Uint256(BigInteger.ZERO),
+                        new Uint256(BigInteger.ZERO),
+                        new Uint256(BigInteger.ZERO)
+                ),
+                List.of()
+        );
+
+        // 编码参数
+        String encodedParameters = FunctionEncoder.encode(function);
+        String paramsOnly = encodedParameters.substring(10); // 去掉函数选择器
+
+        // 拼接最终 data
+        return USDC_TO_R2USD_METHOD_ID + paramsOnly;
+    }
+
+    public static @NotNull String r2Usd2Usd(BigDecimal amount, Integer decimal) {
+        BigInteger amountInt = EthWalletUtil.parseUnits(amount, decimal);
+        BigInteger minOutput = EthWalletUtil.calculateMinOutput(amountInt, 2);
+
+        // 固定填充
+        String zero64 = "0000000000000000000000000000000000000000000000000000000000000000";
+        String one64 = "0000000000000000000000000000000000000000000000000000000000000001";
+
+        // 拼接 amountInWei 和 minOutput（去掉0x，补齐64位）
+        String amountInWeiHex = String.format("%064x", amountInt);
+        String minOutputHex = String.format("%064x", minOutput);
+
+        // 拼接最终 data
+        return R2USD_TO_USDC_METHOD_ID
+                + zero64
+                + one64
+                + amountInWeiHex
+                + minOutputHex;
     }
 }
