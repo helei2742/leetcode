@@ -1,2311 +1,1023 @@
-package cn.com.vortexa.common.util;
-
-import org.yaml.snakeyaml.DumperOptions;
-import org.yaml.snakeyaml.Yaml;
-
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Path;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-
-public class YamlConfigLoadUtil {
-
-    private static final ConcurrentHashMap<String, Object> LOADED_CONFIG_MAP = new ConcurrentHashMap<>();
-
-    public static <T> T load(
-            String path,
-            String fileName,
-            String prefix,
-            Class<T> clazz
-    ) {
-        return load(
-                Arrays.asList(path.split("\\.")),
-                fileName,
-                Arrays.asList(prefix.split("\\.")),
-                clazz
-        );
-    }
+package cn.com.vortexa.script_bot.daily.beamable;
 
 
-    public static <T> T load(
-            List<String> path,
-            String fileName,
-            List<String> prefixList,
-            Class<T> clazz
-    ) {
-        String dirResourcePath = FileUtil.getAppResourcePath(path, fileName);
-
-        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
-            if (config == null) {
-                Yaml yaml = new Yaml();
-                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
-                    Map<String, Object> yamlData = yaml.load(inputStream);
-
-                    return load(yaml, yamlData, prefixList, clazz);
-                } catch (IOException e) {
-                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
-                }
-            }
-
-            return config;
-        });
-
-        return (T) compute;
-    }
-
-    public static List<Object> load(List<String> configDirBotPath, String fileName, String prefix) {
-        return load(configDirBotPath, fileName, List.of(prefix.split("\\.")));
-    }
-
-    public static List<Object> load(
-            List<String> path,
-            String fileName,
-            List<String> prefixList
-    ) {
-        String dirResourcePath = FileUtil.getAppResourcePath(path, fileName);
-
-        Object compute = LOADED_CONFIG_MAP.compute(dirResourcePath, (k, config) -> {
-            if (config == null) {
-                Yaml yaml = new Yaml();
-                try (InputStream inputStream = new FileInputStream(dirResourcePath)) {
-                    Map<String, Object> yamlData = yaml.load(inputStream);
-
-                    if (prefixList != null) {
-                        for (String prefix : prefixList) {
-                            yamlData = (Map<String, Object>) yamlData.get(prefix);
-                            Map<String, Object> target = new HashMap<>();
-                            for (Map.Entry<String, Object> entry : yamlData.entrySet()) {
-                                target.put(toCamelCase(entry.getKey()), entry.getValue());
-                            }
-                            yamlData = target;
-                        }
-                    }
-                    return yamlData.get("list");
-                } catch (IOException e) {
-                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", dirResourcePath), e);
-                }
-            }
-
-            return config;
-        });
-
-        return (List<Object>) compute;
-    }
-
-    public static <T> T load(File path, List<String> prefixList, Class<T> tClass) {
-        Object compute = LOADED_CONFIG_MAP.compute(path.getAbsolutePath(), (k, config) -> {
-            if (config == null) {
-                Yaml yaml = new Yaml();
-                try (InputStream inputStream = new FileInputStream(path)) {
-                    Map<String, Object> yamlData = yaml.load(inputStream);
-
-                    return load(yaml, yamlData, prefixList, tClass);
-                } catch (IOException e) {
-                    throw new RuntimeException(String.format("加载配置池文件[%s]发生错误", path), e);
-                }
-            }
-            return config;
-        });
-
-        return (T) compute;
-    }
-
-
-    public static <T> T load(String name, InputStream inputStream, List<String> prefixList, Class<T> tClass) {
-        Object compute = LOADED_CONFIG_MAP.compute(name, (k, config) -> {
-            if (config == null) {
-                Yaml yaml = new Yaml();
-                Map<String, Object> yamlData = yaml.load(inputStream);
-                return load(yaml, yamlData, prefixList, tClass);
-            }
-            return config;
-        });
-
-        return (T) compute;
-    }
-
-    public static <T> T load(String content, List<String> prefixList, Class<T> tClass) {
-        Yaml yaml = new Yaml();
-        Map<String, Object> yamlData = yaml.load(String.valueOf(content));
-        return load(yaml, yamlData, prefixList, tClass);
-    }
-
-    public static <T> T load(Yaml yaml, Map<String, Object> yamlData, List<String> prefixList, Class<T> tClass) {
-        if (prefixList != null) {
-            for (String prefix : prefixList) {
-                yamlData = (Map<String, Object>) yamlData.get(prefix);
-                if (yamlData == null) {
-                    break;
-                }
-                Map<String, Object> target = new HashMap<>();
-                for (Map.Entry<String, Object> entry : yamlData.entrySet()) {
-                    target.put(toCamelCase(entry.getKey()), entry.getValue());
-                }
-                yamlData = target;
-            }
-        }
-        return yaml.loadAs(yaml.dump(yamlData), tClass);
-    }
-
-    public static void writeYamlFile(Path path, Map<String, Object> content) throws IOException {
-        // 配置输出格式（可选）
-        DumperOptions options = new DumperOptions();
-        options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK); // 块风格输出
-        options.setPrettyFlow(true);
-        options.setIndent(2);
-        Yaml yaml = new Yaml(options);
-
-        try (FileWriter writer = new FileWriter(path.toFile())) {
-            yaml.dump(content, writer);
-        }
-    }
-
-    private static String toCamelCase(String name) {
-        String[] parts = name.split("-");
-        StringBuilder camelCase = new StringBuilder(parts[0]);
-        for (int i = 1; i < parts.length; i++) {
-            camelCase.append(parts[i].substring(0, 1).toUpperCase()).append(parts[i].substring(1));
-        }
-        return camelCase.toString();
-    }
-
-    public static Map<String, Object> flattenMap(Map<String, Object> source) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        buildFlattenedMap(result, source, null);
-        return result;
-    }
-
-    private static void buildFlattenedMap(Map<String, Object> result, Map<String, Object> source, String path) {
-        source.forEach((key, value) -> {
-            String newKey = (path != null) ? path + "." + key : key;
-            if (value instanceof Map) {
-                buildFlattenedMap(result, (Map<String, Object>) value, newKey);
-            } else {
-                result.put(newKey, value);
-            }
-        });
-    }
-}
-package cn.com.vortexa.common.vo;
-
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.common.dto.job.JobTrigger;
-import cn.com.vortexa.common.entity.BotInfo;
-import cn.com.vortexa.common.entity.BotInstance;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
+import cn.com.vortexa.browser_control.SeleniumInstance;
+import cn.com.vortexa.browser_control.constants.BrowserDriverType;
+import cn.com.vortexa.browser_control.execute.ExecuteGroup;
+import cn.com.vortexa.browser_control.execute.ExecuteItem;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.script_node.anno.BotApplication;
+import cn.com.vortexa.script_node.anno.BotMethod;
+import cn.com.vortexa.script_node.bot.selenium.FingerBrowserBot;
+import cn.com.vortexa.script_node.dto.selenium.ACBotTypedSeleniumExecuteInfo;
+import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.JavascriptExecutor;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
 
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @author helei
- * @since 2025/4/2 14:13
+ * @since 2025-04-06
  */
-@Data
-@Builder
-@NoArgsConstructor
-@AllArgsConstructor
-public class BotInstanceVO {
+@Slf4j
+@BotApplication(
+        name = "beamable_bot"
+)
+public class BeamableBot extends FingerBrowserBot {
+    public static final String TARGET_SITE_URL = "https://hub.beamable.network/modules/dailyreward";
 
-    private BotInfo botInfo;
-
-    /**
-     * bot实例
-     */
-    private BotInstance botInstance;
-
-    /**
-     * 正在运行的jobName
-     */
-    private Map<String, List<JobTrigger>> jobTriggers;
-
-    /**
-     * 是否在线
-     */
-    private Boolean online;
-
-    /**
-     * 启动配置
-     */
-    private AutoBotConfig botLaunchConfig;
-}
-package cn.com.vortexa.rpc.api.platform;
-
-/**
- * @author h30069248
- * @since 2025/5/8 15:24
- */
-public interface IBotLaunchConfigRPC {
-
-}
-package cn.com.vortexa.bot_platform.controller;
-
-import cn.com.vortexa.bot_platform.dto.BotInstanceAccountQuery;
-import cn.com.vortexa.bot_platform.dto.BotJob;
-import cn.com.vortexa.bot_platform.dto.BotInstanceUpdate;
-import cn.com.vortexa.bot_platform.entity.BotLaunchConfig;
-import cn.com.vortexa.bot_platform.service.IBotLaunchConfigService;
-import cn.com.vortexa.common.dto.control.RegisteredScriptNode;
-import cn.com.vortexa.common.entity.BotInstance;
-import cn.com.vortexa.common.vo.PageQuery;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.bot_platform.service.IBotInstanceService;
-
-import org.quartz.SchedulerException;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-import java.io.IOException;
-import java.sql.SQLException;
-import java.util.List;
-
-/**
- * <p>
- * 前端控制器
- * </p>
- *
- * @author com.helei
- * @since 2025-02-18
- */
-@RestController
-@RequestMapping("/botInstance")
-public class BotInstanceController {
-
-    @Autowired
-    private IBotInstanceService botInstanceService;
-
-    @Autowired
-    private IBotLaunchConfigService botLaunchConfigService;
-
-    @PostMapping("/pageQuery")
-    public Result pageQuery(@RequestBody PageQuery query) throws SQLException, SchedulerException {
-        return Result.ok(botInstanceService.conditionPageQueryAllInfo(
-                query.getPage(),
-                query.getLimit(),
-                query.getFilterMap()
-        ));
+    @Override
+    protected BeamableBot getInstance() {
+        return this;
     }
 
-    @PostMapping("/detail")
-    public Result detail(@RequestBody BotInstance botInstance) throws SchedulerException, IOException {
-        return Result.ok(botInstanceService.detail(botInstance.getScriptNodeName(), botInstance.getBotKey()));
+    @Override
+    protected BrowserDriverType browserDriverType() {
+        return BrowserDriverType.BIT_BROWSER;
     }
 
-    @PostMapping("/create")
-    public Result create(@RequestBody BotLaunchConfig botLaunchConfig) {
-        return botLaunchConfigService.create(botLaunchConfig);
-    }
 
-    @PostMapping("/updateJobParam")
-    public Result updateJobParam(@RequestBody BotInstanceUpdate botInstanceUpdate) {
-        return botInstanceService.updateJobParam(botInstanceUpdate);
-    }
-
-    @PostMapping("/saveBotLaunchConfig")
-    public Result saveBotLaunchConfig(@RequestBody BotInstanceUpdate update) throws IOException {
-        return botInstanceService.saveBotInstanceLaunchConfig(
-                update.getScriptNodeName(),
-                update.getBotKey(),
-                update.getBotLaunchConfig()
+    @BotMethod(jobType = BotJobType.ONCE_TASK)
+    private void dailyTask(AccountContext accountContext) {
+        syncAccountFBInvoker(
+            "daily_task",
+            accountContext,
+            () -> ACBotTypedSeleniumExecuteInfo
+                .builder()
+                .waitTime(60)
+                .waitTimeUnit(TimeUnit.MINUTES)
+                .seleniumExecuteChain(List.of(
+                    ExecuteGroup
+                        .builder().name("每日箱子").enterCondition((webDriver, params) -> {
+                            webDriver.get(TARGET_SITE_URL);
+                            try {
+                                TimeUnit.SECONDS.sleep(5);
+                            } catch (InterruptedException e) {
+                                throw new RuntimeException(e);
+                            }
+                            return true;
+                        })
+                        .executeItems(List.of(
+                            ExecuteItem.builder().name("领取").executeLogic(this::dailyReword).build()
+                        ))
+                        .build(),
+                    ExecuteGroup
+                        .builder().name("点击任务").enterCondition((webDriver, params) -> {
+                            webDriver.get("https://hub.beamable.network/modules/questboard");
+                            try {
+                                TimeUnit.SECONDS.sleep(10);
+                            } catch (InterruptedException e) {
+                                throw new RuntimeException(e);
+                            }
+                            return true;
+                        })
+                        .executeItems(List.of(
+                            ExecuteItem.builder().name("点击任务").executeLogic(this::clickTask).build()
+                        ))
+                        .build(),
+                    ExecuteGroup
+                        .builder().name("完成任务").enterCondition((webDriver, params) -> {
+                            webDriver.get("https://hub.beamable.network/modules/questboard");
+                            try {
+                                TimeUnit.SECONDS.sleep(10);
+                            } catch (InterruptedException e) {
+                                throw new RuntimeException(e);
+                            }
+                            return true;
+                        })
+                        .executeItems(List.of(
+                            ExecuteItem.builder().name("领取奖励").executeLogic(this::taskClaim).build()
+                        ))
+                        .build()
+                ))
+                .build()
         );
     }
 
-    @PostMapping("/onlineInstance")
-    public Result onlineInstance() {
-        List<RegisteredScriptNode> registeredScriptNodes = botInstanceService.queryOnLineInstance();
-        return Result.ok(registeredScriptNodes);
+
+    private void dailyReword(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+        WebElement webElement = seleniumInstance.xPathFindElement("//div[@id=\"moduleGriddedContainer\"]/div/div/div/div[2]/div//button[./div[text()='Claim']]", 40);
+        ((JavascriptExecutor) webDriver).executeScript("arguments[0].click();", webElement);
+        seleniumInstance.randomWait(8);
     }
 
-    @PostMapping("/startJob")
-    public Result startJob(@RequestBody BotJob botJob) throws SchedulerException {
-        return botInstanceService.startJob(botJob);
+    private void clickTask(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+        String mainHandle = webDriver.getWindowHandle();
+
+        while (true) {
+            try {
+                webDriver.switchTo().window(mainHandle);
+                webDriver.navigate().refresh();
+                seleniumInstance.randomWait(3);
+                Set<String> handles = webDriver.getWindowHandles();
+                WebElement webElement = seleniumInstance.xPathFindElement("//div[@id=\"pageBackground\"]/div[2]/div/div/div[2]/div[\n" +
+                        "  not(contains(div/a/div[2]/div[2]/span, 'Claimed')) \n" +
+                        "  and \n" +
+                        "  count(div/a/div[2]/div) != 2\n" +
+                        "  and \n" +
+                        "  not(contains(div/a/div/div[2], 'Connect'))\n" +
+                        "  and \n" +
+                        "  not(contains(div/a/div/div[2], 'Youtube to learn'))\n" +
+                        "]", 60);
+
+                seleniumInstance.scrollTo(webElement);
+                seleniumInstance.randomWait(2);
+                webElement.click();
+
+                seleniumInstance.xPathClick("//*[@id=\"moduleGriddedContainer\"]/div/div[2]/div[2]/div[1]/div[2]/div/div/div[2]/a", 60);
+
+                seleniumInstance.randomWait(8);
+                Set<String> after = webDriver.getWindowHandles();
+                after.removeAll(handles);
+
+                for (String handle : after) {
+                    webDriver.switchTo().window(handle);
+                    webDriver.close();
+                }
+                webDriver.switchTo().window(mainHandle);
+
+                // 回到主页面
+                seleniumInstance.xPathClick("//*[@id=\"moduleGriddedContainer\"]/div/div[1]", 60);
+                seleniumInstance.randomWait(8);
+            }catch (Exception e) {
+                log.error(e.getMessage(), e);
+                break;
+            }
+        }
+        webDriver.switchTo().window(mainHandle);
+        webDriver.get("https://hub.beamable.network/modules/questsold");
     }
 
-    @PostMapping("/pauseJob")
-    public Result pauseJob(@RequestBody BotJob botJob) throws SchedulerException {
-        return botInstanceService.pauseJob(botJob);
-    }
 
-    @PostMapping("/deleteJob")
-    public Result deleteJob(@RequestBody BotJob botJob) throws SchedulerException {
-        return botInstanceService.deleteJob(botJob);
-    }
+    private void taskClaim(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+        try {
+            TimeUnit.SECONDS.sleep(5);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
 
-    @PostMapping("/pageQueryAccount")
-    public Result pageQueryAccount(@RequestBody BotInstanceAccountQuery accountQuery)  {
-        return botInstanceService.conditionPageQueryAccount(accountQuery);
+        while (true) {
+            try {
+                WebElement webElement = seleniumInstance.xPathFindElement("//div[@id=\"pageBackground\"]/div[2]/div/div/div[2]/div[contains(div/a/div[2]/div[2], 'Claimable')]", 60);
+
+                seleniumInstance.scrollTo(webElement);
+                seleniumInstance.randomWait(3);
+                webElement.click();
+
+                seleniumInstance.xPathClick("//button[text()='claim reward']", 60);
+                seleniumInstance.xPathClick("//button[text()='Close']", 60);
+
+                seleniumInstance.randomWait();
+                // 回到主页面
+                seleniumInstance.xPathClick("//*[@id=\"moduleGriddedContainer\"]/div/div[1]", 60);
+                seleniumInstance.randomWait();
+            }catch (Exception e) {
+                log.error(e.getMessage(), e);
+                break;
+            }
+        }
     }
 }
-package cn.com.vortexa.bot_platform.controller;
+package cn.com.vortexa.script_bot.daily.enos;
 
-import cn.com.vortexa.bot_platform.service.IBotLaunchConfigService;
-import cn.com.vortexa.bot_platform.service.IScriptNodeService;
-import cn.com.vortexa.bot_platform.vo.ScriptNodeDetail;
-import cn.com.vortexa.bot_platform.vo.ScriptNodeVO;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.BotInstance;
+
+import cn.com.vortexa.browser_control.SeleniumInstance;
+import cn.com.vortexa.browser_control.constants.BrowserDriverType;
+import cn.com.vortexa.browser_control.execute.ExecuteGroup;
+import cn.com.vortexa.browser_control.execute.ExecuteItem;
+import cn.com.vortexa.common.constants.BotJobType;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.script_node.anno.BotApplication;
+import cn.com.vortexa.script_node.anno.BotMethod;
+import cn.com.vortexa.script_node.bot.selenium.AccountFingerBrowserSelenium;
+import cn.com.vortexa.script_node.bot.selenium.FingerBrowserBot;
+import cn.com.vortexa.script_node.dto.selenium.ACBotTypedSeleniumExecuteInfo;
+import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.StrUtil;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.*;
+import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
 
-import java.io.IOException;
 import java.util.List;
-import java.util.concurrent.ExecutionException;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 /**
- * <p>
- * 前端控制器
- * </p>
- *
- * @author com.helei
- * @since 2025-04-08
+ * @author helei
+ * @since 2025-05-07
  */
-@RestController
-@RequestMapping("/script-node")
-public class ScriptNodeController {
+@Slf4j
+@BotApplication(
+        name = "enos_bot"
+)
+public class EnosBot extends FingerBrowserBot {
+    private static final String MAIN_PAGE_URL = "https://speedrun.enso.build/";
 
-    @Autowired
-    private IScriptNodeService scriptNodeService;
+    @Override
+    protected BrowserDriverType browserDriverType() {
+        return BrowserDriverType.BIT_BROWSER;
+    }
 
-    @Autowired
-    private IBotLaunchConfigService botLaunchConfigService;
+    @Override
+    protected FingerBrowserBot getInstance() {
+        return this;
+    }
 
-    @PostMapping("/remote-config/{scriptNodeName}")
-    public Result remoteConfig(@PathVariable("scriptNodeName") String scriptNodeName) {
-        String configStr = null;
-        try {
-            configStr = scriptNodeService.loadScriptNodeConfig(scriptNodeName);
-            if (StrUtil.isBlank(configStr)) {
-                return Result.fail(scriptNodeName + " config is empty");
+    @BotMethod(jobType = BotJobType.ONCE_TASK)
+    public void dailyJob(AccountContext accountContext) {
+        super.syncAccountFBInvoker(
+            "daily_job",
+            accountContext,
+            () -> ACBotTypedSeleniumExecuteInfo
+                .builder()
+                .waitTime(60)
+                .waitTimeUnit(TimeUnit.MINUTES)
+                .seleniumExecuteChain(List.of(
+                    ExecuteGroup
+                        .builder().name("每日DEFI").enterCondition((webDriver, params) -> {
+                            try {
+                                webDriver.get(MAIN_PAGE_URL);
+                                TimeUnit.SECONDS.sleep(5);
+                            } catch (InterruptedException e) {
+                                throw new RuntimeException(e);
+                            }
+                            return true;
+                        })
+                        .executeItems(List.of(
+                            ExecuteItem.builder().name("创建DEFI").executeLogic(this::createDailyDefi).build()
+                        ))
+                        .build(),
+                    ExecuteGroup
+                        .builder().name("app点击").enterCondition((webDriver, params) -> {
+                            try {
+                                webDriver.get(MAIN_PAGE_URL);
+                                TimeUnit.SECONDS.sleep(5);
+                            } catch (InterruptedException e) {
+                                throw new RuntimeException(e);
+                            }
+                            return true;
+                        })
+                        .executeItems(List.of(
+                            ExecuteItem.builder().name("点击app").executeLogic(this::clickApp).build()
+                        ))
+                        .build()
+                ))
+                .build()
+        );
+    }
+
+
+    private void clickApp(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+        String mainHandle = webDriver.getWindowHandle();
+        seleniumInstance.xPathClick("//*[@id=\"header\"]/a[2]", 30);
+        List<WebElement> pageIdxs = seleniumInstance.xPathFindElements("/html/body/div[1]/main/div/div/div[5]/ul/li");
+        for (WebElement pageIdx : pageIdxs) {
+            String title = pageIdx.getDomAttribute("title");
+            if (StrUtil.isEmpty(title)) {
+                continue;
             }
-            return Result.ok(configStr);
-        } catch (IOException e) {
-            return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
+            try {
+                int i = Integer.parseInt(title);
+                logger.info(getInstance() + " start click page " + i);
+                seleniumInstance.scrollTo(pageIdx);
+                seleniumInstance.randomWait(3);
+                pageIdx.click();
+
+                seleniumInstance.randomWait(8);
+                List<WebElement> webElements = seleniumInstance.xPathFindElements("/html/body/div[1]/main/div/div/div[4]/a[count(button/div/div) = 2]");
+
+                for (WebElement webElement : webElements) {
+                    Set<String> before = webDriver.getWindowHandles();
+
+                    seleniumInstance.scrollTo(webElement);
+                    seleniumInstance.randomWait(2);
+                    webElement.click();
+                    seleniumInstance.randomWait(5);
+
+                    Set<String> after = webDriver.getWindowHandles();
+                    after.removeAll(before);
+                    for (String handle : after) {
+                        webDriver.switchTo().window(handle);
+                        webDriver.close();
+                    }
+                    webDriver.switchTo().window(mainHandle);
+
+                    seleniumInstance.randomWait(5);
+                }
+            } catch (Exception e) {
+                log.debug(e.getMessage());
+            }
+        }
+
+    }
+
+    private void createDailyDefi(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+        seleniumInstance.xPathClick("//*[@id=\"video-container\"]/div[2]/div/a[1]", 60);
+
+        WebElement webElement = seleniumInstance.xPathFindElement("/html/body/div[1]/main/div/div/div[4]/button/div/div/span[2]", 30);
+        seleniumInstance.randomWait(4);
+        int count = 5;
+        if (StrUtil.isNotBlank(webElement.getText())) {
+            String str = webElement.getText();
+            if (webElement.getText().contains("Resets")) {
+                count = 0;
+                logger.info(seleniumInstance.getInstanceId() + " today create finish");
+            } else {
+                str = str.replace("(", "").replace(")", "");
+                count = Integer.parseInt(str.split(" ")[0]);
+            }
+        }
+        if (count <= 0) {
+            return;
+        }
+        logger.info(seleniumInstance.getInstanceId() + " today remaining " + count);
+        AccountFingerBrowserSelenium afbs = (AccountFingerBrowserSelenium) seleniumInstance;
+        AccountContext accountContext = afbs.getAccountContext();
+
+        for (int i = 0; i < count; i++) {
+            seleniumInstance.xPathClick("/html/body/div[1]/main/div/div/div[4]/button", 15);
+            WebElement nameInput = seleniumInstance.xPathFindElement("//*[@id=\"name\"]");
+            String name = randomStr();
+            nameInput.sendKeys(name);
+            seleniumInstance.randomWait(2);
+            WebElement subdomainInput = seleniumInstance.xPathFindElement("//*[@id=\"subdomain\"]");
+            String subdomain = randomStr();
+            subdomainInput.sendKeys(subdomain);
+            seleniumInstance.randomWait(2);
+            String username = accountContext.getTwitter().getUsername();
+            WebElement twitterInput = seleniumInstance.xPathFindElement("//*[@id=\"twitter\"]");
+            twitterInput.sendKeys(username);
+            seleniumInstance.randomWait(2);
+            seleniumInstance.xPathClick("/html/body/div[1]/main/div/div/form/button[1]", 30);
+
+            logger.info(seleniumInstance.getInstanceId() + " create defi finish idx[%s] name[%s] subdomain[%s]".formatted(
+                    i + 1, name, subdomain
+            ));
+            seleniumInstance.randomWait(3);
+            seleniumInstance.xPathClick("/html/body/div[1]/main/div/div/div[2]/button", 30);
         }
     }
 
-    @PostMapping("/remote-config")
-    public Result botRemoteConfig(
-            @RequestParam("scriptNodeName") String scriptNodeName,
-            @RequestParam("botKey") String botKey
-    ) {
-        return Result.ok(botLaunchConfigService.queryScriptNodeBotLaunchConfig(scriptNodeName, botKey));
-    }
-
-    @PostMapping("/remote-config/all")
-    public Result allBotRemoteConfig(
-        @RequestParam("scriptNodeName") String scriptNodeName
-    ) {
-        return Result.ok(botLaunchConfigService.queryScriptNodeAllBotLaunchConfig(scriptNodeName));
-    }
-
-    @PostMapping("/all")
-    public Result queryAllScriptNode() {
-        List<ScriptNodeVO> list = scriptNodeService.queryAllScriptNode();
-        return Result.ok(list);
-    }
-
-    @PostMapping("/detail/{scriptNodeName}")
-    public Result queryScriptNodeDetail(@PathVariable("scriptNodeName") String scriptNodeName) {
-        ScriptNodeDetail detail = scriptNodeService.queryScriptNodeDetail(scriptNodeName);
-        return detail == null ? Result.fail("detail query error") : Result.ok(detail);
-    }
-
-
-    @PostMapping("/start_bot")
-    public Result startBot(@RequestBody BotInstance botInstance) throws ExecutionException, InterruptedException {
-        return scriptNodeService.startBot(
-                botInstance.getScriptNodeName(),
-                botInstance.getBotKey()
-        );
-    }
-
-    @PostMapping("/stop_bot")
-    public Result stopBot(@RequestBody BotInstance botInstance) {
-        return scriptNodeService.stopBot(
-                botInstance.getScriptNodeName(),
-                botInstance.getBotKey()
-        );
+    private static @NotNull String randomStr() {
+        return RandomUtil.randomString("1234567890qwertyuiopasdfghjklzxcvbnm", 20);
     }
 }
-package cn.com.vortexa.bot_platform.entity;
+package cn.com.vortexa.script_bot.daily.magic_newton_v2;
 
-import com.baomidou.mybatisplus.annotation.FieldFill;
-import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.TableField;
-import com.baomidou.mybatisplus.annotation.TableId;
-import com.baomidou.mybatisplus.annotation.TableLogic;
-import com.baomidou.mybatisplus.annotation.TableName;
-
-import cn.com.vortexa.common.util.typehandler.LocalDateTimeTypeHandler;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-
-import java.time.LocalDateTime;
-
-/**
- * @author h30069248
- * @since 2025/5/8 15:01
- */
-@Data
-@Builder
-@AllArgsConstructor
-@NoArgsConstructor
-@TableName("t_bot_launch_config")
-public class BotLaunchConfig {
-    @TableId(value = "id", type = IdType.AUTO)
-    private Integer id;
-
-    @TableField("script_node_name")
-    private String scriptNodeName;
-
-    @TableField("bot_name")
-    private String botName;
-
-    @TableField("bot_key")
-    private String botKey;
-
-    @TableField("custom_config")
-    private String customConfig;
-
-    @TableField("account_config")
-    private String accountConfig;
-
-    @TableField(value = "insert_datetime", fill = FieldFill.INSERT, typeHandler = LocalDateTimeTypeHandler.class)
-    private LocalDateTime insertDatetime;
-
-    @TableField(value = "update_datetime", fill = FieldFill.INSERT_UPDATE, typeHandler = LocalDateTimeTypeHandler.class)
-    private LocalDateTime updateDatetime;
-
-    @TableField(value = "valid", fill = FieldFill.INSERT)
-    @TableLogic
-    private Integer valid;
-}
-package cn.com.vortexa.bot_platform.mapper;
-
-import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-
-import cn.com.vortexa.bot_platform.entity.BotLaunchConfig;
-
-/**
- * <p>
- *  Mapper 接口
- * </p>
- *
- * @author com.helei
- * @since 2025-02-07
- */
-public interface BotLaunchConfigMapper extends BaseMapper<BotLaunchConfig> {
-
-}
-package cn.com.vortexa.bot_platform.script_control.service;
-
-import cn.com.vortexa.bot_platform.constants.VortexaPlatFormConstants;
-import cn.com.vortexa.bot_platform.service.IScriptNodeService;
-import cn.com.vortexa.common.dto.control.RegisteredScriptNode;
-import cn.com.vortexa.common.dto.control.ServiceInstance;
-import cn.com.vortexa.common.entity.ScriptNode;
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.YamlConfigLoadUtil;
-import cn.com.vortexa.control.constant.RegistryState;
-import cn.com.vortexa.control_server.service.IRegistryService;
-import cn.com.vortexa.common.util.ServerInstanceUtil;
-import cn.hutool.core.util.StrUtil;
-import com.alibaba.fastjson.JSON;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import cn.com.vortexa.browser_control.SeleniumInstance;
+import cn.com.vortexa.browser_control.constants.BrowserDriverType;
+import cn.com.vortexa.browser_control.execute.ExecuteGroup;
+import cn.com.vortexa.browser_control.execute.ExecuteItem;
+import cn.com.vortexa.script_node.anno.BotApplication;
+import cn.com.vortexa.script_node.bot.selenium.FingerBrowserBot;
+import cn.com.vortexa.script_node.dto.selenium.ACBotTypedSeleniumExecuteInfo;
+import cn.hutool.core.lang.Pair;
 import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.By;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.WebElement;
+import org.openqa.selenium.interactions.Actions;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 
 /**
- * 数据库注册服务
- *
- * @author com.helei
- * @since 2025/4/8 17:37
+ * @author helei
+ * @since 2025-04-05
  */
 @Slf4j
-public class DBRegistryService implements IRegistryService {
+@BotApplication(
+        name = "magic_newton_v2"
+)
+public class MagicNewtonBotV2 extends FingerBrowserBot {
 
-    private final IScriptNodeService scriptNodeService;
-    private final LinkedBlockingQueue<RegisteredScriptNode> updatedCache = new LinkedBlockingQueue<>();
-    private boolean running = true;
+    public static final String TARGET_SITE_URL = "https://www.magicnewton.com/portal/rewards";
 
-    public DBRegistryService(
-            IScriptNodeService scriptNodeService,
-            ExecutorService executorService
-    ) {
-        this.scriptNodeService = scriptNodeService;
+    private static final Pattern countPattern = Pattern.compile("(\\d+)/(\\d+)");
 
-        executorService.execute(() -> {
-            while (running) {
+    @Override
+    protected BrowserDriverType browserDriverType() {
+        return BrowserDriverType.BIT_BROWSER;
+    }
+
+    @Override
+    protected FingerBrowserBot getInstance() {
+        return this;
+    }
+
+    protected ACBotTypedSeleniumExecuteInfo buildExecuteGroupChain() {
+        ArrayList<ExecuteGroup> list = new ArrayList<>();
+        list.add(ExecuteGroup
+                .builder().name("摇筛子").enterCondition((webDriver, params) -> {
+                    try {
+                        webDriver.get(TARGET_SITE_URL);
+                        TimeUnit.SECONDS.sleep(5);
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                    return true;
+                })
+                .executeItems(List.of(
+                        ExecuteItem.builder().name("进入摇骰子界面").executeLogic(this::enterDice).build()
+                ))
+                .build()
+        );
+
+        list.add(ExecuteGroup
+                .builder().name("扫雷").enterCondition((webDriver, seleniumInstance) -> {
+                    webDriver.get(seleniumInstance.getParams().getTargetWebSite());
+                    try {
+                        webDriver.get(TARGET_SITE_URL);
+                        TimeUnit.SECONDS.sleep(5);
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                    return true;
+                })
+                .executeItems(List.of(
+                        ExecuteItem.builder().name("进入扫雷界面").executeLogic(this::enterScanBoom).build()
+                        , ExecuteItem.builder().name("扫雷。。。").executeLogic(this::scanBoomProcess).build()
+                ))
+                .build()
+        );
+
+        return new ACBotTypedSeleniumExecuteInfo();
+    }
+
+
+    private void enterDice(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+        seleniumInstance.xPathClick("//p[text()='Roll now']");
+
+        try {
+            seleniumInstance.xPathClick("//button[./div/p[text()=\"Let's roll\"]]", 10);
+            seleniumInstance.xPathClick("//p[text()='Throw Dice']", 0);
+            seleniumInstance.xPathClick("//p[text()='Return Home']", 10);
+        } catch (Exception e) {
+            logger.warn(seleniumInstance.getInstanceId() + " cannot dice");
+        }
+    }
+
+    private void enterScanBoom(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+        seleniumInstance.randomWait();
+        seleniumInstance.xPathClick("//p[text()='Play now']", 10);
+        try {
+            seleniumInstance.xPathClick("//button[./div[text()='Continue']]", 10);
+        } catch (Exception e) {
+            logger.warn(seleniumInstance.getInstanceId() + " may already in scan boom page");
+        }
+    }
+
+    private void scanBoomProcess(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+        String msInfo = seleniumInstance.xPathFindElement("//div[@class=\"ms-info\"]").getText();
+        Matcher matcher = countPattern.matcher(msInfo);
+        int current = 0;
+        int total = 0;
+        if (matcher.find()) {
+            current = Integer.parseInt(matcher.group(1));
+            total = Integer.parseInt(matcher.group(2));
+        }
+        logger.info(seleniumInstance.getInstanceId() + " scan boom [%s/%s]".formatted(current, total));
+        if (total == current) {
+            logger.warn(seleniumInstance.getInstanceId() + " count limit");
+            return;
+        }
+        // 扫雷
+        playGame(webDriver, seleniumInstance);
+    }
+
+    private void playGame(WebDriver webDriver, SeleniumInstance seleniumInstance) {
+        String instanceId = seleniumInstance.getInstanceId();
+
+        Actions actions = new Actions(webDriver);
+
+        int playLimit = 3;
+        int playCount = 0;
+        int scanCount = 0;
+        Set<Integer> excludeIndex = new HashSet<>();
+
+        while (true) {
+            Map<Integer, WebElement> index2ElementMap = new HashMap<>();
+            seleniumInstance.xPathFindElement("//div[@class=\"fPSBzf bYPztT dKLBtz cMGtQw gamecol\"]", 30);
+            List<WebElement> rowsElement = seleniumInstance.xPathFindElements("//div[@class=\"fPSBzf bYPztT dKLBtz cMGtQw gamecol\"]");
+            List<List<Integer>> map = new ArrayList<>(rowsElement.size());
+
+            Set<Integer> knownIndex = new HashSet<>();
+
+            for (int x = 0; x < rowsElement.size(); x++) {
+                List<WebElement> col = rowsElement.get(x).findElements(
+                        By.xpath("./div/div")
+                );
+                List<Integer> line = new ArrayList<>(col.size());
+                for (int y = 0; y < col.size(); y++) {
+                    WebElement item = col.get(y);
+                    int index = x * col.size() + y;
+                    index2ElementMap.put(index, item);
+                    String text = item.getText().trim();
+                    String style = item.getDomAttribute("style");
+                    String divClass = item.getDomAttribute("class");
+
+                    if(excludeIndex.contains(index)){
+                        line.add(-1);
+                    } else if (!text.isEmpty() && text.matches("\\d+")) {
+                        line.add(Integer.parseInt(text));
+                    } else if (style != null && style.contains("background-color: transparent")
+                            && style.contains("border: none")
+                            && style.contains("box-shadow: none")
+                            && style.contains("color: white")) {
+                        line.add(0);
+                    } else if (divClass != null && divClass.contains("tile-flagged")) {
+                        line.add(-1);
+                    } else {
+                        knownIndex.add(index);
+                        line.add(null);
+                    }
+                }
+                map.add(line);
+            }
+
+            Map<String, Set<Pair<Integer, Integer>>> result = MinesweeperSolver.solve(map);
+            Set<Pair<Integer, Integer>> toClick = result.get("click");
+            Set<Pair<Integer, Integer>> boom = result.get("boom");
+
+            logger.info(instanceId + " [%s] scan count[%s]. map resolve finish :\n click[%s] boom[%s]\n%s".formatted(
+                    playCount, scanCount, toClick.size(), boom.size(), printMap(map)
+            ));
+
+            // 右击炸弹
+            for (Pair<Integer, Integer> pos : boom) {
+                int index = pos.getKey() * map.getFirst().size() + pos.getValue();
+                excludeIndex.add(index);
+                actions.contextClick(index2ElementMap.get(index)).perform();
+            }
+
+            // 点击可点击区域
+            for (Pair<Integer, Integer> pos : toClick) {
+                int index = pos.getKey() * map.getFirst().size() + pos.getValue();
+                index2ElementMap.get(index).click();
+            }
+
+            if (toClick.isEmpty() && boom.isEmpty()) {
+                Set<Integer> finalExcludeIndex = excludeIndex;
+                List<Integer> list = knownIndex.stream().filter(i->!finalExcludeIndex.contains(i)).toList();
+                index2ElementMap.get(list.get(getRandom().nextInt(0, list.size()))).click();
+            }
+
+            try {
+                WebElement returnHome = webDriver.findElement(By.xpath("//button[./div[text()='Play Again']]"));
+                returnHome.click();
+                playCount++;
+                scanCount = 0;
+                excludeIndex.clear();
+                if (playCount > playLimit) {
+                    return;
+                }
+            } catch (Exception e) {
                 try {
-                    saveRegistryInfo();
-                } catch (InterruptedException e) {
-                    log.warn("save registry info task interrupted");
-                    running = false;
-                } catch (Exception e) {
-                    log.error("save registry error", e);
+                    WebElement returnHome = webDriver.findElement(By.xpath("//button[./div[text()='Return Home']]"));
+                    returnHome.click();
+                    // 没有再来一次，只有返回
+                    return;
+                } catch (Exception e2) {
+                    scanCount++;
+                    logger.warn(instanceId + " [%s] scan count[%s] next epoch......".formatted(
+                            playCount, scanCount
+                    ));
+                    if (scanCount > 50) {
+                        logger.error(instanceId + " [%s] scan count[%s] out limit 50......".formatted(
+                                playCount, scanCount
+                        ));
+                        break;
+                    }
                 }
             }
+        }
+    }
+
+    private String printMap(List<List<Integer>> map) {
+        StringBuilder sb = new StringBuilder();
+        for (List<Integer> integers : map) {
+            sb.append(integers).append('\n');
+        }
+        return sb.toString();
+    }
+}
+package cn.com.vortexa.script_node.bot.selenium;
+
+import cn.com.vortexa.browser_control.OptSeleniumInstance;
+import cn.com.vortexa.browser_control.dto.SeleniumParams;
+import cn.com.vortexa.browser_control.execute.ExecuteGroup;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.common.util.log.AppendLogger;
+import cn.com.vortexa.script_node.dto.selenium.ACBotTypedSeleniumExecuteInfo;
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+import org.openqa.selenium.WebDriver;
+import org.openqa.selenium.chrome.ChromeOptions;
+import org.openqa.selenium.remote.RemoteWebDriver;
+
+import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.util.*;
+import java.util.concurrent.locks.ReentrantLock;
+
+@Slf4j
+public class AccountFingerBrowserSelenium extends OptSeleniumInstance {
+
+    private final ReentrantLock lock = new ReentrantLock();
+
+    @Getter
+    private final AccountContext accountContext;
+
+    @Override
+    protected void addDefaultChromeOptions(ChromeOptions chromeOptions) {
+
+    }
+
+    /**
+     * 执行链信息
+     */
+    private final List<ACBotTypedSeleniumExecuteInfo> executeInfoList = new ArrayList<>();
+
+    @Getter
+    private volatile boolean running = false;
+
+    public AccountFingerBrowserSelenium(
+            AccountContext accountContext,
+            SeleniumParams params,
+            AppendLogger logger
+    ) throws IOException {
+        super(accountContext.getSimpleInfo(), params, logger);
+        this.accountContext = accountContext;
+    }
+
+    @Override
+    protected WebDriver createWebDriver(ChromeOptions chromeOptions) {
+        if (getWebDriver() != null) return getWebDriver();
+
+        try {
+            URL remoteWebDriverUrl = new URL(getParams().getDriverPath());
+            chromeOptions.setCapability("timeouts", new HashMap<String, Integer>() {{
+                put("script", 30000);  // 设置脚本执行超时
+                put("pageLoad", 30000);  // 设置页面加载超时
+                put("implicit", 30000);  // 设置隐式等待超时
+            }});
+            return new RemoteWebDriver(remoteWebDriverUrl, chromeOptions);
+        } catch (MalformedURLException e) {
+            log.error("[{}] create remote web driver error", getInstanceId(), e);
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 开始账户指纹浏览器selenium控制
+     */
+    public void startACFBSelenium() {
+        lock.lock();
+        try {
+            running = true;
+            getLogger().info(getInstanceId() + " start all added bot selenium execute...");
+
+            for (ACBotTypedSeleniumExecuteInfo executeInfo : executeInfoList) {
+                try {
+                    getLogger().info("[%s]-[%s]-[%s] start selenium execute...".formatted(
+                        getInstanceId(), executeInfo.getBotKey(), executeInfo.getJobName()
+                    ));
+                    List<ExecuteGroup> seleniumExecuteChain = super.getSeleniumExecuteChain();
+                    seleniumExecuteChain.clear();
+                    seleniumExecuteChain.addAll(executeInfo.getSeleniumExecuteChain());
+
+                    syncStart();
+                    getLogger().info("[%s]-[%s]-[%s] selenium execute finish".formatted(
+                        getInstanceId(), executeInfo.getBotKey(), executeInfo.getJobName()
+                    ));
+                } catch (Exception e) {
+                    getLogger().error("[%s]-[%s]-[%s] selenium execute error".formatted(
+                        getInstanceId(), executeInfo.getBotKey(), executeInfo.getJobName()
+                    ), e);
+                    randomWait(3);
+                }
+            }
+
+            getLogger().info(getInstanceId() + " all selenium execute finish");
+        } finally {
+            getLogger().debug(getInstanceId() + "  closing webDriver");
+            close();
+            getLogger().debug(getInstanceId() + " close webDriver finish");
+
+            running = false;
+            lock.unlock();
+        }
+    }
+
+    /**
+     * 添加执行链
+     *
+     * @param executeInfo executeInfo
+     */
+    public void addExecuteInfo(ACBotTypedSeleniumExecuteInfo executeInfo) {
+        getLogger().info("[%s]-[%s] adding execute info...".formatted(getInstanceId(), executeInfo.getBotKey()));
+        lock.lock();
+        try {
+            executeInfoList.add(executeInfo);
+            log.info("[%s]-[%s] add execute info finish".formatted(getInstanceId(), executeInfo.getBotKey()));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    @Override
+    protected void doClose() {
+        super.doClose();
+        executeInfoList.clear();
+    }
+}
+package cn.com.vortexa.script_node.bot.selenium;
+
+import cn.com.vortexa.browser_control.constants.BrowserDriverType;
+import cn.com.vortexa.browser_control.driver.BitBrowserDriver;
+import cn.com.vortexa.browser_control.driver.FingerprintBrowserDriver;
+import cn.com.vortexa.browser_control.dto.SeleniumParams;
+import cn.com.vortexa.common.dto.config.AutoBotConfig;
+import cn.com.vortexa.common.entity.AccountContext;
+import cn.com.vortexa.script_node.bot.AutoLaunchBot;
+import cn.com.vortexa.script_node.dto.selenium.ACBotTypedSeleniumExecuteInfo;
+import cn.com.vortexa.script_node.service.BotApi;
+import cn.hutool.core.lang.Pair;
+import lombok.extern.slf4j.Slf4j;
+
+import org.jetbrains.annotations.NotNull;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
+
+/**
+ * @author com.helei
+ * @since 2025/4/9 14:35
+ */
+@Slf4j
+public abstract class FingerBrowserBot extends AutoLaunchBot<FingerBrowserBot> {
+
+    public static final int BROWSER_BATCH_SIZE = 4; //  浏览器批大小
+    public static final String DEFAULT_WEB_SITE_URL = "http://www.google.com";   // 默认打开地址Key
+    public static final String DEFAULT_WEB_SITE_URL_KEY = "default_web_site_url";   // 默认打开地址Key
+    public static final String FINGER_BROWSER_API_URL_KEY = "finger_browser_api_url"; // 指纹浏览器api地址Key
+    public static final String CHROME_DRIVER_URL_KEY = "chrome_driver_url"; // chromedriver连接地址Key
+    public static final String FINGER_BROWSER_SEQ_KEY = "finger_browser_seq";   //  指纹浏览器序号Key
+
+    private static final Set<Integer> currentWindowSeq = new HashSet<>();   //  当前窗口长度
+    private static final ConcurrentHashMap<AccountContext, AccountFingerBrowserSelenium> accountFBSeleniumMap = new ConcurrentHashMap<>();
+    private static final Map<String, ACBotTypedSeleniumExecuteInfo> acExecuteInfos = new HashMap<>();
+    private static final Map<Integer, ReentrantLock> fingerBrowserLockMap = new HashMap<>();
+
+    private static volatile FingerprintBrowserDriver browserDriver;
+    private static String chromeDriverUrl;
+    private static String fingerBrowserApiUrl;
+
+    private String openUrl = DEFAULT_WEB_SITE_URL;
+
+    @Override
+    protected void botStopped() {
+        super.botStopped();
+        Iterator<Map.Entry<AccountContext, AccountFingerBrowserSelenium>> iterator = accountFBSeleniumMap.entrySet()
+                .iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<AccountContext, AccountFingerBrowserSelenium> entry = iterator.next();
+            entry.getValue().close();
+            iterator.remove();
+        }
+        acExecuteInfos.clear();
+    }
+
+    @Override
+    protected void botInitialized(AutoBotConfig botConfig, BotApi botApi) {
+        if (chromeDriverUrl == null) {
+            chromeDriverUrl = (String) botConfig.getCustomConfig().get(CHROME_DRIVER_URL_KEY);
+        }
+        if (fingerBrowserApiUrl == null) {
+            fingerBrowserApiUrl = (String) botConfig.getCustomConfig().get(FINGER_BROWSER_API_URL_KEY);
+        }
+
+        openUrl = getDefaultWebSiteUrl(botConfig);
+        initBrowserDriver();
+    }
+
+    /**
+     * 账号的不同job之间同步运行指纹浏览器
+     *
+     * @param jobName   jobName
+     * @param accountContext    账户上下文
+     * @param seleniumExecuteInfoSupplier   生成执行信息
+     */
+    public void syncAccountFBInvoker(
+        String jobName,
+        AccountContext accountContext,
+        Supplier<ACBotTypedSeleniumExecuteInfo> seleniumExecuteInfoSupplier
+    ) {
+        // Step 1 获取（不存在则注册job的执行信息）
+        ACBotTypedSeleniumExecuteInfo executeInfo = tryGetJobSeleniumExecuteInfo(jobName, seleniumExecuteInfoSupplier);
+        if (executeInfo == null) {
+            return;
+        }
+
+        // Step 2 尝试获取浏览器的锁，来执行
+        int seq = Integer.parseInt((String) accountContext.getParams().get(FINGER_BROWSER_SEQ_KEY));
+        ReentrantLock fbLock = getFBLock(seq);
+
+        boolean isRun;
+        String simpleInfo = accountContext.getSimpleInfo();
+        try {
+            isRun = fbLock.tryLock(executeInfo.getWaitTime(), executeInfo.getWaitTimeUnit());
+        } catch (InterruptedException e) {
+            logger.warn(simpleInfo + " waiting for execute job " + jobName + " interrupted");
+            return;
+        }
+        if (!isRun) {
+            logger.warn(simpleInfo + " waiting for execute job timeout...");
+            return;
+        }
+
+        // Step 3 获取到锁，尝试获取浏览器控制实例，添加执行任务
+        try {
+            currentWindowSeq.add(seq);
+            AccountFingerBrowserSelenium browserSelenium = getAccountFingerBrowserSelenium(accountContext, seq);
+
+            if (!browserSelenium.isRunning()) {
+                browserDriver.flexAbleWindowBounds(new ArrayList<>(currentWindowSeq));
+                browserSelenium.startACFBSelenium();
+                accountFBSeleniumMap.remove(accountContext);
+            } else {
+                logger.warn(simpleInfo + " selenium is running...cancel new start");
+            }
+        } catch (Exception e) {
+            logger.error(simpleInfo + " - start selenium task error", e);
+        } finally {
+            currentWindowSeq.remove(seq);
+            if (fbLock.isHeldByCurrentThread()) {
+                fbLock.unlock();
+            }
+        }
+    }
+
+    private ACBotTypedSeleniumExecuteInfo tryGetJobSeleniumExecuteInfo(String jobName,
+        Supplier<ACBotTypedSeleniumExecuteInfo> seleniumExecuteInfoSupplier) {
+        ACBotTypedSeleniumExecuteInfo executeInfo = acExecuteInfos.compute(getAutoBotConfig().getBotKey() + "-" + jobName, (k, v) -> {
+            if(v == null) {
+                v = seleniumExecuteInfoSupplier.get();
+            }
+            return v;
+        });
+        if (executeInfo == null) {
+            logger.warn("no execute info for: " + jobName);
+            return null;
+        }
+        if (executeInfo.getWaitTime() == null || executeInfo.getWaitTimeUnit() == null) {
+            logger.warn("execute info params error, " + executeInfo);
+            return null;
+        }
+        if (executeInfo.getBotKey() == null) {
+            executeInfo.setBotKey(getAutoBotConfig().getBotKey());
+        }
+        if (executeInfo.getJobName() == null) {
+            executeInfo.setJobName(jobName);
+        }
+        return executeInfo;
+    }
+
+    /**
+     * 获取指纹浏览器窗口的锁
+     *
+     * @param seq   seq
+     * @return  ReentrantLock
+     */
+    private static @NotNull ReentrantLock getFBLock(int seq) {
+        return fingerBrowserLockMap.compute(seq, (k, v) -> {
+            if (v == null) {
+                v = new ReentrantLock();
+            }
+            return v;
         });
     }
 
-    @Override
-    public RegistryState registryService(ServiceInstance serviceInstance) {
-        if (serviceInstance == null) {
-            return RegistryState.PARAM_ERROR;
-        }
-        if (serviceInstance instanceof ScriptNode scriptNode) {
-            if (!scriptNode.usable() || StrUtil.isBlank(scriptNode.getScriptNodeName())) {
-                return RegistryState.PARAM_ERROR;
+    /**
+     * 获取浏览器控制实例
+     *
+     * @param accountContext    accountContext
+     * @param seq   seq
+     * @return  AccountFingerBrowserSelenium
+     */
+    private @NotNull AccountFingerBrowserSelenium getAccountFingerBrowserSelenium(AccountContext accountContext, int seq) {
+        return accountFBSeleniumMap.compute(accountContext, (k, v) -> {
+            if (v == null) {
+                try {
+                    v = new AccountFingerBrowserSelenium(
+                        accountContext,
+                            buildSeleniumParams(seq),
+                            logger
+                    );
+
+                    for (ACBotTypedSeleniumExecuteInfo acExecuteInfo : acExecuteInfos.values()) {
+                        v.addExecuteInfo(acExecuteInfo);
+                    }
+                } catch (IOException e) {
+                    throw new RuntimeException("create account selenium error", e);
+                }
             }
-            try {
-                String scriptNodeName = scriptNode.getScriptNodeName();
-
-                // 保存script node 对应的application.yaml文件
-                trySaveRawScriptNodeApplicationConfig(scriptNodeName, scriptNode.getNodeAppConfig());
-                scriptNodeService.insertOrUpdate(scriptNode);
-                return RegistryState.OK;
-            } catch (Exception e) {
-                log.error("update registry error", e);
-                return RegistryState.UNKNOWN_ERROR;
-            }
-        }
-
-        return RegistryState.STORE_ERROR;
-    }
-
-    @Override
-    public Boolean saveRegistryInfo() throws InterruptedException {
-        RegisteredScriptNode take = updatedCache.take();
-        log.debug("start save registry info - [{}]", take);
-        return scriptNodeService.insertOrUpdate(take.getScriptNode());
-    }
-
-    @Override
-    public List<RegisteredScriptNode> queryServiceInstance(ServiceInstance query) {
-        List<ScriptNode> list = null;
-        if (query == null) {
-            list = scriptNodeService.list();
-        } else if (query instanceof ScriptNode scriptNode) {
-            list = scriptNodeService.list(new QueryWrapper<>(scriptNode));
-        } else {
-            ScriptNode scriptNode = new ScriptNode();
-            scriptNode.setGroupId(query.getGroupId());
-            scriptNode.setServiceId(query.getServiceId());
-            scriptNode.setInstanceId(query.getInstanceId());
-
-            list = scriptNodeService.list(new QueryWrapper<>(
-                    scriptNode
-            ));
-        }
-
-        return list.stream().map(scriptNode -> new RegisteredScriptNode(scriptNode, true)).toList();
-    }
-
-    @Override
-    public List<RegisteredScriptNode> queryServiceInstance(String key) {
-        String[] split = key.split(ServerInstanceUtil.SERVICE_INSTANCE_KEY_DISPATCHER);
-        return queryServiceInstance(
-                ServiceInstance.builder().groupId(split[0]).serviceId(split[1]).instanceId(split[2]).build()
-        );
-    }
-
-    @Override
-    public List<RegisteredScriptNode> queryServiceInstance(String groupId, String serviceId, String clientId) {
-        return queryServiceInstance(
-                ServiceInstance.builder().groupId(groupId).serviceId(serviceId).instanceId(clientId).build()
-        );
-    }
-
-    @Override
-    public boolean existServiceInstance(String key) {
-        String[] split = key.split(ServerInstanceUtil.SERVICE_INSTANCE_KEY_DISPATCHER);
-        ScriptNode scriptNode = new ScriptNode();
-        scriptNode.setGroupId(split[0]);
-        scriptNode.setServiceId(split[1]);
-        scriptNode.setInstanceId(split[2]);
-        return scriptNodeService.exists(new QueryWrapper<>(scriptNode));
+            return v;
+        });
     }
 
     /**
-     * 保存ScriptNode的application.yaml文件。由于需要远程配置，仅在没有的时候创建
+     * 构建selenium参数
      *
-     * @param scriptNodeName scriptNodeName
-     * @param nodeAppConfig  nodeAppConfig
-     * @throws IOException IOException
+     * @return SeleniumParams
      */
-    private void trySaveRawScriptNodeApplicationConfig(String scriptNodeName, String nodeAppConfig) throws IOException {
-        synchronized (scriptNodeName.intern()) {
-            Path path = FileUtil.getScriptNodeConfig(scriptNodeName + File.separator + VortexaPlatFormConstants.SCRIPT_NODE_CONFIG_FILE);
-            if (!Files.exists(path)) {
-                YamlConfigLoadUtil.writeYamlFile(path, JSON.parseObject(nodeAppConfig, Map.class));
-            }
-        }
-    }
-}
-package cn.com.vortexa.bot_platform.service.impl;
+    private SeleniumParams buildSeleniumParams(Integer seq) {
+        String debuggerAddress = browserDriver.startWebDriverBySeq(seq);
 
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-
-import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.BotInfo;
-import cn.com.vortexa.bot_platform.mapper.BotInfoMapper;
-import cn.com.vortexa.bot_platform.service.IBotInfoService;
-import cn.com.vortexa.rpc.api.platform.IBotInfoRPC;
-import cn.hutool.core.util.StrUtil;
-import lombok.extern.slf4j.Slf4j;
-
-import org.springframework.stereotype.Service;
-
-import java.io.Serializable;
-import java.sql.SQLException;
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-07
- */
-@Slf4j
-@Service
-public class BotInfoServiceImpl extends AbstractBaseService<BotInfoMapper, BotInfo> implements IBotInfoService, IBotInfoRPC {
-
-
-    @Override
-    public Result bindBotAccountBaseInfo(Integer botId, String botKey, List<Integer> bindAccountBaseInfoList) {
-
-        // Step 1 参数校验
-        if (botId == null || StrUtil.isBlank(botKey)) {
-            log.error("Bot[{}]-[{}]绑定账户时参数botId/botKey为空", botId, botKey);
-            return Result.fail("参数botId/botKey不能为空");
-        }
-
-        BotInfo dbBotInfo = query().eq("id", botId).one();
-        if (dbBotInfo == null) {
-            log.error("Bot[{}]-[{}] 不存在该bot", botId, botKey);
-            return Result.fail("不存在该bot");
-        }
-
-        if (bindAccountBaseInfoList == null) bindAccountBaseInfoList = List.of();
-
-        return Result.ok(bindAccountBaseInfoList);
-    }
-
-    @Override
-    public boolean exist(BotInfo query) {
-        return baseMapper.exists(new QueryWrapper<>(query));
-    }
-
-    @Override
-    public List<BotInfo> batchQueryByIdsRPC(List<Serializable> ids) {
-        return super.batchQueryByIds(ids);
-    }
-
-    @Override
-    public Integer insertOrUpdateRPC(BotInfo botInfo) throws SQLException {
-        return insertOrUpdate(botInfo);
-    }
-
-    @Override
-    public List<BotInfo> conditionQueryRPC(Map<String, Object> filterMap) throws SQLException {
-        return conditionQuery(filterMap);
-    }
-}
-package cn.com.vortexa.bot_platform.service.impl;
-
-import cn.com.vortexa.bot_platform.dto.BotInstanceAccountQuery;
-import cn.com.vortexa.bot_platform.dto.BotJob;
-import cn.com.vortexa.bot_platform.dto.BotInstanceUpdate;
-import cn.com.vortexa.bot_platform.script_control.BotPlatformControlServer;
-import cn.com.vortexa.bot_platform.service.IBotLaunchConfigService;
-import cn.com.vortexa.bot_platform.service.IScriptNodeService;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.common.dto.job.AutoBotJobParam;
-import cn.com.vortexa.common.entity.ScriptNode;
-import cn.com.vortexa.common.exception.BotStartException;
-import cn.com.vortexa.common.vo.BotInstanceVO;
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.control.RegisteredScriptNode;
-import cn.com.vortexa.bot_platform.mapper.BotInfoMapper;
-import cn.com.vortexa.control.constant.WSControlSystemConstants;
-import cn.com.vortexa.db_layer.service.AbstractBaseService;
-import cn.com.vortexa.common.entity.BotInfo;
-import cn.com.vortexa.common.entity.BotInstance;
-import cn.com.vortexa.bot_platform.mapper.BotInstanceMapper;
-import cn.com.vortexa.bot_platform.service.IBotInstanceService;
-
-import cn.com.vortexa.common.dto.job.JobTrigger;
-import cn.com.vortexa.job.service.BotJobService;
-import cn.com.vortexa.job.util.TriggerConvertUtils;
-import cn.hutool.core.util.StrUtil;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-
-import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
-import lombok.extern.slf4j.Slf4j;
-
-import org.quartz.*;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.stereotype.Service;
-
-import java.io.IOException;
-import java.io.Serializable;
-import java.sql.SQLException;
-import java.util.*;
-import java.util.concurrent.ExecutionException;
-import java.util.stream.Collectors;
-
-/**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-18
- */
-@Slf4j
-@Service
-public class BotInstanceServiceImpl extends AbstractBaseService<BotInstanceMapper, BotInstance>
-        implements IBotInstanceRPC, IBotInstanceService {
-
-    @Autowired
-    private BotInfoMapper botInfoMapper;
-
-    @Lazy
-    @Autowired
-    private BotPlatformControlServer botControlServer;
-
-    @Autowired
-    private Scheduler scheduler;
-
-    @Autowired
-    private IScriptNodeService scriptNodeService;
-
-    @Autowired
-    private BotJobService botJobService;
-
-    @Lazy
-    @Autowired
-    private IBotLaunchConfigService botLaunchConfigService;
-
-    @Override
-    public PageResult<BotInstanceVO> conditionPageQueryAllInfo(Integer page, Integer limit,
-                                                               Map<String, Object> filterMap) throws SQLException, SchedulerException {
-
-        PageResult<BotInstance> result = super.conditionPageQuery(page, limit, filterMap);
-
-        // 填充botInfo
-        List<Integer> botIds = result.getList().stream().map(BotInstance::getBotId).toList();
-        Map<Integer, BotInfo> idMapBotInfo = botIds.isEmpty() ? new HashMap<>() : botInfoMapper.selectBatchIds(botIds)
-                .stream().collect(Collectors.toMap(BotInfo::getId, botInfo -> botInfo));
-
-        // 查询运行中的任务
-        Map<String, List<JobTrigger>> groupByBotKey = scheduler.getCurrentlyExecutingJobs()
-                .stream()
-                .map(context -> TriggerConvertUtils.fromQuartzTrigger(context.getTrigger()))
-
-                .collect(Collectors.groupingBy(JobTrigger::getJobGroup));
-
-        // 运行的bot
-        ArrayList<BotInstanceVO> voList = new ArrayList<>();
-        for (BotInstance instance : result.getList()) {
-
-            String botName = instance.getBotName();
-            String botKey = instance.getBotKey();
-
-            BotInstanceVO vo = new BotInstanceVO();
-
-            vo.setBotInstance(instance);
-            vo.setBotInfo(idMapBotInfo.get(instance.getBotId()));
-            Map<String, List<JobTrigger>> triggerMap
-                    = botJobService.queryScriptNodeBotJobs(instance.getScriptNodeName(), botKey);
-            vo.setJobTriggers(triggerMap);
-
-            voList.add(vo);
-
-            instance.addParam(BotInstance.BOT_INSTANCE_STATUS_KEY, botControlServer.getBotInstanceStatus(
-                    WSControlSystemConstants.DEFAULT_GROUP, botName, botKey
-            ));
-        }
-
-        return new PageResult<>(
-                result.getTotal(),
-                voList,
-                result.getPages(),
-                result.getPageNum(),
-                result.getPageSize()
-        );
-    }
-
-    @Override
-    public BotInstanceVO detail(String scriptNodeName, String botKey) throws IOException, SchedulerException {
-        if (StrUtil.isBlank(scriptNodeName) || StrUtil.isBlank(botKey)) {
-            throw new IllegalArgumentException("scriptNodeName or botKey should not be blank");
-        }
-        // Step 1 查询实例
-        BotInstance instance = getOne(new QueryWrapper<>(BotInstance.builder().scriptNodeName(scriptNodeName).botKey(botKey).build()));
-        if (instance == null) {
-            throw new RuntimeException("bot instance not found");
-        }
-        // Step 2 查询实例的botInfo
-        BotInfo botInfo = botInfoMapper.selectById(instance.getBotId());
-        if (botInfo == null) {
-            throw new RuntimeException("bot info not found");
-        }
-        // Step 3 查询实例的启动yaml配置
-        AutoBotConfig botLaunchConfig = botLaunchConfigService.queryScriptNodeBotLaunchConfig(scriptNodeName, botKey);
-        // Step 4 查询是否正在运行
-        boolean online = botControlServer.isScriptNodeBotOnline(
-                scriptNodeName,
-                instance.getBotName(),
-                botKey
-        );
-
-        // Step 5 查开始的任务
-        Map<String, List<JobTrigger>> triggerMap
-                = botJobService.queryScriptNodeBotJobs(scriptNodeName, botKey);
-
-        return BotInstanceVO.builder()
-                .botInstance(instance)
-                .botInfo(botInfo)
-                .botLaunchConfig(botLaunchConfig)
-                .online(online)
-                .jobTriggers(triggerMap)
+        return SeleniumParams
+                .builder()
+                .driverPath(chromeDriverUrl)
+                .experimentalOptions(List.of(new Pair<>("debuggerAddress", debuggerAddress)))
+                .targetWebSite(openUrl)
                 .build();
     }
 
-    @Override
-    public Result updateJobParam(BotInstanceUpdate saveBotJobParamParam) {
-        String scriptNodeName;
-        String botKey;
-        AutoBotJobParam jobParam;
-        if (saveBotJobParamParam == null
-                || (scriptNodeName = saveBotJobParamParam.getScriptNodeName()) == null
-                || (botKey = saveBotJobParamParam.getBotKey()) == null
-                || (jobParam = saveBotJobParamParam.getBotJobParam()) == null
-        ) {
-            return Result.fail("params error");
-        }
-
-        BotInstance botInstance = getOne(new QueryWrapper<>(BotInstance.builder().scriptNodeName(scriptNodeName).botKey(botKey).build()));
-        if (botInstance == null) {
-            return Result.fail("bot instance not found");
-        }
-
-        Map<String, AutoBotJobParam> jobParams = botInstance.getJobParams();
-        if (!jobParams.containsKey(jobParam.getJobName())) {
-            return Result.fail(jobParam.getJobName() + " job not found");
-        }
-
-        jobParams.put(jobParam.getJobName(), jobParam);
-        BotInstance update = BotInstance.builder().id(botInstance.getId()).jobParams(jobParams).build();
-
-        if (!updateById(update)) {
-            return Result.fail("update failed");
-        }
-
-        return Result.ok();
-    }
-
-    @Override
-    public Result saveBotInstanceLaunchConfig(String scriptNodeName, String botKey, String botLaunchConfig) throws IOException {
-        scriptNodeService.updateScriptNodeBotLaunchConfig(scriptNodeName, botKey, botLaunchConfig);
-        return Result.ok();
-    }
-
-    @Override
-    public Result conditionPageQueryAccount(BotInstanceAccountQuery accountQuery) {
-        BotInstance instance = getOne(
-                new QueryWrapper<>(BotInstance.builder()
-                        .scriptNodeName(accountQuery.getScriptNodeName())
-                        .botKey(accountQuery.getBotKey())
-                        .build())
-        );
-        if (instance == null) {
-            return Result.fail("bot instance not found");
-        }
-        ScriptNode scriptNode = scriptNodeService.queryByScriptNodeName(accountQuery.getScriptNodeName());
-
-        try {
-            return botControlServer.queryBotInstanceAccount(
-                    scriptNode,
-                    instance.getBotId(),
-                    instance.getBotName(),
-                    accountQuery.getBotKey(),
-                    accountQuery
-            ).get();
-        } catch (InterruptedException | ExecutionException e) {
-            log.error(e.getMessage(), e);
-            return Result.fail(e.getMessage());
-        }
-    }
-
-    @Override
-    public boolean exist(BotInstance query) {
-        return baseMapper.exists(new QueryWrapper<>(query));
-    }
-
-    @Override
-    public Boolean existsBotInstance(BotInstance query) {
-        return getBaseMapper().exists(new QueryWrapper<>(query));
-    }
-
-    @Override
-    public List<RegisteredScriptNode> queryOnLineInstance() {
-        List<RegisteredScriptNode> res = new ArrayList<>();
-        List<String> keys = botControlServer.getConnectionService().queryOnlineInstanceKey();
-        keys.forEach(key -> res.addAll(botControlServer.getRegistryService().queryServiceInstance(key)));
-        return res;
-    }
-
-    @Override
-    public Result startJob(BotJob botJob) throws SchedulerException {
-        String scriptNodeName;
-        String botKey;
-        String jobName;
-        if (botJob == null || (scriptNodeName = botJob.getScriptNodeName()) == null
-                || (botKey = botJob.getBotKey()) == null || (jobName = botJob.getJobName()) == null
-        ) {
-            return Result.fail("params error");
-        }
-        String jobGroup = BotJobService.botQuartzGroupBuilder(scriptNodeName, botKey);
-        JobKey jobKey = new JobKey(jobName, jobGroup);
-        TriggerKey triggerKey = new TriggerKey(jobName, jobGroup);
-
-        return switch (botJobService.queryJobStatus(jobKey)) {
-            case NONE, COMPLETE -> startRemoteScriptNodeBotJob(scriptNodeName, botKey, jobName);
-            case ERROR -> {
-                scheduler.resetTriggerFromErrorState(triggerKey);
-                scheduler.resumeTrigger(triggerKey);
-                yield Result.ok();
-            }
-            case PAUSED -> {
-                botJobService.resumeJob(jobKey);
-                yield Result.ok();
-            }
-            default -> Result.fail("job started");
-        };
-
-    }
-
-    @Override
-    public Result startRemoteScriptNodeBotJob(String scriptNodeName, String botKey, String jobName) {
-        try {
-            BotInstance instance = getOne(new QueryWrapper<>(BotInstance.builder().scriptNodeName(scriptNodeName).botKey(botKey).build()));
-            if (instance == null) {
-                return Result.fail("bot instance not found");
-            }
-            ScriptNode scriptNode = scriptNodeService.queryByScriptNodeName(scriptNodeName);
-
-            return botControlServer.startJob(
-                    scriptNode,
-                    instance.getBotName(),
-                    instance.getBotKey(),
-                    jobName
-            ).get();
-        } catch (InterruptedException | ExecutionException | BotStartException e) {
-            log.error("scriptNode[{}]botKey[{}]jobName[{}] start error", scriptNodeName, botKey, jobName, e);
-            return Result.fail(e.getCause() == null ? e.getMessage() : e.getCause().getMessage());
-        }
-    }
-
-
-    @Override
-    public Result pauseJob(BotJob botJob) throws SchedulerException {
-        if (botJobService.pauseJob(
-                botJob.getScriptNodeName(),
-                botJob.getBotKey(),
-                botJob.getJobName()
-        )) {
-            return Result.ok();
-        }
-        return Result.fail("pause failed");
-    }
-
-    @Override
-    public Result deleteJob(BotJob botJob) throws SchedulerException {
-        if (botJobService.deleteJob(
-                botJob.getScriptNodeName(),
-                botJob.getBotKey(),
-                botJob.getJobName()
-        )) {
-            return Result.ok();
-        } else {
-            return Result.fail("delete failed");
-        }
-    }
-
-    @Override
-    public List<BotInstance> batchQueryByIdsRPC(List<Serializable> ids) {
-        return super.batchQueryByIds(ids);
-    }
-
-    @Override
-    public Boolean existsBotInstanceRPC(BotInstance query) {
-        return existsBotInstance(query);
-    }
-
-    @Override
-    public Integer insertOrUpdateRPC(BotInstance instance) throws SQLException {
-        return insertOrUpdate(instance);
-    }
-
-    @Override
-    public BotInstance selectOneRPC(BotInstance query) {
-        return getOne(new QueryWrapper<>(query));
-    }
-}
-package cn.com.vortexa.bot_platform.service.impl;
-
-import com.alibaba.fastjson.JSONObject;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-
-import cn.com.vortexa.bot_platform.entity.BotLaunchConfig;
-import cn.com.vortexa.bot_platform.mapper.BotLaunchConfigMapper;
-import cn.com.vortexa.bot_platform.service.IBotInfoService;
-import cn.com.vortexa.bot_platform.service.IBotInstanceService;
-import cn.com.vortexa.bot_platform.service.IBotLaunchConfigService;
-import cn.com.vortexa.bot_platform.service.IScriptNodeService;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.config.AutoBotAccountConfig;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.common.entity.BotInfo;
-import cn.com.vortexa.common.entity.BotInstance;
-import cn.com.vortexa.common.entity.ScriptNode;
-import cn.com.vortexa.rpc.api.platform.IBotLaunchConfigRPC;
-import cn.hutool.core.util.StrUtil;
-
-import org.jetbrains.annotations.NotNull;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
-
-import java.util.List;
-
-/**
- * @author h30069248
- * @since 2025/5/8 15:06
- */
-@Service
-public class BotLaunchConfigServiceImpl extends ServiceImpl<BotLaunchConfigMapper, BotLaunchConfig>
-    implements IBotLaunchConfigService, IBotLaunchConfigRPC {
-
-    @Autowired
-    private IScriptNodeService scriptNodeService;
-
-    @Autowired
-    private IBotInfoService botInfoService;
-
-    @Autowired
-    private IBotInstanceService botInstanceService;
-
-    @Override
-    public Result create(BotLaunchConfig botLaunchConfig) {
-        String scriptNodeName = botLaunchConfig.getScriptNodeName();
-        String botName = botLaunchConfig.getBotName();
-        String botKey = botLaunchConfig.getBotKey();
-        if (StrUtil.isBlank(scriptNodeName) || StrUtil.isBlank(botName) || StrUtil.isBlank(botKey)) {
-            throw new IllegalArgumentException("param can't be empty");
-        }
-        if (botInstanceService.exist(BotInstance.builder().scriptNodeName(scriptNodeName).botKey(botKey).build())) {
-            throw new RuntimeException("bot instance already exist");
-        }
-        ScriptNode scriptNode = scriptNodeService.queryByScriptNodeName(scriptNodeName);
-        if (scriptNode == null) {
-            throw new RuntimeException("script node not exist");
-        }
-        if (!botInfoService.exist((BotInfo.builder().name(botName).build()))) {
-            throw new RuntimeException("bot not exist");
-        }
-
-        if (baseMapper.insert(botLaunchConfig) > 0) {
-            return Result.ok();
-        }
-        return Result.fail("create bot launch config fail");
-    }
-
-    @Override
-    public AutoBotConfig queryScriptNodeBotLaunchConfig(String scriptNodeName, String botKey) {
-        BotLaunchConfig botLaunchConfig = getOne(
-            new QueryWrapper<>(BotLaunchConfig.builder().scriptNodeName(scriptNodeName).build()));
-        return conventerBotLaunchConfig2AutoBotConfig(botLaunchConfig);
-    }
-
-    @Override
-    public List<AutoBotConfig> queryScriptNodeAllBotLaunchConfig(String scriptNodeName) {
-        List<BotLaunchConfig> launchConfigs = list(
-            new QueryWrapper<>(BotLaunchConfig.builder().scriptNodeName(scriptNodeName).build()));
-
-        return launchConfigs.stream().map(BotLaunchConfigServiceImpl::conventerBotLaunchConfig2AutoBotConfig).toList();
-    }
-
-    private static @NotNull AutoBotConfig conventerBotLaunchConfig2AutoBotConfig(BotLaunchConfig botLaunchConfig) {
-        AutoBotConfig botConfig = new AutoBotConfig();
-        botConfig.setBotName(botLaunchConfig.getBotName());
-        botConfig.setBotKey(botLaunchConfig.getBotKey());
-        botConfig.setAccountConfig(
-            JSONObject.parseObject(botLaunchConfig.getAccountConfig(), AutoBotAccountConfig.class));
-        botConfig.setCustomConfig(JSONObject.parseObject(botLaunchConfig.getCustomConfig()));
-        return botConfig;
-    }
-}
-package cn.com.vortexa.bot_platform.service.impl;
-
-import cn.com.vortexa.bot_platform.constants.VortexaPlatFormConstants;
-import cn.com.vortexa.bot_platform.script_control.BotPlatformControlServer;
-import cn.com.vortexa.bot_platform.vo.ScriptNodeDetail;
-import cn.com.vortexa.bot_platform.vo.ScriptNodeVO;
-import cn.com.vortexa.common.constants.ScriptNodeStatus;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.ServerInstanceUtil;
-import cn.com.vortexa.control_server.dto.ConnectEntry;
-import cn.hutool.core.util.StrUtil;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-
-import cn.com.vortexa.bot_platform.service.IScriptNodeService;
-import cn.com.vortexa.common.entity.ScriptNode;
-import cn.com.vortexa.bot_platform.mapper.ScriptNodeMapper;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.annotation.Lazy;
-import org.springframework.stereotype.Service;
-
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.*;
-import java.util.stream.Collectors;
-
-/**
- * <p>
- * 服务实现类
- * </p>
- *
- * @author com.helei
- * @since 2025-04-08
- */
-@Service
-public class ScriptNodeServiceImpl extends ServiceImpl<ScriptNodeMapper, ScriptNode> implements IScriptNodeService {
-
-    @Lazy
-    @Autowired
-    private BotPlatformControlServer botControlServer;
-
-    @Override
-    public Boolean insertOrUpdate(ScriptNode scriptNode) {
-        return getBaseMapper().insertOrUpdate(scriptNode) > 0;
-    }
-
-    @Override
-    public List<ScriptNodeVO> queryAllScriptNode() {
-        List<ScriptNode> list = list();
-        Set<String> onLines = new HashSet<>(botControlServer.getConnectionService().queryOnlineInstanceKey());
-
-        return list.stream().map(scriptNode -> {
-            String key = ServerInstanceUtil.generateServiceInstanceKey(
-                    scriptNode.getGroupId(), scriptNode.getServiceId(), scriptNode.getInstanceId()
-            );
-            return ScriptNodeVO.of(
-                    scriptNode,
-                    onLines.contains(key),
-                    new ArrayList<>(scriptNode.getBotConfigMap().keySet())
-            );
-        }).toList();
-    }
-
-    @Override
-    public ScriptNode queryByScriptNodeName(String scriptNodeName) {
-        ScriptNode query = new ScriptNode();
-        query.setScriptNodeName(scriptNodeName);
-        return getOne(new QueryWrapper<>(query));
-    }
-
-    @Override
-    public ScriptNodeDetail queryScriptNodeDetail(String scriptNodeName) {
-        // 查node基本信息
-        ScriptNode scriptNode = queryByScriptNodeName(scriptNodeName);
-        String key = ServerInstanceUtil.generateServiceInstanceKey(
-                scriptNode.getGroupId(), scriptNode.getServiceId(), scriptNode.getInstanceId()
-        );
-        // 是否在线
-        ConnectEntry connectEntry = botControlServer.getConnectionService().getServiceInstanceChannel(key);
-        boolean online = connectEntry != null && connectEntry.isUsable();
-
-        // 在线的bot查询
-        Map<String, List<String>> onlineBotName2Keys = new HashMap<>();;
-        botControlServer.selectScriptNodeOnlineBot(key).forEach(botInstanceKey -> {
-            String[] gsiArr = botInstanceKey.split(ServerInstanceUtil.SERVICE_INSTANCE_KEY_DISPATCHER);
-            onlineBotName2Keys.compute(gsiArr[1], (k,v)->{
-                if (v == null) {
-                    v = new ArrayList<>();
+    /**
+     * 构建指纹浏览器driver
+     */
+    private void initBrowserDriver() {
+        if (browserDriver == null) {
+            synchronized (FingerBrowserBot.class) {
+                if (browserDriver == null) {
+                    browserDriver = switch (browserDriverType()) {
+                        case BIT_BROWSER -> new BitBrowserDriver(fingerBrowserApiUrl);
+                    };
                 }
-                v.add(gsiArr[2]);
-                return v;
-            });
-        });
-
-        ScriptNodeVO scriptNodeVO = ScriptNodeVO.of(
-                scriptNode,
-                online,
-                new ArrayList<>(scriptNode.getBotConfigMap().keySet())
-        );
-
-
-        // 存在的实例
-        Map<String, List<String>> botNameToBotKeys = scriptNode.getBotConfigMap().values()
-                .stream()
-                .collect(Collectors.groupingBy(AutoBotConfig::getBotName,
-                        Collectors.mapping(AutoBotConfig::getBotKey,
-                                Collectors.toList())
-                ));
-
-        return new ScriptNodeDetail(
-                scriptNodeVO,
-                botNameToBotKeys,
-                onlineBotName2Keys
-        );
-    }
-
-    @Override
-    public String loadScriptNodeConfig(String scriptNodeName) throws IOException {
-        Path dir = Paths.get(FileUtil.getScriptNodeConfigDir(), scriptNodeName);
-        if (Files.notExists(dir)) {
-            Files.createDirectories(dir);
-        }
-        Path applicationConfigFile = dir.resolve(VortexaPlatFormConstants.SCRIPT_NODE_CONFIG_FILE);
-        if (Files.exists(applicationConfigFile)) {
-            return Files.readString(applicationConfigFile, StandardCharsets.UTF_8);
-        } else {
-            return null;
+            }
         }
     }
 
-    @Override
-    public void updateScriptNodeBotLaunchConfig(String scriptNodeName, String botKey, String botLaunchConfig) throws IOException {
-        Path dir = Paths.get(FileUtil.getScriptNodeConfigDir(), scriptNodeName, botKey);
-        if (Files.notExists(dir)) {
-            Files.createDirectories(dir);
-        }
-        Path botLaunchConfigFile = dir.resolve(VortexaPlatFormConstants.SCRIPT_NODE_BOT_CONFIG_FILE);
-        Files.writeString(botLaunchConfigFile, botLaunchConfig, StandardCharsets.UTF_8);
-    }
-
-    @Override
-    public Result startBot(String scriptNodeName, String botKey) {
-        try {
-            ScriptNode dbScriptNode = scriptNodeStatusCheck(scriptNodeName, botKey);
-
-            return botControlServer.startScriptNodeBot(
-                    dbScriptNode.getGroupId(),
-                    dbScriptNode.getServiceId(),
-                    dbScriptNode.getInstanceId(),
-                    botKey
-            ).get();
-        } catch (Exception e) {
-            return Result.fail(e.getMessage());
-        }
-    }
-
-    @Override
-    public Result stopBot(String scriptNodeName, String botKey) {
-        try {
-            ScriptNode dbScriptNode = scriptNodeStatusCheck(scriptNodeName, botKey);
-
-            return botControlServer.stopScriptNodeBot(
-                    dbScriptNode.getGroupId(),
-                    dbScriptNode.getServiceId(),
-                    dbScriptNode.getInstanceId(),
-                    botKey
-            ).get();
-        } catch (Exception e) {
-            return Result.fail(e.getMessage());
-        }
-    }
-
-
     /**
-     * 检查节点状态
+     * 指纹浏览器类型
      *
-     * @param scriptNodeName scriptNodeName
-     * @param botKey         botKey
+     * @return BrowserDriverType
      */
-    private ScriptNode scriptNodeStatusCheck(String scriptNodeName, String botKey) {
-        if (StrUtil.isBlank(scriptNodeName) || StrUtil.isBlank(botKey)) {
-            throw new RuntimeException("param error");
-        }
-        // Step 1 查询db的scriptNode信息
-        ScriptNode dbScriptNode = queryByScriptNodeName(scriptNodeName);
-        if (dbScriptNode == null) {
-            throw new RuntimeException("script node not exist");
-        }
-
-        // Step 2 查询scriptNode状态
-        ScriptNodeStatus scriptNodeStatus = botControlServer.queryScriptNodeStatus(
-                dbScriptNode.getGroupId(),
-                dbScriptNode.getServiceId(),
-                dbScriptNode.getInstanceId()
-        );
-        if (scriptNodeStatus != ScriptNodeStatus.ONLINE) {
-            throw new RuntimeException("script node status[%s] is not ONLINE".formatted(scriptNodeStatus));
-        }
-        return dbScriptNode;
-    }
-}
-package cn.com.vortexa.bot_platform.service;
-
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.entity.BotInfo;
-import cn.com.vortexa.db_layer.service.IBaseService;
-
-import java.util.List;
-
-/**
- * <p>
- * 服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-07
- */
-public interface IBotInfoService extends IBaseService<BotInfo> {
-
-    Result bindBotAccountBaseInfo(Integer botId, String botKey, List<Integer> bindAccountBaseInfoList);
-
-    boolean exist(BotInfo build);
-}
-package cn.com.vortexa.bot_platform.service;
-
-import cn.com.vortexa.bot_platform.dto.BotInstanceAccountQuery;
-import cn.com.vortexa.bot_platform.dto.BotJob;
-import cn.com.vortexa.bot_platform.dto.BotInstanceUpdate;
-import cn.com.vortexa.common.dto.PageResult;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.control.RegisteredScriptNode;
-import cn.com.vortexa.common.entity.BotInstance;
-import cn.com.vortexa.common.vo.BotInstanceVO;
-import cn.com.vortexa.db_layer.service.IBaseService;
-import org.quartz.SchedulerException;
-
-import java.io.IOException;
-import java.sql.SQLException;
-import java.util.List;
-import java.util.Map;
-
-/**
- * <p>
- * 服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-02-18
- */
-public interface IBotInstanceService extends IBaseService<BotInstance> {
-
-    Boolean existsBotInstance(BotInstance query);
+    protected abstract BrowserDriverType browserDriverType();
 
     /**
-     * 查询正在运行的bot实例
+     * 获取默认打开的url
      *
-     * @return List<BotInfo>
-     */
-    List<RegisteredScriptNode> queryOnLineInstance();
-
-    /**
-     * 启动job
-     *
-     * @param botJob botJob
-     * @return boolean
-     */
-    Result startJob(BotJob botJob) throws SchedulerException;
-
-    /**
-     * 启动远程script node 中bot的job
-     *
-     * @param scriptNodeName scriptNodeName
-     * @param botKey         botKey
-     * @param jobName        jobName
-     * @return Result
-     */
-    Result startRemoteScriptNodeBotJob(String scriptNodeName, String botKey, String jobName);
-
-    /**
-     * 暂停Job
-     *
-     * @param botJob botJob
-     * @return Result
-     */
-    Result pauseJob(BotJob botJob) throws SchedulerException;
-
-    /**
-     * 删除Job
-     *
-     * @param botJob botJob
-     * @return Result
-     */
-    Result deleteJob(BotJob botJob) throws SchedulerException;
-
-    /**
-     * 分页查询bot instance 的全信息
-     *
-     * @param page      page
-     * @param limit     limit
-     * @param filterMap filterMap
-     * @return PageResult<BotInstanceVO>
-     */
-    PageResult<BotInstanceVO> conditionPageQueryAllInfo(Integer page, Integer limit, Map<String, Object> filterMap)
-            throws SQLException, SchedulerException;
-
-    /**
-     * 查询详情
-     *
-     * @param scriptNodeName scriptNodeName
-     * @param botKey         botKey
-     * @return BotInstanceVO
-     */
-    BotInstanceVO detail(String scriptNodeName, String botKey) throws IOException, SchedulerException;
-
-    /**
-     * 保存Job参数
-     *
-     * @param saveBotJobParamParam saveBotJobParamParam
-     * @return Result
-     */
-    Result updateJobParam(BotInstanceUpdate saveBotJobParamParam);
-
-    /**
-     * 保存bot instance 启动配置
-     *
-     * @param scriptNodeName  scriptNodeName
-     * @param botKey          botKey
-     * @param botLaunchConfig botLaunchConfig
-     * @return Result
-     */
-    Result saveBotInstanceLaunchConfig(String scriptNodeName, String botKey, String botLaunchConfig) throws IOException;
-
-    /**
-     * 条件条件查询bot instance 账户
-     *
-     * @param accountQuery accountQuery
-     * @return Result
-     */
-    Result conditionPageQueryAccount(BotInstanceAccountQuery accountQuery);
-
-    /**
-     * 判断是否存在
-     *
-     * @param query query
-     * @return  boolean
-     */
-    boolean exist(BotInstance query);
-}
-package cn.com.vortexa.bot_platform.service;
-
-import cn.com.vortexa.bot_platform.entity.BotLaunchConfig;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-
-import java.util.List;
-
-/**
- * @author h30069248
- * @since 2025/5/8 15:06
- */
-public interface IBotLaunchConfigService {
-
-    /**
-     * 新建bot启动配置
-     *
-     * @param botLaunchConfig botLaunchConfig
-     * @return Result
-     */
-    Result create(BotLaunchConfig botLaunchConfig);
-
-    /**
-     * 查询script node中botKey的启动参数
-     *
-     * @param scriptNodeName scriptNodeName
-     * @param botKey botKey
-     * @return AutoBotConfig
-     */
-    AutoBotConfig queryScriptNodeBotLaunchConfig(String scriptNodeName, String botKey);
-
-    /**
-     * 查询script node所有的bot启动配置
-     *
-     * @param scriptNodeName scriptNodeName
-     * @return List<AutoBotConfig>
-     */
-    List<AutoBotConfig> queryScriptNodeAllBotLaunchConfig(String scriptNodeName);
-}
-package cn.com.vortexa.bot_platform.service;
-
-import cn.com.vortexa.bot_platform.vo.ScriptNodeDetail;
-import cn.com.vortexa.bot_platform.vo.ScriptNodeVO;
-
-import cn.com.vortexa.common.dto.Result;
-import com.baomidou.mybatisplus.extension.service.IService;
-
-import cn.com.vortexa.common.entity.ScriptNode;
-
-import java.io.IOException;
-import java.util.List;
-import java.util.concurrent.ExecutionException;
-
-/**
- * <p>
- * 服务类
- * </p>
- *
- * @author com.helei
- * @since 2025-04-08
- */
-public interface IScriptNodeService extends IService<ScriptNode> {
-
-    Boolean insertOrUpdate(ScriptNode scriptNode);
-
-    /**
-     * 查询全部
-     *
-     * @return List<RegisteredScriptNode>
-     */
-    List<ScriptNodeVO> queryAllScriptNode();
-
-    /**
-     * 根据scriptNodeName查找
-     *
-     * @param scriptNodeName scriptNodeName
-     * @return ScriptNode
-     */
-    ScriptNode queryByScriptNodeName(String scriptNodeName);
-
-    /**
-     * 查详情， 包括节点bot的详细信息
-     *
-     * @param scriptNodeName scriptNodeName
-     * @return ScriptNodeDetail
-     */
-    ScriptNodeDetail queryScriptNodeDetail(String scriptNodeName);
-
-    /**
-     * 加载script node 配置
-     *
-     * @param scriptNodeName scriptNodeName
+     * @param botConfig botConfig
      * @return String
      */
-    String loadScriptNodeConfig(String scriptNodeName) throws IOException;
-
-    /**
-     * 更新script node 下的bot的启动配置
-     *
-     * @param scriptNodeName  scriptNodeName
-     * @param botKey          botKey
-     * @param botLaunchConfig botLaunchConfig
-     */
-    void updateScriptNodeBotLaunchConfig(String scriptNodeName, String botKey, String botLaunchConfig) throws IOException;
-
-    /**
-     * 启动bot
-     *
-     * @param scriptNodeName scriptNodeName
-     * @param botKey         botKey
-     * @return Result
-     */
-    Result startBot(String scriptNodeName, String botKey) throws ExecutionException, InterruptedException;
-
-    /**
-     * 关闭bot
-     *
-     * @param scriptNodeName scriptNodeName
-     * @param botKey         botKey
-     * @return Result
-     */
-    Result stopBot(String scriptNodeName, String botKey);
+    private String getDefaultWebSiteUrl(AutoBotConfig botConfig) {
+        return (String) botConfig.getCustomConfig().getOrDefault(DEFAULT_WEB_SITE_URL_KEY, DEFAULT_WEB_SITE_URL);
+    }
 }
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
-<mapper namespace="cn.com.vortexa.bot_platform.mapper.BotLaunchConfigMapper">
+package cn.com.vortexa.script_node.dto.selenium;
 
-</mapper>
-create table t_bot_launch_config(
-id bigint auto_increment primary key,
-script_node_name varchar(255) not null,
-bot_name varchar(255) not null,
-bot_key varchar(255) not null,
-custom_config json,
-account_config json,
-insert_datetime datetime   default CURRENT_TIMESTAMP null,
-update_datetime datetime   default CURRENT_TIMESTAMP null on update CURRENT_TIMESTAMP,
-valid           tinyint(1) default 1                 null,
-unique (script_node_name, bot_key)
-)
-package cn.com.vortexa.script_node.config;
-
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
-
-import cn.com.vortexa.common.constants.HttpMethod;
-import cn.com.vortexa.common.dto.Result;
-import cn.com.vortexa.common.dto.config.AutoBotAccountConfig;
-import cn.com.vortexa.common.dto.config.AutoBotConfig;
-import cn.com.vortexa.common.util.FileUtil;
-import cn.com.vortexa.common.util.JarFileResolveUtil;
-import cn.com.vortexa.common.util.VersionUtil;
-import cn.com.vortexa.common.util.YamlConfigLoadUtil;
-import cn.com.vortexa.common.util.http.RestApiClientFactory;
-import cn.com.vortexa.common.dto.BotMetaInfo;
-import cn.com.vortexa.web3.constants.Web3ChainDict;
-import cn.hutool.core.collection.CollUtil;
-import cn.hutool.core.util.StrUtil;
+import cn.com.vortexa.browser_control.execute.ExecuteGroup;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
-import lombok.extern.slf4j.Slf4j;
-import okhttp3.ResponseBody;
+import lombok.NoArgsConstructor;
 
-import org.springframework.beans.factory.InitializingBean;
-import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.stereotype.Component;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.*;
-import java.util.concurrent.ExecutionException;
-import java.util.stream.Stream;
-
-/**
- * @author helei
- * @since 2025-04-04
- */
-@Slf4j
 @Data
-@Component
-@ConfigurationProperties(prefix = "vortexa.script-node")
-public class ScriptNodeConfiguration implements InitializingBean {
-    public static Map<String, Object> RAW_CONFIG = null;
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+public class ACBotTypedSeleniumExecuteInfo {
 
-    public static final List<String> BOT_INSTANCE_CONFIG_PREFIX = List.of("vortexa", "botInstance");
+    private String botKey;
 
-    /**
-     * bot group（Script Node中运行的bot的group)
-     * ）
-     */
-    private String scriptNodeName;
+    private String jobName;
 
-    /**
-     * 远程REST接口的url
-     */
-    private String remoteRestUrl;
+    private Integer waitTime;
 
-    /**
-     * 链信息字典
-     */
-    private Web3ChainDict chainDict;
+    private TimeUnit waitTimeUnit;
 
-    /**
-     * 要使用的bot name列表
-     */
-    private List<String> loadBotNames;
+    private List<ExecuteGroup> seleniumExecuteChain;
 
-    /**
-     * Script node 基础路径
-     */
-    private String scriptNodeBasePath;
-
-    /**
-     * 是否开启命令行菜单
-     */
-    private boolean commandMenu = true;
-
-
-    /**
-     * botNameMetaInfoMap, （解析配置文件自动填入）
-     */
-    private Map<String, BotMetaInfo> botNameMetaInfoMap;
-
-    /**
-     * botKeyConfigMap, （解析配置文件自动填入）
-     */
-    private Map<String, AutoBotConfig> botKeyConfigMap;
-
-    /**
-     * bot版本   （解析目录自动写入）
-     */
-    private Map<String, List<String>> botVersionMap;
-
-    /**
-     * 自动时自动启动的botKey
-     */
-    private Set<String> autoLaunchBotKeys;
-
-    /**
-     * bot公共配置，会加载到每个bot的 customConfig下
-     *
-     * @see AutoBotConfig
-     */
-    private Map<String, Object> botCommonConfig;
-
-    @Override
-    public void afterPropertiesSet() throws Exception {
-        FileUtil.LIBRARY_DIR_NAME = FileUtil.LIBRARY_DIR_NAME + File.separator + scriptNodeName;
-        FileUtil.JAR_FILE_DIR_NAME = FileUtil.JAR_FILE_DIR_NAME + File.separator + scriptNodeName;
-        // 解析地址，
-        scriptNodeBasePath = FileUtil.getAppResourceAppConfigDir() + File.separator + scriptNodeName;
-
-        // 尝试从platform拉取最新jar包
-        tryUpdateNewestBotJarFile();
-
-        initBotMetaInfo();
-
-        initBotInstance();
-    }
-
-    /**
-     * 获取远程设置api
-     *
-     * @return String
-     */
-    public String buildRemoteConfigRestApi() {
-        return remoteRestUrl + "/script-node/remote-config";
-    }
-
-    /**
-     * 获取bot版本的api
-     *
-     * @return String
-     */
-    public String buildBotVersionRestApi() {
-        return remoteRestUrl + "/version/botVersions";
-    }
-
-    /**
-     * 尝试更新bot 的jar包
-     */
-    private void tryUpdateNewestBotJarFile() throws IOException {
-        // Step 1 扫描script node jar包目录，获取botName -> version
-        botVersionMap = VersionUtil.scanJarLibForBotVersionMap(FileUtil.getLibraryDir());
-
-        // Step 2 从platform获取最新的版本信息
-        Map<String, String> newestBotVersion = fetchRemoteNewestBotVersion(buildBotVersionRestApi(), new ArrayList<>(loadBotNames));
-
-        if (newestBotVersion != null) {
-            // Step 3 对比版本，如果有新版本，则下载
-            Iterator<Map.Entry<String, String>> iterator = newestBotVersion.entrySet().iterator();
-            while (iterator.hasNext()) {
-                Map.Entry<String, String> entry = iterator.next();
-                String botName = entry.getKey();
-                String v2 = entry.getValue();
-
-                List<String> existBotVersions = botVersionMap.get(botName);
-                if (CollUtil.isEmpty(existBotVersions)) {
-                    try {
-                        downloadNewestBotJarFile(botName, v2);
-                        botVersionMap.put(botName, List.of(v2));
-                    } catch (ExecutionException | InterruptedException e) {
-                        log.error("download newest bot[{}] version[{}] jar file error", botName, v2, e);
-                    }
-                } else {
-                    String v1 = botVersionMap.get(botName).getFirst();
-                    if (StrUtil.isBlank(v2)) {
-                        // 远程没这个版本的bot, 去除后续不使用
-                        iterator.remove();
-                    } else {
-                        int compare = VersionUtil.compareVersion(v1, v2);
-                        if (compare < 0) {
-                            try {
-                                downloadNewestBotJarFile(botName, v2);
-                                ArrayList<String> newVersions = new ArrayList<>();
-                                newVersions.add(v2);
-                                newVersions.addAll(existBotVersions);
-                                botVersionMap.put(botName, newVersions);
-                            } catch (ExecutionException | InterruptedException e) {
-                                log.error("download newest bot[{}] version[{}] jar file error", botName, v2, e);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * 下载最新的jar文件
-     *
-     * @param botName botName
-     * @param version version
-     */
-    private void downloadNewestBotJarFile(String botName, String version)
-            throws ExecutionException, InterruptedException {
-        // 本地版本小于远程版本，需要更新
-        log.info("botName[{}] local version less than remote version[{}], try update ...", botName, version);
-        String downloadUrl = remoteRestUrl + "/version/bot/download/" + botName + "/" + version;
-        String fileName = VersionUtil.getBotJarFileName(botName, version);
-
-        RestApiClientFactory.getClient().rawRequest(
-                downloadUrl,
-                HttpMethod.GET,
-                new HashMap<>(),
-                null,
-                null,
-                response -> {
-                    // 保存文件到本地
-                    File file = FileUtil.getAndCreateLibraryPath(fileName).toFile();
-                    ResponseBody responseBody = response.body();
-                    if (!response.isSuccessful() || responseBody == null) {
-                        throw new IOException("response body is null");
-                    }
-                    try (InputStream in = responseBody.byteStream();
-                         OutputStream out = Files.newOutputStream(file.toPath())
-                    ) {
-                        byte[] buffer = new byte[8192];
-                        int len;
-                        while ((len = in.read(buffer)) != -1) {
-                            out.write(buffer, 0, len);
-                        }
-                        log.info("update bot[{}]-[{}] jar file success, path: {}", botName, version, file.getAbsolutePath());
-                    }
-                }
-        ).get();
-    }
-
-    /**
-     * 获取原创最新的bot版本
-     *
-     * @param botVersionApi botVersionApi
-     * @param botNames      botNames
-     * @return Map<String, String>
-     */
-    private Map<String, String> fetchRemoteNewestBotVersion(String botVersionApi, List<String> botNames) {
-        if (StrUtil.isBlank(botVersionApi)) {
-            return null;
-        }
-        try {
-            JSONObject body = new JSONObject();
-            body.put("botNames", botNames);
-            String response = RestApiClientFactory.getClient().request(
-                    botVersionApi,
-                    HttpMethod.POST,
-                    new HashMap<>(),
-                    null,
-                    body
-            ).get();
-            Result result = JSONObject.parseObject(response, Result.class);
-            if (result.getSuccess()) {
-                return JSONObject.parseObject(JSONObject.toJSONString(result.getData()), Map.class);
-            } else {
-                log.warn("remote newest bot version fetch fail, {}", result.getErrorMsg());
-                return new HashMap<>();
-            }
-        } catch (InterruptedException | ExecutionException e) {
-            log.error("remote newest bot version fetch error", e);
-            return new HashMap<>();
-        }
-    }
-
-    /**
-     * 初始化BotInstance
-     */
-    private void initBotInstance() {
-        botKeyConfigMap = new HashMap<>();
-        // 加载本地bot实例配置
-        loadScriptNodeLocalBotInstanceConfig();
-        // 加载远程bot实例配置
-        loadRemoteBotInstanceConfig();
-    }
-
-    /**
-     * 加载远程的bot实例配置
-     */
-    private void loadRemoteBotInstanceConfig() {
-        List<AutoBotConfig> botConfigs = fetchNodeAllBotConfigs(buildRemoteConfigRestApi(), scriptNodeName);
-        if (botConfigs == null) {
-            return;
-        }
-        for (AutoBotConfig botConfig : botConfigs) {
-            if (botKeyConfigMap.containsKey(botConfig.getBotKey())) {
-                // local 加载时，会拉取一次远程配置。跳过local加载过的
-                continue;
-            }
-            if (botConfig.getCustomConfig() == null) {
-                botConfig.setCustomConfig(new HashMap<>());
-            }
-            BotMetaInfo botMetaInfo = botNameMetaInfoMap.get(botConfig.getBotName());
-            if (botMetaInfo == null) {
-                log.warn("botName[{}] didn't loaded in script node, cancel load this remote bot instance", botConfig.getBotName());
-                continue;
-            }
-            fillPublicBotConfig(botConfig, botMetaInfo);
-
-            botKeyConfigMap.put(botConfig.getBotKey(), botConfig);
-        }
-    }
-
-    /**
-     * 加载本地的bot实例配置
-     */
-    private void loadScriptNodeLocalBotInstanceConfig() {
-        Path botInstanceConfigPath = Paths.get(FileUtil.getBotInstanceConfigDir());
-        if (!Files.exists(botInstanceConfigPath) || !Files.isDirectory(botInstanceConfigPath)) {
-            log.warn("no bot instance config dir [{}]", botInstanceConfigPath);
-            return;
-        }
-
-        try (Stream<Path> walk = Files.walk(botInstanceConfigPath, 5)) {
-            walk.filter(p -> Files.isRegularFile(p) && p.toString().endsWith(".yaml")).forEach(configFile -> {
-                try {
-                    AutoBotConfig botConfig = YamlConfigLoadUtil.load(configFile.toFile(), BOT_INSTANCE_CONFIG_PREFIX,
-                            AutoBotConfig.class);
-                    // 配置文件校验
-                    if (botConfig == null) {
-                        throw new IllegalArgumentException(
-                                "bot instance config file [" + configFile.getFileName() + "] illegal");
-                    }
-                    BotMetaInfo botMetaInfo = botNameMetaInfoMap.get(botConfig.getBotName());
-
-                    if (botMetaInfo == null) {
-                        log.warn("botName[{}] didn't loaded in script node", botConfig.getBotName());
-                        return;
-                    }
-                    fillPublicBotConfig(botConfig, botMetaInfo);
-
-                    // 合并远程配置
-                    AutoBotConfig remoteBotConfig = fetchRemoteBotConfig(
-                            buildRemoteConfigRestApi(),
-                            scriptNodeName,
-                            botConfig.getBotKey()
-                    );
-                    if (remoteBotConfig != null) {
-                        mergeRemoteAutoBotConfig(botConfig, remoteBotConfig);
-                    }
-
-                    botKeyConfigMap.put(botConfig.getBotKey(), botConfig);
-                } catch (Exception e) {
-                    log.error("bot instance config[{}] load error, {}",
-                            configFile.getFileName(),
-                            e.getCause() == null ? e.getMessage() : e.getCause().getMessage()
-                    );
-                }
-            });
-        } catch (IOException e) {
-            log.error("load bot instance config error", e);
-        }
-    }
-
-    private void fillPublicBotConfig(AutoBotConfig botConfig, BotMetaInfo botMetaInfo) {
-        if (botConfig.getCustomConfig() == null) {
-            botConfig.setCustomConfig(new HashMap<>());
-        }
-        botConfig.setMetaInfo(botMetaInfo);
-
-        // 相对路径转绝对路径
-        reactivePathConfigConvert(
-            botConfig,
-                botMetaInfo.getResourceDir()
-        );
-
-        // 合并bot公共配置
-        if (botCommonConfig != null) {
-            for (Map.Entry<String, Object> entry : botCommonConfig.entrySet()) {
-                if (!botConfig.getCustomConfig().containsKey(entry.getKey())) {
-                    botConfig.getCustomConfig().put(entry.getKey(), entry.getValue());
-                }
-            }
-        }
-    }
-
-    /**
-     * 初始化bot原信息
-     * <P>只有有版本信息的才会被加载</P>
-     *
-     * @throws IOException IOException
-     */
-    private void initBotMetaInfo() throws IOException {
-        botNameMetaInfoMap = new HashMap<>();
-        if (CollUtil.isNotEmpty(loadBotNames)) {
-            List<String> jarFileNames = loadBotNames.stream().map(loadBotName -> {
-                String version;
-                if (this.botVersionMap.get(loadBotName) == null
-                        || StrUtil.isBlank(version = this.botVersionMap.get(loadBotName).getFirst())) {
-                    log.warn("bot[{}] no version, skip load it", loadBotName);
-                    return null;
-                }
-                return VersionUtil.getBotJarFileName(loadBotName, version);
-            }).filter(Objects::nonNull).toList();
-
-            botNameMetaInfoMap.putAll(JarFileResolveUtil.tryExtractJarAndResolveBotMetaInfo(jarFileNames));
-        }
-    }
-
-    /**
-     * 获取远程配置
-     *
-     * @param configUrl      configUrl
-     * @param scriptNodeName scriptNodeName
-     * @return String
-     */
-    private List<AutoBotConfig> fetchNodeAllBotConfigs(String configUrl, String scriptNodeName) {
-        if (StrUtil.isBlank(configUrl)) {
-            return null;
-        }
-        try {
-            JSONObject params = new JSONObject();
-            params.put("scriptNodeName", scriptNodeName);
-            String response = RestApiClientFactory.getClient().request(
-                configUrl + "/all",
-                HttpMethod.POST,
-                new HashMap<>(),
-                params,
-                new JSONObject()
-            ).get();
-            Result result = JSONObject.parseObject(response, Result.class);
-            if (result.getSuccess()) {
-                return JSONArray.parseArray(JSONObject.toJSONString(result.getData()), AutoBotConfig.class);
-            } else {
-                log.warn("script node[{}] config not found in remote", scriptNodeName);
-                return null;
-            }
-        } catch (InterruptedException | ExecutionException e) {
-            log.error("script node[{}] remote fetch error", scriptNodeName, e);
-            return null;
-        }
-    }
-
-    /**
-     * 获取远程配置
-     *
-     * @param configUrl      configUrl
-     * @param scriptNodeName scriptNodeName
-     * @param botKey         botKey
-     * @return String
-     */
-    private AutoBotConfig fetchRemoteBotConfig(String configUrl, String scriptNodeName, String botKey) {
-        if (StrUtil.isBlank(configUrl)) {
-            return null;
-        }
-        try {
-            JSONObject params = new JSONObject();
-            params.put("scriptNodeName", scriptNodeName);
-            params.put("botKey", botKey);
-            String response = RestApiClientFactory.getClient().request(
-                configUrl,
-                HttpMethod.POST,
-                new HashMap<>(),
-                params,
-                new JSONObject()
-            ).get();
-            Result result = JSONObject.parseObject(response, Result.class);
-            if (result.getSuccess()) {
-                AutoBotConfig load = JSONObject.parseObject(JSONObject.toJSONString(result.getData()), AutoBotConfig.class);
-                log.info("remote config fetch success, merge into [{}] bot config...", botKey);
-                return load;
-            } else {
-                log.warn("script node[{}] botKey[{}] config not found in remote", scriptNodeName, botKey);
-                return null;
-            }
-        } catch (InterruptedException | ExecutionException e) {
-            log.error("script node[{}] botKey[{}] remote fetch error", scriptNodeName, botKey, e);
-            return null;
-        }
-    }
-
-    /**
-     * 合并远程配置
-     *
-     * @param local  local
-     * @param remote remote
-     */
-    private void mergeRemoteAutoBotConfig(AutoBotConfig local, AutoBotConfig remote) {
-        if (remote.getAccountConfig() != null) {
-            local.setAccountConfig(remote.getAccountConfig());
-        }
-        if (remote.getCustomConfig() != null) {
-            local.getCustomConfig().putAll(remote.getCustomConfig());
-        }
-    }
-
-    /**
-     * 相对路径转换
-     *
-     * @param config          config
-     * @param botResourcePath botResourcePath
-     */
-    private void reactivePathConfigConvert(AutoBotConfig config, String botResourcePath) {
-        AutoBotAccountConfig accountConfig = config.getAccountConfig();
-        accountConfig.setConfigFilePath(
-                FileUtil.generateAbsPath(accountConfig.getConfigFilePath(), botResourcePath)
-        );
-
-        Map<String, Object> customConfig = config.getCustomConfig();
-        if (customConfig != null && !customConfig.isEmpty()) {
-            for (Map.Entry<String, Object> entry : customConfig.entrySet()) {
-                Object value = entry.getValue();
-                if (value instanceof String) {
-                    entry.setValue(FileUtil.generateAbsPath((String) value, botResourcePath));
-                }
-            }
-        }
-    }
-}
-package cn.com.vortexa.script_node.service.impl;
-
-import cn.com.vortexa.rpc.api.platform.IBotLaunchConfigRPC;
-import cn.com.vortexa.rpc.api.platform.IRewordInfoRPC;
-import cn.com.vortexa.script_node.service.BotApi;
-import cn.com.vortexa.script_node.service.IBotAccountContextService;
-import cn.com.vortexa.script_node.service.IRewordInfoService;
-import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
-import cn.com.vortexa.rpc.api.platform.IAccountBaseInfoRPC;
-import cn.com.vortexa.rpc.api.platform.IBotInfoRPC;
-import cn.com.vortexa.job.service.BotJobService;
-import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
-import cn.com.vortexa.rpc.api.platform.IBrowserEnvRPC;
-import cn.com.vortexa.rpc.api.platform.IDiscordAccountRPC;
-import cn.com.vortexa.rpc.api.platform.IProxyInfoRPC;
-import cn.com.vortexa.rpc.api.platform.ITelegramAccountRPC;
-import cn.com.vortexa.rpc.api.platform.ITwitterAccountRPC;
-import cn.com.vortexa.control.anno.RPCReference;
-import cn.com.vortexa.script_node.service.IWeb3WalletService;
-import cn.com.vortexa.web3.service.IWeb3WalletOPTRPC;
-import lombok.Getter;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
-
-
-@Getter
-@Component
-public class DBBotApi implements BotApi {
-
-    @Autowired
-    private BotJobService botJobService;
-
-    @Autowired
-    private IBotAccountContextService botAccountService;
-
-    @Autowired
-    private IRewordInfoService rewordInfoService;
-
-
-    @RPCReference
-    private IBotInfoRPC botInfoRPC;
-
-    @RPCReference
-    private IBotLaunchConfigRPC botLaunchConfigRPC;
-
-    @RPCReference
-    private IBotInstanceRPC botInstanceRPC;
-
-    @RPCReference
-    private IAccountBaseInfoRPC accountBaseInfoRPC;
-
-    @RPCReference
-    private ITwitterAccountRPC twitterAccountRPC;
-
-    @RPCReference
-    private ITelegramAccountRPC telegramAccountRPC;
-
-    @RPCReference
-    private IProxyInfoRPC proxyInfoRPC;
-
-    @RPCReference
-    private IBrowserEnvRPC browserEnvRPC;
-
-    @RPCReference
-    private IDiscordAccountRPC discordAccountRPC;
-
-    @RPCReference
-    private IWeb3WalletOPTRPC web3WalletRPC;
-
-    @RPCReference
-    private IRewordInfoRPC rewordInfoRPC;
-
-    @Autowired
-    private ITableShardStrategy tableShardStrategy;
-
-    @Autowired
-    private IWeb3WalletService web3WalletService;
-}
-package cn.com.vortexa.script_node.service;
-
-
-import cn.com.vortexa.db_layer.plugn.table_shard.strategy.ITableShardStrategy;
-import cn.com.vortexa.job.service.BotJobService;
-import cn.com.vortexa.rpc.api.platform.IAccountBaseInfoRPC;
-import cn.com.vortexa.rpc.api.platform.IBotInfoRPC;
-import cn.com.vortexa.rpc.api.platform.IBotInstanceRPC;
-import cn.com.vortexa.rpc.api.platform.IBotLaunchConfigRPC;
-import cn.com.vortexa.rpc.api.platform.IBrowserEnvRPC;
-import cn.com.vortexa.rpc.api.platform.IDiscordAccountRPC;
-import cn.com.vortexa.rpc.api.platform.IProxyInfoRPC;
-import cn.com.vortexa.rpc.api.platform.IRewordInfoRPC;
-import cn.com.vortexa.rpc.api.platform.ITelegramAccountRPC;
-import cn.com.vortexa.rpc.api.platform.ITwitterAccountRPC;
-import cn.com.vortexa.web3.service.IWeb3WalletOPTRPC;
-
-public interface BotApi {
-
-    IBotInfoRPC getBotInfoRPC();
-
-    IBotLaunchConfigRPC getBotLaunchConfigRPC();
-
-    IBotInstanceRPC getBotInstanceRPC();
-
-    IAccountBaseInfoRPC getAccountBaseInfoRPC();
-
-    IBrowserEnvRPC getBrowserEnvRPC();
-
-    IDiscordAccountRPC getDiscordAccountRPC();
-
-    IProxyInfoRPC getProxyInfoRPC();
-
-    ITwitterAccountRPC getTwitterAccountRPC();
-
-    ITelegramAccountRPC getTelegramAccountRPC();
-
-    ITableShardStrategy getTableShardStrategy();
-
-    IRewordInfoService getRewordInfoService();
-
-    IRewordInfoRPC getRewordInfoRPC();
-
-    IBotAccountContextService getBotAccountService();
-
-    BotJobService getBotJobService();
-
-    IWeb3WalletOPTRPC getWeb3WalletRPC();
-
-    IWeb3WalletService getWeb3WalletService();
 }
